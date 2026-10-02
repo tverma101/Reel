@@ -17,9 +17,10 @@
 #import <libswscale/swscale.h>
 #import <libavutil/imgutils.h>
 #import <libavutil/mastering_display_metadata.h>
+#import <libswresample/swresample.h>
 #pragma clang diagnostic pop
 
-#import "IINA-Swift.h"
+#import "Reel-Swift.h"
 
 #define LOG_DEBUG(msg, ...) [FFmpegLogger debug:([NSString stringWithFormat:(msg), ##__VA_ARGS__])];
 #define LOG_ERROR(msg, ...) [FFmpegLogger error:([NSString stringWithFormat:(msg), ##__VA_ARGS__])];
@@ -410,6 +411,136 @@ return -1;\
   avformat_free_context(pFormatCtx);
 
   return info;
+}
+
+// MARK: - Reading Audio for Local Subtitle Matching
+
++ (NSData *)readMonoAudioFromFile:(nonnull NSString *)file
+                         startTime:(double)startTime
+                          duration:(double)duration
+{
+  if (file.length == 0 || !isfinite(startTime) || !isfinite(duration) || startTime < 0 || duration <= 0) {
+    return nil;
+  }
+
+  AVFormatContext *formatContext = NULL;
+  AVCodecContext *decoder = NULL;
+  SwrContext *resampler = NULL;
+  AVPacket *packet = NULL;
+  AVFrame *frame = NULL;
+  NSMutableData *output = [NSMutableData data];
+  NSData *result = nil;
+  AVChannelLayout outputLayout;
+  memset(&outputLayout, 0, sizeof(outputLayout));
+  int audioStreamIndex = -1;
+  int ret = 0;
+  BOOL reachedEnd = NO;
+  double mediaOrigin = 0;
+  double sampleEnd = startTime + duration;
+
+  if (avformat_open_input(&formatContext, file.fileSystemRepresentation, NULL, NULL) < 0 ||
+      avformat_find_stream_info(formatContext, NULL) < 0) {
+    goto cleanup;
+  }
+  audioStreamIndex = av_find_best_stream(formatContext, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
+  if (audioStreamIndex < 0) {
+    goto cleanup;
+  }
+
+  AVStream *audioStream = formatContext->streams[audioStreamIndex];
+  const AVCodec *codec = avcodec_find_decoder(audioStream->codecpar->codec_id);
+  if (codec == NULL) {
+    goto cleanup;
+  }
+  decoder = avcodec_alloc_context3(codec);
+  if (decoder == NULL || avcodec_parameters_to_context(decoder, audioStream->codecpar) < 0 ||
+      avcodec_open2(decoder, codec, NULL) < 0 || decoder->sample_rate <= 0 || decoder->ch_layout.nb_channels <= 0) {
+    goto cleanup;
+  }
+
+  av_channel_layout_default(&outputLayout, 1);
+  if (swr_alloc_set_opts2(&resampler, &outputLayout, AV_SAMPLE_FMT_FLT, 16000,
+                          &decoder->ch_layout, decoder->sample_fmt, decoder->sample_rate, 0, NULL) < 0 ||
+      resampler == NULL || swr_init(resampler) < 0) {
+    goto cleanup;
+  }
+  av_channel_layout_uninit(&outputLayout);
+
+  if (formatContext->start_time != AV_NOPTS_VALUE) {
+    mediaOrigin = (double)formatContext->start_time / AV_TIME_BASE;
+  }
+  double seekTime = mediaOrigin + MAX(0, startTime - 0.5);
+  int64_t seekTimestamp = av_rescale_q((int64_t)llround(seekTime * AV_TIME_BASE),
+                                       AV_TIME_BASE_Q, audioStream->time_base);
+  if (avformat_seek_file(formatContext, audioStreamIndex, INT64_MIN, seekTimestamp,
+                         seekTimestamp, AVSEEK_FLAG_BACKWARD) < 0) {
+    goto cleanup;
+  }
+  avcodec_flush_buffers(decoder);
+
+  packet = av_packet_alloc();
+  frame = av_frame_alloc();
+  if (packet == NULL || frame == NULL) {
+    goto cleanup;
+  }
+
+  while (!reachedEnd && av_read_frame(formatContext, packet) >= 0) {
+    if (packet->stream_index == audioStreamIndex) {
+      ret = avcodec_send_packet(decoder, packet);
+      if (ret >= 0) {
+        while ((ret = avcodec_receive_frame(decoder, frame)) >= 0) {
+          if (frame->best_effort_timestamp == AV_NOPTS_VALUE) {
+            av_frame_unref(frame);
+            continue;
+          }
+          double frameStart = frame->best_effort_timestamp * av_q2d(audioStream->time_base) - mediaOrigin;
+          double frameEnd = frameStart + (double)frame->nb_samples / decoder->sample_rate;
+          if (frameStart > sampleEnd + 1.0) {
+            reachedEnd = YES;
+            av_frame_unref(frame);
+            break;
+          }
+          if (frameEnd >= startTime - 0.1 && frameStart <= sampleEnd + 0.1) {
+            int outputCapacity = (int)av_rescale_rnd(swr_get_delay(resampler, decoder->sample_rate) + frame->nb_samples,
+                                                     16000, decoder->sample_rate, AV_ROUND_UP);
+            if (outputCapacity > 0) {
+              float *samples = av_malloc_array(outputCapacity, sizeof(float));
+              if (samples == NULL) {
+                av_frame_unref(frame);
+                goto cleanup;
+              }
+              uint8_t *outputPlanes[] = {(uint8_t *)samples};
+              int outputSamples = swr_convert(resampler, outputPlanes, outputCapacity,
+                                              (const uint8_t **)frame->extended_data, frame->nb_samples);
+              if (outputSamples > 0) {
+                int first = MAX(0, (int)floor((startTime - frameStart) * 16000));
+                int last = MIN(outputSamples, (int)ceil((sampleEnd - frameStart) * 16000));
+                if (last > first) {
+                  [output appendBytes:samples + first length:(NSUInteger)(last - first) * sizeof(float)];
+                }
+              }
+              av_free(samples);
+            }
+          }
+          av_frame_unref(frame);
+        }
+      }
+    }
+    av_packet_unref(packet);
+  }
+
+  if (output.length >= sizeof(float) * 16000) {
+    result = [output copy];
+  }
+
+cleanup:
+  av_channel_layout_uninit(&outputLayout);
+  if (frame != NULL) av_frame_free(&frame);
+  if (packet != NULL) av_packet_free(&packet);
+  if (resampler != NULL) swr_free(&resampler);
+  if (decoder != NULL) avcodec_free_context(&decoder);
+  if (formatContext != NULL) avformat_close_input(&formatContext);
+  return result;
 }
 
 // MARK: - Decoding Image

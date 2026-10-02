@@ -193,7 +193,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
   @IBOutlet var updaterController: SPUStandardUpdaterController!
 
   func feedURLString(for updater: SPUUpdater) -> String? {
-    return Preference.bool(for: .receiveBetaUpdate) ? AppData.appcastBetaLink : AppData.appcastLink
+    // Reel is an independent fork of IINA and must never receive IINA's update appcast, which would
+    // replace this fork with upstream builds. Reel distributes updates through its own repository.
+    return nil
   }
 
   // MARK: - App Delegate
