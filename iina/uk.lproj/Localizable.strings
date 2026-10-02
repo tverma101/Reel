@@ -30,11 +30,11 @@
 "guide.faq" = "Часті запитання";
 
 // Initial Window
-"initial.announcement" = "Ви користуєтеся %@ версією IINA";
-"initial.beta.desc" = "Зніміть відмітку «Отримувати бета-оновлення» у розділі налаштувань Параметри → Загальні та встановіть стабільну версію <a href=\"https://iina.io\">з нашого офіційного веб-сайту</a>.";
-"initial.nightly.desc" = "Нічні (тестові) збірки не рекомендовані для щоденного використання. Наразі нічні збірки не підтримують автоматичні оновлення. Завантажуйте новіші збірки вручну <a href=\"https://nightly.iina.io\">з нашого веб-сайту</a>.";
+"initial.announcement" = "Ви користуєтеся %@ версією Reel";
+"initial.beta.desc" = "Зніміть відмітку «Отримувати бета-оновлення» у розділі налаштувань Параметри → Загальні та встановіть стабільну версію <a href=\"https://github.com/tverma101/Reel\">з нашого офіційного веб-сайту</a>.";
+"initial.nightly.desc" = "Нічні (тестові) збірки не рекомендовані для щоденного використання. Наразі нічні збірки не підтримують автоматичні оновлення. Завантажуйте новіші збірки вручну <a href=\"https://github.com/tverma101/Reel/actions\">з нашого веб-сайту</a>.";
 "initial.debug.desc" = "Збірки налагодження зазвичай не остаточно оптимізовані, тому не рекомендуються для щоденного використання. Збірки налагодження не підтримують автоматичне оновлення.";
-"initial.bug_report" = "Повідомити про проблему <a href=\"https://github.com/iina/iina/issues\">на GitHub</a>.";
+"initial.bug_report" = "Повідомити про проблему <a href=\"https://github.com/tverma101/Reel/issues\">на GitHub</a>.";
 
 // Inspector Window
 "inspector.error" = "Помилка";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "Новий фільтр";
 "alert.add_filter.message" = "Будь ласка, введіть рядок фільтру в форматі vf- чи af-команди mpv.";
 
-"alert.keybinding_config.error" = "Помилка при розборі файлу налаштувань клавіатурних скорочень \"%@\"! Поверніться до стандартних налаштувань клавіатурних скорочень IINA. Будь ласка, перевірте свої налаштування.";
+"alert.keybinding_config.error" = "Помилка при розборі файлу налаштувань клавіатурних скорочень \"%@\"! Поверніться до стандартних налаштувань клавіатурних скорочень Reel. Будь ласка, перевірте свої налаштування.";
 "alert.delete_keybindingset.title" = "Delete Key Binding Set";
 "alert.delete_keybindingset.message" = "Are you sure to delete this key binding set?";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "Не можу зайти. Будь ласка, перевірте ім'я, пароль та статус мережі.\n\n%@";
 "alert.sub.save_downloaded.title" = "Зберегти завантажені субтитри";
 
-"alert.set_default.title" = "Встановлення IINA як застосунок за замовчуванням";
-"alert.set_default.message" = "IINA буде встановлено як застосунок за замовчуванням для всіх файлів, які він підтримує.";
+"alert.set_default.title" = "Встановлення Reel як застосунок за замовчуванням";
+"alert.set_default.message" = "Reel буде встановлено як застосунок за замовчуванням для всіх файлів, які він підтримує.";
 "alert.set_default.success" = "Закінчено: %d вдало та %d невдало.";
 
 "alert.add_watch.title" = "Додайте властивість перегляду";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "Неможливо знайти пакет файлу.";
 "plugin.install_error.cannot_download" = "Не вдалося завантажити плагін.\n\nРезультат:%@\n";
 "plugin.install_error.cannot_unpackage" = "Не вдалося розпакувати плагін.\n\nРезультат:%@\n";
-"plugin.install_error.cannot_load" = "IINA не може завантажити цей плагін. Можливо, формат плагіну невірний.";
+"plugin.install_error.cannot_load" = "Reel не може завантажити цей плагін. Можливо, формат плагіну невірний.";
 "plugin.check_for_updates" = "Перевірити наявність оновлень";
 "plugin.updating" = "Завантаження оновлення…";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "Зупинити";
 "settings.pauseresumeWhen" = "Зупинити / відновити, коли";
 "settings.playWhenEnteringFullScreen.label" = "Відтворити при вході до повноекранного режиму";
-"settings.playlistAutoAdd.desc" = "Для набуття чинності змін треба перезавантажити IINA.";
+"settings.playlistAutoAdd.desc" = "Для набуття чинності змін треба перезавантажити Reel.";
 "settings.playlistAutoAdd.label" = "Додавати файли з однієї теки автоматично";
 "settings.playlistAutoPlayNext.label" = "Відтворювати наступний файл автоматично";
 "settings.playlistShowMetadata.label" = "Показувати виконавця та назву треку для аудіофайлів, коли це доступно";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "Пікова яскравість";
 "settings.videoThreads.desc" = "За замовчуванням: 0 (автоматично)";
 "settings.videoThreads.label" = "Число потоків";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "Для набуття чинності потребує перезавантаження IINA.";
+"settings.httpProxy.desc" = "Для набуття чинності потребує перезавантаження Reel.";
 "settings.httpProxy.label" = "HTTP-проксі";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "Попередня вибірка у секундах";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Enable mpv's youtube-dl script";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "Параметри Raw";
-"settings.ytdlSearchPath.desc" = "IINA пошукає youtube-dl у цій директорії. Потрібне перезавантаження.";
+"settings.ytdlSearchPath.desc" = "Reel пошукає youtube-dl у цій директорії. Потрібне перезавантаження.";
 "settings.ytdlSearchPath.label" = "Інший шлях до youtube-dl";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "If enabled, IINA will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
+"settings.autoSearchOnlineSub.desc" = "If enabled, Reel will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
 "settings.autoSearchOnlineSub.label" = "Автоматично шукати субтитри в інтернеті";
 "settings.displayInLetterBox.label" = "У повноекранному режимі показувати субтитри під відео";
 "settings.subAlignX.items.0" = "зліва";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "Внизу";
 "settings.subAutoLoadIINA.items.0" = "вимкнено";
 "settings.subAutoLoadIINA.items.1" = "субтитрів з назвою медіафайлу";
-"settings.subAutoLoadIINA.items.2" = "Розумне визначення IINA";
+"settings.subAutoLoadIINA.items.2" = "Розумне визначення Reel";
 "settings.subAutoLoadIINA.label" = "Автоматичне завантаження";
 "settings.subAutoLoadPriorityString.desc" = "Будь ласка, введіть список рядків, відокремлених комами.";
 "settings.subAutoLoadPriorityString.label" = "Субтитри мають пріоритет, коли назва файлу містить";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "Задіяти кнопки ліворуч / праворуч для";
 "settings.controlBarAutoHideTimeout.label" = "Автоматично приховати через";
 "settings.controlBarStickToCenter.label" = "Фіксувати в центрі при переміщуванні";
-"settings.disableAnimations.desc" = "Коли параметр \"Зменшити рух\" увімкнено в macOS у налаштуваннях доступності, IINA зменшить анімацію інтерфейсу користувача, яка, як відомо, спричиняє проблеми тих, хто має вестибулярні порушення. Якщо цього не вистачить, це налаштування може використовуватися для зменшення руху більше, усунувши анімації інтерфейсу користувача.";
+"settings.disableAnimations.desc" = "Коли параметр \"Зменшити рух\" увімкнено в macOS у налаштуваннях доступності, Reel зменшить анімацію інтерфейсу користувача, яка, як відомо, спричиняє проблеми тих, хто має вестибулярні порушення. Якщо цього не вистачить, це налаштування може використовуватися для зменшення руху більше, усунувши анімації інтерфейсу користувача.";
 "settings.disableAnimations.label" = "Вимкнути анімації";
 "settings.disableOSDFileStartMsg.label" = "Початок файлу";
 "settings.disableOSDPauseResumeMsgs.label" = "Пауза/Відновити";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "Вікно";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "Для набуття чинності наступні параметри потребують перезапуску IINA.";
+"settings.enableAdvancedSettings.desc" = "Для набуття чинності наступні параметри потребують перезапуску Reel.";
 "settings.enableAdvancedSettings.label" = "Увімкнути розширені параметри";
 "settings.enableLogging.label" = "Увімкнути журналювання";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "Не вдалося завантажити сторінку.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "Шрифт";
-"settings.$GetBrowserExtensionsForIINA" = "Отримати розширення браузерів для IINA";
+"settings.$GetBrowserExtensionsForIINA" = "Отримати розширення браузерів для Reel";
 "settings.$GetPlugins" = "Get Plugins…";
 "settings.$Hardware" = "Hardware";
 "settings.$Height" = "Висота";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "Панель керування";
 "settings.$OnScreenDisplay" = "Інформація на екрані";
 "settings.$OnlineSubtitles" = "Онлайнові субтитри";
-"settings.$OpenLinksOrCurrentWebpage" = "Відкрийте в IINA посилання або поточну веб-сторінку в одне клацання. Веб-сайт повинен бути сумісним з youtube-dl.";
+"settings.$OpenLinksOrCurrentWebpage" = "Відкрийте в Reel посилання або поточну веб-сторінку в одне клацання. Веб-сайт повинен бути сумісним з youtube-dl.";
 "settings.$OpenLogDirectory" = "Відкрити теку журналів";
 "settings.$OpenLogWindow" = "Open the log viewer";
 "settings.$OrSelectFrom" = "Or select from available plugins";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "Картинка в картинці";
 "settings.$Playlist" = "Плейлист";
-"settings.$PleaseSelectTheMediaTypes" = "Будь ласка, оберіть типи медіафайлів, для яких ви хочете призначити IINA стандартною програмою.";
+"settings.$PleaseSelectTheMediaTypes" = "Будь ласка, оберіть типи медіафайлів, для яких ви хочете призначити Reel стандартною програмою.";
 "settings.$Position" = "Позиція";
 "settings.$PreferredLanguage" = "Бажана мова";
 "settings.$RestoreAlerts" = "Відновити оповіщення";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "Знятки";
-"settings.$SetIINAAsTheDefault" = "Set IINA as the Default Application";
+"settings.$SetIINAAsTheDefault" = "Set Reel as the Default Application";
 "settings.$Settings" = "Параметри";
 "settings.$Shadow" = "Тінь";
 "settings.$ShowInFinder" = "Показати у Finder";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "краю екрану";
 "settings.$toThe" = "до";
 "settings.$top" = "верхнього";
-"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";

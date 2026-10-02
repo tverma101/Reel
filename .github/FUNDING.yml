@@ -1,13 +1,12 @@
-# These are supported funding model platforms
-
-github: [iina]
-patreon: # Replace with a single Patreon username
-open_collective: # Replace with a single Open Collective username
-ko_fi: iina_app
-tidelift: # Replace with a single Tidelift platform-name/package-name e.g., npm/babel
-community_bridge: # Replace with a single Community Bridge project-name e.g., cloud-foundry
-liberapay: iina_app
-issuehunt: # Replace with a single IssueHunt username
-otechie: # Replace with a single Otechie username
-lfx_crowdfunding: # Replace with a single LFX Crowdfunding project-name e.g., cloud-foundry
-custom: # Replace with up to 4 custom sponsorship URLs e.g., ['link1', 'link2']
+# Funding platforms for this fork.
+#
+# This file intentionally does not list upstream IINA's accounts (github: iina,
+# ko_fi: iina_app, liberapay: iina_app, ...). This fork is not the IINA project
+# and does not receive its money; leaving those handles in place would route a
+# reader's donation to the upstream project through this fork's Sponsor button.
+# If this fork ever wants to accept sponsorship, add its own handles here, e.g.
+# github: some-account
+# custom: ['https://example.invalid/sponsor']
+#
+# Upstream IINA's funding file, for reference:
+# https://github.com/iina/iina/blob/develop/.github/FUNDING.yml

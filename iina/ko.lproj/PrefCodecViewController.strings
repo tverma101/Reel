@@ -86,7 +86,7 @@
 "baO-xy-7hD.title" = "니트";
 
 /* Class = "NSTextFieldCell"; title = "Measured peak brightness of the display. If set to 0, IINA detects this value. If detection fails, IINA sets the target peak to 400."; ObjectID = "aTt-aZ-rjK"; */
-"aTt-aZ-rjK.title" = "디스플레이의 측정된 최대 밝기입니다. 0으로 설정하면 IINA가 이 값을 감지합니다. 감지에 실패하면 IINA는 최대 밝기를 400으로 설정합니다.";
+"aTt-aZ-rjK.title" = "디스플레이의 측정된 최대 밝기입니다. 0으로 설정하면 Reel가 이 값을 감지합니다. 감지에 실패하면 Reel는 최대 밝기를 400으로 설정합니다.";
 
 /* Class = "NSTextFieldCell"; title = "Algorithm:"; ObjectID = "qzI-rq-PqO"; */
 "qzI-rq-PqO.title" = "알고리즘:";

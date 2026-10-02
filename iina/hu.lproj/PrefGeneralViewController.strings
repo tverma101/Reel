@@ -26,7 +26,7 @@
 "6TV-DG-503.title" = "Lejátszási lista:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "8kU-8g-VgX"; */
-"8kU-8g-VgX.title" = "Az IINA újraindítása szükséges ahhoz, hogy életbe lépjen.";
+"8kU-8g-VgX.title" = "Az Reel újraindítása szükséges ahhoz, hogy életbe lépjen.";
 
 /* Class = "NSButtonCell"; title = "Only in \"music mode\""; ObjectID = "AVe-9Z-RgQ"; */
 "AVe-9Z-RgQ.title" = "Csak \"zene\" módban";

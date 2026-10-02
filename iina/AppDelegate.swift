@@ -1025,7 +1025,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
   }
 
   @IBAction func helpAction(_ sender: AnyObject) {
-    NSWorkspace.shared.open(URL(string: AppData.wikiLink)!)
+    NSWorkspace.shared.open(URL(string: AppData.helpLink)!)
   }
 
   @IBAction func githubAction(_ sender: AnyObject) {

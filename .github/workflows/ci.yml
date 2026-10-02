@@ -5,9 +5,10 @@ permissions:
 
 on:
   push:
-      branches: [develop]
+      branches: [main]
   pull_request:
-      branches: [develop]
+      branches: [main]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -32,11 +33,11 @@ jobs:
           DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer
 
       - name: Create DMG
-        run: hdiutil create -volname "IINA Nightly" -srcfolder Build/Products/Nightly/IINA.app -ov -format UDZO IINA.dmg
+        run: hdiutil create -volname "Reel Nightly" -srcfolder Build/Products/Nightly/Reel.app -ov -format UDZO Reel.dmg
 
       - name: Save artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: IINA
-          path: IINA.dmg
+          name: Reel
+          path: Reel.dmg
           archive: false

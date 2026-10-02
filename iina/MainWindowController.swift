@@ -2216,8 +2216,11 @@ class MainWindowController: PlayerWindowController {
   /// - Important: As per Apple's [Internationalization and Localization Guide](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPInternational/SupportingRight-To-LeftLanguages/SupportingRight-To-LeftLanguages.html)
   ///     timeline indicators should not flip in a right-to-left language. Thus OSD messages referencing a position within the video
   ///     must always use a left to right layout.
-  func displayOSD(_ message: OSDMessage, autoHide: Bool = true, forcedTimeout: Float? = nil, accessoryView: NSView? = nil, context: Any? = nil) {
-    guard player.displayOSD || message.alwaysEnabled, !isShowingPersistentOSD else { return }
+  @discardableResult
+  func displayOSD(_ message: OSDMessage, autoHide: Bool = true, forcedTimeout: Float? = nil, accessoryView: NSView? = nil, context: Any? = nil) -> Bool {
+    guard player.displayOSD || message.alwaysEnabled, !isShowingPersistentOSD else { return false }
+
+    osdLastMessage = message
 
     if hideOSDTimer != nil {
       hideOSDTimer!.invalidate()
@@ -2278,6 +2281,7 @@ class MainWindowController: PlayerWindowController {
       let timeout = forcedTimeout ?? Preference.float(for: .osdAutoHideTimeout)
       hideOSDTimer = Timer.scheduledTimer(timeInterval: TimeInterval(timeout), target: self, selector: #selector(self.hideOSD), userInfo: nil, repeats: false)
     }
+    return true
   }
 
   @objc
@@ -2288,6 +2292,7 @@ class MainWindowController: PlayerWindowController {
     // invokes its completion immediately, which would hide the OSD almost immediately instead of
     // fading it. Ignore the request while a hide is already under way.
     guard osdAnimationState != .willHide, osdAnimationState != .hidden else { return }
+    osdLastMessage = nil
 
     NSAnimationContext.runAnimationGroup({ (context) in
       self.osdAnimationState = .willHide
@@ -2762,7 +2767,10 @@ class MainWindowController: PlayerWindowController {
   func isUITimerNeeded() -> Bool {
     let isShowingFadeableViews = animationState == .shown || animationState == .willShow
     let isShowingOSD = osdAnimationState == .shown || osdAnimationState == .willShow
-    return isShowingFadeableViews || isShowingOSD
+    if isShowingOSD, let message = osdLastMessage, case .seek(_, _, _) = message {
+      return true
+    }
+    return isShowingFadeableViews
   }
 
   override func updatePlayTime(withDuration duration: Bool, andProgressBar: Bool) {

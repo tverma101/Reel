@@ -86,7 +86,7 @@
 "X7X-18-FJg.title" = "詳細";
 
 /* Class = "NSMenuItem"; title = "Detect intelligently by IINA"; ObjectID = "XiL-eE-jah"; */
-"XiL-eE-jah.title" = "IINAによりインテリジェントに検出";
+"XiL-eE-jah.title" = "Reelによりインテリジェントに検出";
 
 /* Class = "NSTextFieldCell"; title = "Default encoding:"; ObjectID = "Y75-4k-2Du"; */
 "Y75-4k-2Du.title" = "デフォルトのエンコーディング:";

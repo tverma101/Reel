@@ -30,11 +30,11 @@
 "guide.faq" = "Preguntes freqüents";
 
 // Initial Window
-"initial.announcement" = "Estàs fent servir una versió %@ d'IINA";
-"initial.beta.desc" = "Si vols tornar a una versió de llançament, desmarca “rebre actualitzacions beta” a Configuració > General i instal·la una versió estable des del nostre lloc  <a href=\"https://iina.io\">web oficial</a>.";
-"initial.nightly.desc" = "La versió Nightly no es recomana com a versió d’ús diari. Actualment, les compilacions Nightly no admeten l’actualització automàtica. Si us plau, descarrega manualment les versions més recents des del nostre  <a href=\"https://nightly.iina.io\">web de nightly</a>.";
+"initial.announcement" = "Estàs fent servir una versió %@ d'Reel";
+"initial.beta.desc" = "Si vols tornar a una versió de llançament, desmarca “rebre actualitzacions beta” a Configuració > General i instal·la una versió estable des del nostre lloc  <a href=\"https://github.com/tverma101/Reel\">web oficial</a>.";
+"initial.nightly.desc" = "La versió Nightly no es recomana com a versió d’ús diari. Actualment, les compilacions Nightly no admeten l’actualització automàtica. Si us plau, descarrega manualment les versions més recents des del nostre  <a href=\"https://github.com/tverma101/Reel/actions\">web de nightly</a>.";
 "initial.debug.desc" = "Debug builds are usually not optimized for performance, so it is not recommended to be used as daily drive. Debug builds do not support auto update.";
-"initial.bug_report" = "Report via <a href=\"https://github.com/iina/iina/issues\">GitHub issues</a>.";
+"initial.bug_report" = "Report via <a href=\"https://github.com/tverma101/Reel/issues\">GitHub issues</a>.";
 
 // Inspector Window
 "inspector.error" = "Error";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "Crea filtre";
 "alert.add_filter.message" = "Si us plau introdueix un filtre de text en format mpv's o format af.";
 
-"alert.keybinding_config.error" = "Error analitzant el fitxer \"%@\" de configuració de les dreceres de teclat! S'ha reestablert la configuració de defecte de IINA. Si us plau, verifica la configuració.";
+"alert.keybinding_config.error" = "Error analitzant el fitxer \"%@\" de configuració de les dreceres de teclat! S'ha reestablert la configuració de defecte de Reel. Si us plau, verifica la configuració.";
 "alert.delete_keybindingset.title" = "Delete Key Binding Set";
 "alert.delete_keybindingset.message" = "Are you sure to delete this key binding set?";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "No s'ha pogut iniciar sessió. Si us play, verifica el teu nom d'usuari, la contrasenya i l'estat de la xarxa.\n\n%@";
 "alert.sub.save_downloaded.title" = "Desa els subtítols baixats";
 
-"alert.set_default.title" = "Establir IINA com aplicació per defecte";
-"alert.set_default.message" = "IINA serà establerta com a aplicació per defecte per a tots els tipus de fitxer que suporta.";
+"alert.set_default.title" = "Establir Reel com aplicació per defecte";
+"alert.set_default.message" = "Reel serà establerta com a aplicació per defecte per a tots els tipus de fitxer que suporta.";
 "alert.set_default.success" = "S'ha acabat amb un %d d'èxit i un %d d'error.";
 
 "alert.add_watch.title" = "Afegeix una propietat de monitoreig";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "No es pot trobar el fitxer.";
 "plugin.install_error.cannot_download" = "No s'ha pogut descarregar el complement.\n\nSortida:%@\n";
 "plugin.install_error.cannot_unpackage" = "No s'ha pogut descomprimir el complement.\n\nSortida: %@\n";
-"plugin.install_error.cannot_load" = "IINA no pot carregar aquest complement. Potser té un format incorrecte.";
+"plugin.install_error.cannot_load" = "Reel no pot carregar aquest complement. Potser té un format incorrecte.";
 "plugin.check_for_updates" = "Comprova si hi ha actualitzacions";
 "plugin.updating" = "S'està baixant l'actualització…";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "Pausa";
 "settings.pauseresumeWhen" = "Pausa/reprèn quan";
 "settings.playWhenEnteringFullScreen.label" = "Reprodueix quan canvia a pantalla completa";
-"settings.playlistAutoAdd.desc" = "És necessari reiniciar IINA per tenir efecte";
+"settings.playlistAutoAdd.desc" = "És necessari reiniciar Reel per tenir efecte";
 "settings.playlistAutoAdd.label" = "Afegeix fitxers en la mateixa carpeta automàticament";
 "settings.playlistAutoPlayNext.label" = "Reprodueix següent element automàticament";
 "settings.playlistShowMetadata.label" = "Mostra el nom de l'artista i la pista per als fitxers d'àudio quan estigui disponible";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "Valor màxim a aconseguir";
 "settings.videoThreads.desc" = "Per defecte: 0 (Automàtic)";
 "settings.videoThreads.label" = "Nombre de fils";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "És necessari reiniciar IINA per tenir efecte.";
+"settings.httpProxy.desc" = "És necessari reiniciar Reel per tenir efecte.";
 "settings.httpProxy.label" = "Servidor intermediari HTTP";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "Segons a precarregar";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Enable mpv's youtube-dl script";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "Opcions en cru";
-"settings.ytdlSearchPath.desc" = "IINA buscarà youtube-dl en aquesta carpeta. És necessari reiniciar.";
+"settings.ytdlSearchPath.desc" = "Reel buscarà youtube-dl en aquesta carpeta. És necessari reiniciar.";
 "settings.ytdlSearchPath.label" = "Camí personalitzat de youtube-dl";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "If enabled, IINA will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
+"settings.autoSearchOnlineSub.desc" = "If enabled, Reel will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
 "settings.autoSearchOnlineSub.label" = "Cerca subtítols en línia automàticament";
 "settings.displayInLetterBox.label" = "Mostra els subtítols en mode cinema en pantalla completa";
 "settings.subAlignX.items.0" = "Esquerra";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "Inferior";
 "settings.subAutoLoadIINA.items.0" = "Inhabilitat";
 "settings.subAutoLoadIINA.items.1" = "Subtítols que contenen el nom del fitxer";
-"settings.subAutoLoadIINA.items.2" = "Detecció intel·ligent d'IINA";
+"settings.subAutoLoadIINA.items.2" = "Detecció intel·ligent d'Reel";
 "settings.subAutoLoadIINA.label" = "Càrrega automàtica";
 "settings.subAutoLoadPriorityString.desc" = "Si us play, introdueix una llista de cadenes de text separada per comes.";
 "settings.subAutoLoadPriorityString.label" = "Els subtítols tenen prioritat quan el nom del fitxer conté";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "Utilitza el botó esquerra/dreta per";
 "settings.controlBarAutoHideTimeout.label" = "Auto hide after";
 "settings.controlBarStickToCenter.label" = "Ajusta al centre a l'arrossegar";
-"settings.disableAnimations.desc" = "When the macOS Reduce Motion accessibility setting is enabled IINA will reduce user interface animations that are known to cause problems for those with vestibular disorders. Should that be insufficient, this setting can be used to reduce motion further by eliminating user interface animations.";
+"settings.disableAnimations.desc" = "When the macOS Reduce Motion accessibility setting is enabled Reel will reduce user interface animations that are known to cause problems for those with vestibular disorders. Should that be insufficient, this setting can be used to reduce motion further by eliminating user interface animations.";
 "settings.disableAnimations.label" = "Disable animations";
 "settings.disableOSDFileStartMsg.label" = "File start";
 "settings.disableOSDPauseResumeMsgs.label" = "Pausa / Reprèn";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "Finestra";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "És necessari reiniciar IINA per tal que els següents paràmetres tinguin efecte.";
+"settings.enableAdvancedSettings.desc" = "És necessari reiniciar Reel per tal que els següents paràmetres tinguin efecte.";
 "settings.enableAdvancedSettings.label" = "Habilita opcions avançadades";
 "settings.enableLogging.label" = "Activa el registre";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "Failed to load the page.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "Tipus de lletra";
-"settings.$GetBrowserExtensionsForIINA" = "Obtenir les extensions d'IINA per als navegadors";
+"settings.$GetBrowserExtensionsForIINA" = "Obtenir les extensions d'Reel per als navegadors";
 "settings.$GetPlugins" = "Get Plugins…";
 "settings.$Hardware" = "Hardware";
 "settings.$Height" = "Alçada";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "Control de pantalla";
 "settings.$OnScreenDisplay" = "Quan es mostra la pantalla";
 "settings.$OnlineSubtitles" = "Subtítols en línia";
-"settings.$OpenLinksOrCurrentWebpage" = "Obre enllaços o la pàgina web actual en IINA amb un sol click. La pàgina ha d'estar suportada per youtube-dl.";
+"settings.$OpenLinksOrCurrentWebpage" = "Obre enllaços o la pàgina web actual en Reel amb un sol click. La pàgina ha d'estar suportada per youtube-dl.";
 "settings.$OpenLogDirectory" = "Open Log Directory";
 "settings.$OpenLogWindow" = "Open the log viewer";
 "settings.$OrSelectFrom" = "Or select from available plugins";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "Picture-in-Picture";
 "settings.$Playlist" = "Llista de reproducció";
-"settings.$PleaseSelectTheMediaTypes" = "Si us plau selecciona els tipus de fitxer multimèdia que vols que IINA en sigui l'aplicació per defecte.";
+"settings.$PleaseSelectTheMediaTypes" = "Si us plau selecciona els tipus de fitxer multimèdia que vols que Reel en sigui l'aplicació per defecte.";
 "settings.$Position" = "Posició";
 "settings.$PreferredLanguage" = "Idioma preferit";
 "settings.$RestoreAlerts" = "Restaurar alertes";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "Captures de pantalla";
-"settings.$SetIINAAsTheDefault" = "Set IINA as the Default Application";
+"settings.$SetIINAAsTheDefault" = "Set Reel as the Default Application";
 "settings.$Settings" = "Paràmetres";
 "settings.$Shadow" = "Ombra";
 "settings.$ShowInFinder" = "Mostra al Finder";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "costat de la pantalla";
 "settings.$toThe" = "a la part";
 "settings.$top" = "superior";
-"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";

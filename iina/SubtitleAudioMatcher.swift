@@ -76,14 +76,23 @@ enum SubtitleAudioMatcher {
     let start: Double
     let end: Double
     let text: String
+    let dialogueWordCount: Int
 
-    var isDialogue: Bool {
+    init(start: Double, end: Double, text: String) {
+      self.start = start
+      self.end = end
+      self.text = text
       let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !trimmed.isEmpty,
             !trimmed.hasPrefix("["), !trimmed.hasPrefix("("),
-            !trimmed.hasPrefix("♪"), !trimmed.hasPrefix("♫") else { return false }
-      return Self.tokens(in: trimmed).count >= 2
+            !trimmed.hasPrefix("♪"), !trimmed.hasPrefix("♫") else {
+        dialogueWordCount = 0
+        return
+      }
+      dialogueWordCount = Self.tokens(in: trimmed).count
     }
+
+    var isDialogue: Bool { dialogueWordCount >= 2 }
 
     private static func tokens(in text: String) -> [String] {
       text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
@@ -132,9 +141,9 @@ enum SubtitleAudioMatcher {
 
     init(cues: [Cue]) {
       let dialogue = cues.filter(\.isDialogue)
-      let sortedStarts = dialogue.map { CueMetric(time: $0.start, words: normalizedTokens($0.text).count) }
+      let sortedStarts = dialogue.map { CueMetric(time: $0.start, words: $0.dialogueWordCount) }
         .sorted { $0.time < $1.time }
-      let sortedEnds = dialogue.map { CueMetric(time: $0.end, words: normalizedTokens($0.text).count) }
+      let sortedEnds = dialogue.map { CueMetric(time: $0.end, words: $0.dialogueWordCount) }
         .sorted { $0.time < $1.time }
       starts = sortedStarts
       ends = sortedEnds

@@ -30,11 +30,11 @@
 "guide.faq" = "Câu hỏi Thường Gặp";
 
 // Initial Window
-"initial.announcement" = "Bạn đang sử dụng phiên bản %@ của IINA";
-"initial.beta.desc" = "Nếu bạn muốn quay lại phiên bản chính thức trước đó, hãy bỏ dấu tích khỏi \"nhận các phiên bản thử nghiệm Beta\" trong Cài đặt > Cài đặt chung, và cài một phiên bản chính thức từ <a href=\"https://iina.io\">website chính thức</a> của chúng tôi.";
-"initial.nightly.desc" = "Phiên bản thử nghiệm Nightly không được khuyên dùng làm phiên bản dùng thường xuyên. Những phiên bản thử nghiệm Nightly hiện tại không hỗ trợ cập nhật tự động. Vui lòng tải thủ công những phiên bản mới hơn từ <a href=\"https://nightly.iina.io\">website phiên bản thử nghiệm Nightly</a> của chúng tôi.";
+"initial.announcement" = "Bạn đang sử dụng phiên bản %@ của Reel";
+"initial.beta.desc" = "Nếu bạn muốn quay lại phiên bản chính thức trước đó, hãy bỏ dấu tích khỏi \"nhận các phiên bản thử nghiệm Beta\" trong Cài đặt > Cài đặt chung, và cài một phiên bản chính thức từ <a href=\"https://github.com/tverma101/Reel\">website chính thức</a> của chúng tôi.";
+"initial.nightly.desc" = "Phiên bản thử nghiệm Nightly không được khuyên dùng làm phiên bản dùng thường xuyên. Những phiên bản thử nghiệm Nightly hiện tại không hỗ trợ cập nhật tự động. Vui lòng tải thủ công những phiên bản mới hơn từ <a href=\"https://github.com/tverma101/Reel/actions\">website phiên bản thử nghiệm Nightly</a> của chúng tôi.";
 "initial.debug.desc" = "Các bản dựng gỡ lỗi thường không được tối ưu hóa về hiệu suất, vì vậy không nên sử dụng nó làm tay lái hàng ngày. Bản dựng gỡ lỗi không hỗ trợ cập nhật tự động.";
-"initial.bug_report" = "Báo cáo qua <a href=\"https://github.com/iina/iina/issues\">Sự cố GitHub</a>.";
+"initial.bug_report" = "Báo cáo qua <a href=\"https://github.com/tverma101/Reel/issues\">Sự cố GitHub</a>.";
 
 // Inspector Window
 "inspector.error" = "Lỗi";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "Bộ lọc mới";
 "alert.add_filter.message" = "Please enter a filter string in format of mpv's vf or af command.";
 
-"alert.keybinding_config.error" = "Error parsing keybinding configuration file \"%@\"! Fallback to IINA Default keybinding setting. Please check your configuration.";
+"alert.keybinding_config.error" = "Error parsing keybinding configuration file \"%@\"! Fallback to Reel Default keybinding setting. Please check your configuration.";
 "alert.delete_keybindingset.title" = "Delete Key Binding Set";
 "alert.delete_keybindingset.message" = "Are you sure to delete this key binding set?";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "Cannot login. Please check your username, password and network status.\n\n%@";
 "alert.sub.save_downloaded.title" = "Lưu phụ đề đã tải";
 
-"alert.set_default.title" = "Setting IINA as Default App";
-"alert.set_default.message" = "IINA will be set as the default app for all file types it supports.";
+"alert.set_default.title" = "Setting Reel as Default App";
+"alert.set_default.message" = "Reel will be set as the default app for all file types it supports.";
 "alert.set_default.success" = "Finished with %d success and %d failed.";
 
 "alert.add_watch.title" = "Add Watch Property";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "Cannot find the package file.";
 "plugin.install_error.cannot_download" = "Failed to download the plugin.\n\nOutput:%@\n";
 "plugin.install_error.cannot_unpackage" = "Failed to unpackage the plugin.\n\nOutput:%@\n";
-"plugin.install_error.cannot_load" = "IINA cannot load this plugin. It might be in the wrong format.";
+"plugin.install_error.cannot_load" = "Reel cannot load this plugin. It might be in the wrong format.";
 "plugin.check_for_updates" = "Kiểm tra cập nhật";
 "plugin.updating" = "Downloading update…";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "Tạm dừng";
 "settings.pauseresumeWhen" = "Pause/resume when";
 "settings.playWhenEnteringFullScreen.label" = "Play upon entering full screen";
-"settings.playlistAutoAdd.desc" = "Bắt buộc khởi động lại IINA để có hiệu lực.";
+"settings.playlistAutoAdd.desc" = "Bắt buộc khởi động lại Reel để có hiệu lực.";
 "settings.playlistAutoAdd.label" = "Tự động thêm tệp vào cùng thư mục";
 "settings.playlistAutoPlayNext.label" = "Play next item automatically";
 "settings.playlistShowMetadata.label" = "Show artist and track name for audio files when available";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "Target peak";
 "settings.videoThreads.desc" = "Mặc định: 0 (Tự động)";
 "settings.videoThreads.label" = "Số nhân";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "Bắt buộc khởi động lại IINA để có hiệu lực.";
+"settings.httpProxy.desc" = "Bắt buộc khởi động lại Reel để có hiệu lực.";
 "settings.httpProxy.label" = "HTTP proxy";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "Giây để prefetch";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Enable mpv's youtube-dl script";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "Tùy chọn gốc";
-"settings.ytdlSearchPath.desc" = "IINA sẽ tìm youtube-dl trong thư mục này. Cần khởi động lại.";
+"settings.ytdlSearchPath.desc" = "Reel sẽ tìm youtube-dl trong thư mục này. Cần khởi động lại.";
 "settings.ytdlSearchPath.label" = "Đường dẫn youtube-dl tùy chỉnh";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "If enabled, IINA will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
+"settings.autoSearchOnlineSub.desc" = "If enabled, Reel will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
 "settings.autoSearchOnlineSub.label" = "Tự động tìm kiếm phụ đề trực tuyến";
 "settings.displayInLetterBox.label" = "Hiển thị phụ đề trong hộp thư khi ở chế độ toàn màn hình";
 "settings.subAlignX.items.0" = "Bên trái";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "Bên dưới";
 "settings.subAutoLoadIINA.items.0" = "Vô hiệu hóa";
 "settings.subAutoLoadIINA.items.1" = "Phụ đề chứa tên tệp phương tiện";
-"settings.subAutoLoadIINA.items.2" = "Tự động phát hiện thông minh bằng IINA";
+"settings.subAutoLoadIINA.items.2" = "Tự động phát hiện thông minh bằng Reel";
 "settings.subAutoLoadIINA.label" = "Auto load";
 "settings.subAutoLoadPriorityString.desc" = "Vui lòng nhập danh sách các chuỗi được phân tách bằng dấu phẩy.";
 "settings.subAutoLoadPriorityString.label" = "Phụ đề được ưu tiên khi tên tệp chứa";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "Use left/right button for";
 "settings.controlBarAutoHideTimeout.label" = "Auto hide after";
 "settings.controlBarStickToCenter.label" = "Snap to center when dragging";
-"settings.disableAnimations.desc" = "When the macOS Reduce Motion accessibility setting is enabled IINA will reduce user interface animations that are known to cause problems for those with vestibular disorders. Should that be insufficient, this setting can be used to reduce motion further by eliminating user interface animations.";
+"settings.disableAnimations.desc" = "When the macOS Reduce Motion accessibility setting is enabled Reel will reduce user interface animations that are known to cause problems for those with vestibular disorders. Should that be insufficient, this setting can be used to reduce motion further by eliminating user interface animations.";
 "settings.disableAnimations.label" = "Disable animations";
 "settings.disableOSDFileStartMsg.label" = "File start";
 "settings.disableOSDPauseResumeMsgs.label" = "Tạm dừng/Tiếp tục";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "Cửa sổ";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "Cài đặt sau sẽ buộc phải khởi động lại IINA để có hiệu lực.";
+"settings.enableAdvancedSettings.desc" = "Cài đặt sau sẽ buộc phải khởi động lại Reel để có hiệu lực.";
 "settings.enableAdvancedSettings.label" = "Bật cài đặt nâng cao";
 "settings.enableLogging.label" = "Cho phép ghi nhật ký";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "Không tải được trang.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "Phông chữ";
-"settings.$GetBrowserExtensionsForIINA" = "Tải Tiện ích mở rộng IINA cho Trình duyệt";
+"settings.$GetBrowserExtensionsForIINA" = "Tải Tiện ích mở rộng Reel cho Trình duyệt";
 "settings.$GetPlugins" = "Get Plugins…";
 "settings.$Hardware" = "Hardware";
 "settings.$Height" = "Chiều cao";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "On Screen Controller";
 "settings.$OnScreenDisplay" = "On Screen Display";
 "settings.$OnlineSubtitles" = "Phụ đề trực tuyến";
-"settings.$OpenLinksOrCurrentWebpage" = "Open links or current webpage in IINA with one click. The website must be supported by youtube-dl.";
+"settings.$OpenLinksOrCurrentWebpage" = "Open links or current webpage in Reel with one click. The website must be supported by youtube-dl.";
 "settings.$OpenLogDirectory" = "Open Log Directory";
 "settings.$OpenLogWindow" = "Open the log viewer";
 "settings.$OrSelectFrom" = "Or select from available plugins";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "Hình trong hình";
 "settings.$Playlist" = "Danh sách phát";
-"settings.$PleaseSelectTheMediaTypes" = "Lựa chọn định dạng bạn muốn mặc định mở với IINA.";
+"settings.$PleaseSelectTheMediaTypes" = "Lựa chọn định dạng bạn muốn mặc định mở với Reel.";
 "settings.$Position" = "Vị trí";
 "settings.$PreferredLanguage" = "Ngôn ngữ ưu tiên";
 "settings.$RestoreAlerts" = "Restore Alerts";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "Ảnh chụp màn hình";
-"settings.$SetIINAAsTheDefault" = "Set IINA as the Default Application";
+"settings.$SetIINAAsTheDefault" = "Set Reel as the Default Application";
 "settings.$Settings" = "Cài đặt";
 "settings.$Shadow" = "Bóng mờ";
 "settings.$ShowInFinder" = "Xem trong Finder";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "side of the screen";
 "settings.$toThe" = "to the";
 "settings.$top" = "trên cùng";
-"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";

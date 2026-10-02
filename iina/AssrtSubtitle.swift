@@ -71,9 +71,11 @@ class Assrt {
                 return
               }
               let subFilename = "[\(self.index)]\(file.filename)"
-              if let url = data.saveToFolder(Utility.tempDirURL, filename: subFilename) {
-                resolver.fulfill(url)
+              guard let url = data.saveToFolder(Utility.tempDirURL, filename: subFilename) else {
+                resolver.reject(OnlineSubtitle.CommonError.fsError)
+                return
               }
+              resolver.fulfill(url)
             })
           }
         }
@@ -225,14 +227,20 @@ class Assrt {
           var subtitles: [Subtitle] = []
           var index = 0
           for sub in subArray {
+            guard let id = sub["id"] as? Int,
+                  let nativeName = sub["native_name"] as? String,
+                  let uploadTime = sub["upload_time"] as? String else {
+              Logger.log("Skipping malformed AssRT search result", level: .warning, subsystem: Logger.Sub.assrt)
+              continue
+            }
             var subLang: String? = nil
             if let lang = sub["lang"] as? [String: Any], let desc = lang["desc"] as? String {
               subLang = desc
             }
             subtitles.append(Subtitle(index: index,
-                                           id: sub["id"] as! Int,
-                                           nativeName: sub["native_name"] as! String,
-                                           uploadTime: sub["upload_time"] as! String,
+                                           id: id,
+                                           nativeName: nativeName,
+                                           uploadTime: uploadTime,
                                            subType: sub["subtype"] as? String,
                                            subLang: subLang))
             index += 1
@@ -274,14 +282,21 @@ class Assrt {
             return
           }
 
-          sub.url = URL(string: subArray[0]["url"] as! String)
+          guard let rawURL = subArray[0]["url"] as? String,
+                let url = URL(string: rawURL) else {
+            resolver.reject(Error.wrongResponseFormat)
+            return
+          }
+          sub.url = url
           sub.filename = subArray[0]["filename"] as? String
 
           if let fileList = subArray[0]["filelist"] as? [[String: String]] {
-            sub.fileList = fileList.map { info in
-              Subtitle.File(url: URL(string: info["url"]!)!,
-                                 filename: info["f"]!)
+            let parsedFiles = fileList.compactMap { info -> Subtitle.File? in
+              guard let rawURL = info["url"], let url = URL(string: rawURL),
+                    let filename = info["f"], !filename.isEmpty else { return nil }
+              return Subtitle.File(url: url, filename: filename)
             }
+            if !parsedFiles.isEmpty { sub.fileList = parsedFiles }
           }
 
           resolver.fulfill(sub)

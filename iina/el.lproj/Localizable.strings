@@ -30,11 +30,11 @@
 "guide.faq" = "Συχνές Ερωτήσεις";
 
 // Initial Window
-"initial.announcement" = "Χρησιμοποιείτε μια %@ έκδοση της IINA";
-"initial.beta.desc" = "Αν θέλετε να επιστρέψετε σε έκδοση έκδοσης, αποεπιλέξτε το \"λάβετε ενημερώσεις beta\" από τις Ρυθμίσεις > Γενικά, και εγκαταστήστε μια σταθερή έκδοση από την επίσημη ιστοσελίδα μας <a href=\"https://iina.io\"></a>.";
+"initial.announcement" = "Χρησιμοποιείτε μια %@ έκδοση της Reel";
+"initial.beta.desc" = "Αν θέλετε να επιστρέψετε σε έκδοση έκδοσης, αποεπιλέξτε το \"λάβετε ενημερώσεις beta\" από τις Ρυθμίσεις > Γενικά, και εγκαταστήστε μια σταθερή έκδοση από την επίσημη ιστοσελίδα μας <a href=\"https://github.com/tverma101/Reel\"></a>.";
 "initial.nightly.desc" = "";
 "initial.debug.desc" = "Οι εκδόσεις αποσφαλμάτωσης συνήθως δε βελτιστοποιούνται για την απόδοση, οπότε δε συνιστάται να χρησιμοποιείται ως καθημερινή μονάδα. Οι εκδόσεις αποσφαλμάτωσης δεν υποστηρίζουν την αυτόματη ενημέρωση.";
-"initial.bug_report" = "Αναφορά μέσω <a href=\"https://github.com/iina/iina/issues\">GitHub ζητημάτων</a>.";
+"initial.bug_report" = "Αναφορά μέσω <a href=\"https://github.com/tverma101/Reel/issues\">GitHub ζητημάτων</a>.";
 
 // Inspector Window
 "inspector.error" = "Σφάλμα";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "Νέο Φίλτρο";
 "alert.add_filter.message" = "Παρακαλώ εισάγετε μια συμβολοσειρά φίλτρου στην μορφή εντολής mpv, ή vf, ή af.";
 
-"alert.keybinding_config.error" = "Σφάλμα ανάλυσης του αρχείου ρυθμίσεων συντομεύσεων πληκτρολογίου \"%@\"! Επιστροφή στην προεπιλεγμένη ρύθμιση συντομεύσεων πληκτρολογίου του IINA. Παρακαλώ ελέγξτε τις ρυθμίσεις σας.";
+"alert.keybinding_config.error" = "Σφάλμα ανάλυσης του αρχείου ρυθμίσεων συντομεύσεων πληκτρολογίου \"%@\"! Επιστροφή στην προεπιλεγμένη ρύθμιση συντομεύσεων πληκτρολογίου του Reel. Παρακαλώ ελέγξτε τις ρυθμίσεις σας.";
 "alert.delete_keybindingset.title" = "Delete Key Binding Set";
 "alert.delete_keybindingset.message" = "Are you sure to delete this key binding set?";
 
@@ -302,7 +302,7 @@
 "alert.sub.cannot_login" = "Αδυναμία σύνδεσης. Παρακαλώ ελέγξτε το Όνομα Χρήστη, τον Κωδικό Εισόδου, και την κατάσταση δικτύου.\n\n%@";
 "alert.sub.save_downloaded.title" = "Αποθήκευση Ληφθέντος Υπότιτλου";
 
-"alert.set_default.title" = "Ορισμός IINA ως προεπιλεγμένη εφαρμογή";
+"alert.set_default.title" = "Ορισμός Reel ως προεπιλεγμένη εφαρμογή";
 "alert.set_default.message" = "Το ΙΙΝΑ θα οριστεί ως προεπιλεγμένη εφαρμογή για όλους τους τύπους αρχείων που υποστηρίζει.";
 "alert.set_default.success" = "Ολοκληρώθηκαν επιτυχώς %d και απέτυχαν %d.";
 
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "Cannot find the package file.";
 "plugin.install_error.cannot_download" = "Failed to download the plugin.\n\nOutput:%@\n";
 "plugin.install_error.cannot_unpackage" = "Failed to unpackage the plugin.\n\nOutput:%@\n";
-"plugin.install_error.cannot_load" = "IINA cannot load this plugin. It might be in the wrong format.";
+"plugin.install_error.cannot_load" = "Reel cannot load this plugin. It might be in the wrong format.";
 "plugin.check_for_updates" = "Check for Updates";
 "plugin.updating" = "Downloading update…";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "Παύση";
 "settings.pauseresumeWhen" = "Pause/resume when";
 "settings.playWhenEnteringFullScreen.label" = "Play upon entering full screen";
-"settings.playlistAutoAdd.desc" = "Απαιτεί την επανεκκίνηση της IINA για να τεθεί σε ισχύ.";
+"settings.playlistAutoAdd.desc" = "Απαιτεί την επανεκκίνηση της Reel για να τεθεί σε ισχύ.";
 "settings.playlistAutoAdd.label" = "Add files in the same folder automatically";
 "settings.playlistAutoPlayNext.label" = "Play next item automatically";
 "settings.playlistShowMetadata.label" = "Show artist and track name for audio files when available";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "Target peak";
 "settings.videoThreads.desc" = "Default: 0 (Auto)";
 "settings.videoThreads.label" = "Number of threads";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "Απαιτεί την επανεκκίνηση της IINA για να τεθεί σε ισχύ.";
+"settings.httpProxy.desc" = "Απαιτεί την επανεκκίνηση της Reel για να τεθεί σε ισχύ.";
 "settings.httpProxy.label" = "HTTP proxy";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "Seconds to prefetch";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Enable mpv's youtube-dl script";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "Raw options";
-"settings.ytdlSearchPath.desc" = "IINA will search youtube-dl in this folder. Restart needed.";
+"settings.ytdlSearchPath.desc" = "Reel will search youtube-dl in this folder. Restart needed.";
 "settings.ytdlSearchPath.label" = "Custom youtube-dl path";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "If enabled, IINA will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
+"settings.autoSearchOnlineSub.desc" = "If enabled, Reel will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
 "settings.autoSearchOnlineSub.label" = "Search online subtitles automatically";
 "settings.displayInLetterBox.label" = "Display subtitles in letterboxes while in full screen";
 "settings.subAlignX.items.0" = "Left";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "Bottom";
 "settings.subAutoLoadIINA.items.0" = "Disabled";
 "settings.subAutoLoadIINA.items.1" = "Subtitles containing media filename";
-"settings.subAutoLoadIINA.items.2" = "Detect intelligently by IINA";
+"settings.subAutoLoadIINA.items.2" = "Detect intelligently by Reel";
 "settings.subAutoLoadIINA.label" = "Auto load";
 "settings.subAutoLoadPriorityString.desc" = "Please enter a comma-separated list of strings.";
 "settings.subAutoLoadPriorityString.label" = "Subtitles have priority when filename containing";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "Χρήση αριστερού/δεξιού κουμπιού για";
 "settings.controlBarAutoHideTimeout.label" = "Auto hide after";
 "settings.controlBarStickToCenter.label" = "Προσαρμογή στο κέντρο όταν σύρετε";
-"settings.disableAnimations.desc" = "Όταν ενεργοποιηθεί η ρύθμιση προσβασιμότητας macOS Μειώστε την κίνηση η IINA θα μειώσει τις κινήσεις διεπαφών χρήστη που είναι γνωστό ότι προκαλούν προβλήματα σε εκείνους με αιθουσαίες διαταραχές. Εάν αυτό είναι ανεπαρκές, αυτή η ρύθμιση μπορεί να χρησιμοποιηθεί για να μειώσει περαιτέρω την κίνηση εξαλείφοντας τις κινήσεις διεπαφής χρήστη.";
+"settings.disableAnimations.desc" = "Όταν ενεργοποιηθεί η ρύθμιση προσβασιμότητας macOS Μειώστε την κίνηση η Reel θα μειώσει τις κινήσεις διεπαφών χρήστη που είναι γνωστό ότι προκαλούν προβλήματα σε εκείνους με αιθουσαίες διαταραχές. Εάν αυτό είναι ανεπαρκές, αυτή η ρύθμιση μπορεί να χρησιμοποιηθεί για να μειώσει περαιτέρω την κίνηση εξαλείφοντας τις κινήσεις διεπαφής χρήστη.";
 "settings.disableAnimations.label" = "Απενεργοποίηση εφέ";
 "settings.disableOSDFileStartMsg.label" = "Έναρξη αρχείου";
 "settings.disableOSDPauseResumeMsgs.label" = "Παύση / Συνέχιση";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "Παράθυρο";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "The following settings will require restarting IINA to take effect.";
+"settings.enableAdvancedSettings.desc" = "The following settings will require restarting Reel to take effect.";
 "settings.enableAdvancedSettings.label" = "Ενεργοποίηση Προηγμένων Ρυθμίσεων";
 "settings.enableLogging.label" = "Enable logging";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "Failed to load the page.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "Font";
-"settings.$GetBrowserExtensionsForIINA" = "Αποκτήστε επεκτάσεις προγράμματος περιήγησης για IINA";
+"settings.$GetBrowserExtensionsForIINA" = "Αποκτήστε επεκτάσεις προγράμματος περιήγησης για Reel";
 "settings.$GetPlugins" = "Get Plugins…";
 "settings.$Hardware" = "Hardware";
 "settings.$Height" = "Ύψος";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "Ενεργοποιητής Οθόνης";
 "settings.$OnScreenDisplay" = "Εμφάνιση στην Οθόνη";
 "settings.$OnlineSubtitles" = "Online Subtitles";
-"settings.$OpenLinksOrCurrentWebpage" = "Άνοιγμα συνδέσμων ή τρέχουσα ιστοσελίδα σε IINA με ένα κλικ. Η ιστοσελίδα πρέπει να υποστηρίζεται από youtube-dl.";
+"settings.$OpenLinksOrCurrentWebpage" = "Άνοιγμα συνδέσμων ή τρέχουσα ιστοσελίδα σε Reel με ένα κλικ. Η ιστοσελίδα πρέπει να υποστηρίζεται από youtube-dl.";
 "settings.$OpenLogDirectory" = "Open Log Directory";
 "settings.$OpenLogWindow" = "Open the log viewer";
 "settings.$OrSelectFrom" = "Or select from available plugins";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "Εικόνα-σε-Εικόνα";
 "settings.$Playlist" = "Λίστα Αναπαραγωγής";
-"settings.$PleaseSelectTheMediaTypes" = "Παρακαλώ επιλέξτε τους τύπους πολυμέσων για τους οποίους θέλετε να κάνετε IINA ως προεπιλεγμένη εφαρμογή.";
+"settings.$PleaseSelectTheMediaTypes" = "Παρακαλώ επιλέξτε τους τύπους πολυμέσων για τους οποίους θέλετε να κάνετε Reel ως προεπιλεγμένη εφαρμογή.";
 "settings.$Position" = "Position";
 "settings.$PreferredLanguage" = "Preferred language";
 "settings.$RestoreAlerts" = "Επαναφορά Ειδοποιήσεων";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "Screenshots";
-"settings.$SetIINAAsTheDefault" = "Set IINA as the Default Application";
+"settings.$SetIINAAsTheDefault" = "Set Reel as the Default Application";
 "settings.$Settings" = "Settings";
 "settings.$Shadow" = "Shadow";
 "settings.$ShowInFinder" = "Εμφάνιση στον Finder";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "πλευρικά της οθόνης";
 "settings.$toThe" = "προς το";
 "settings.$top" = "κορυφή";
-"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";

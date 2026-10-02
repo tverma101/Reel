@@ -30,11 +30,11 @@
 "guide.faq" = "Frequently Asked Questions";
 
 // Initial Window
-"initial.announcement" = "You are using a %@ version of IINA";
-"initial.beta.desc" = "If you want to rollback to a release version, uncheck \"receive beta updates\" from Settings > General, and install a stable release from our <a href=\"https://iina.io\">official website</a>.";
-"initial.nightly.desc" = "Nightly is not recommended to be used as your daily driver. Currently nightly builds do not support auto update. Please manually download newer builds from our <a href=\"https://nightly.iina.io\">nightly website</a>.";
+"initial.announcement" = "You are using a %@ version of Reel";
+"initial.beta.desc" = "If you want to rollback to a release version, uncheck \"receive beta updates\" from Settings > General, and install a stable release from our <a href=\"https://github.com/tverma101/Reel\">official website</a>.";
+"initial.nightly.desc" = "Nightly is not recommended to be used as your daily driver. Currently nightly builds do not support auto update. Please manually download newer builds from our <a href=\"https://github.com/tverma101/Reel/actions\">nightly website</a>.";
 "initial.debug.desc" = "Debug builds are usually not optimized for performance, so it is not recommended to be used as daily drive. Debug builds do not support auto update.";
-"initial.bug_report" = "Report via <a href=\"https://github.com/iina/iina/issues\">GitHub issues</a>.";
+"initial.bug_report" = "Report via <a href=\"https://github.com/tverma101/Reel/issues\">GitHub issues</a>.";
 
 // Inspector Window
 "inspector.error" = "Error";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "New Filter";
 "alert.add_filter.message" = "Please enter a filter string in format of mpv's vf or af command.";
 
-"alert.keybinding_config.error" = "Error parsing keybinding configuration file \"%@\"! Fallback to IINA Default keybinding setting. Please check your configuration.";
+"alert.keybinding_config.error" = "Error parsing keybinding configuration file \"%@\"! Fallback to Reel Default keybinding setting. Please check your configuration.";
 "alert.delete_keybindingset.title" = "Delete Key Binding Set";
 "alert.delete_keybindingset.message" = "Are you sure to delete this key binding set?";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "Cannot login. Please check your username, password and network status.\n\n%@";
 "alert.sub.save_downloaded.title" = "Save Downloaded Subtitle";
 
-"alert.set_default.title" = "Setting IINA as Default App";
-"alert.set_default.message" = "IINA will be set as the default app for all file types it supports.";
+"alert.set_default.title" = "Setting Reel as Default App";
+"alert.set_default.message" = "Reel will be set as the default app for all file types it supports.";
 "alert.set_default.success" = "Finished with %d success and %d failed.";
 
 "alert.add_watch.title" = "Add Watch Property";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "Cannot find the package file.";
 "plugin.install_error.cannot_download" = "Failed to download the plugin.\n\nOutput:%@\n";
 "plugin.install_error.cannot_unpackage" = "Failed to unpackage the plugin.\n\nOutput:%@\n";
-"plugin.install_error.cannot_load" = "IINA cannot load this plugin. It might be in the wrong format.";
+"plugin.install_error.cannot_load" = "Reel cannot load this plugin. It might be in the wrong format.";
 "plugin.check_for_updates" = "Check for Updates";
 "plugin.updating" = "Downloading update…";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "Pause";
 "settings.pauseresumeWhen" = "Pause/resume when";
 "settings.playWhenEnteringFullScreen.label" = "Play upon entering full screen";
-"settings.playlistAutoAdd.desc" = "Requires restarting IINA to take effect.";
+"settings.playlistAutoAdd.desc" = "Requires restarting Reel to take effect.";
 "settings.playlistAutoAdd.label" = "Add files in the same folder automatically";
 "settings.playlistAutoPlayNext.label" = "Play next item automatically";
 "settings.playlistShowMetadata.label" = "Show artist and track name for audio files when available";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "Target peak";
 "settings.videoThreads.desc" = "Default: 0 (Auto)";
 "settings.videoThreads.label" = "Number of threads";
@@ -690,6 +690,7 @@
 "settings.maxVolume.desc" = "(100-1000)";
 "settings.maxVolume.label" = "Maximum volume";
 "settings.preferredAudioDevice.label" = "Preferred audio device";
+"settings.preferredAudioDevice.desc" = "Routes Reel's audio to this device only. If a HomePod or AirPlay receiver appears in the list, choose it here while other apps keep using the Mac's current output.";
 "settings.replayGain.desc" = "Adjust volume gain according to ReplayGain values stored in the file metadata.";
 "settings.replayGain.items.0" = "No adjustment";
 "settings.replayGain.items.1" = "Track gain";
@@ -772,7 +773,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "Requires restarting IINA to take effect.";
+"settings.httpProxy.desc" = "Requires restarting Reel to take effect.";
 "settings.httpProxy.label" = "HTTP proxy";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "Seconds to prefetch";
@@ -784,7 +785,7 @@
 "settings.ytdlEnabled.label" = "Enable mpv's youtube-dl script";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "Raw options";
-"settings.ytdlSearchPath.desc" = "IINA will search youtube-dl in this folder. Restart needed.";
+"settings.ytdlSearchPath.desc" = "Reel will search youtube-dl in this folder. Restart needed.";
 "settings.ytdlSearchPath.label" = "Custom youtube-dl path";
 
 // Settings - Subtitles
@@ -792,8 +793,8 @@
 "settings.autoSearchOnlineSub.label" = "Search online subtitles automatically";
 "settings.autoSelectMatchingSubtitle.desc" = "Automatically load a single exact release match. OpenSubtitles also requires a local dialogue check. Other results open a chooser so you can select them manually.";
 "settings.verifyOpenSubAudio.label" = "Check OpenSubtitles dialogue against audio";
-"settings.verifyOpenSubAudio.desc" = "Optional. Downloads up to three candidates per search to check a short audio sample locally. These downloads count against your OpenSubtitles quota. Leave off for ordinary manual selection.";
-"settings.subdl.help" = "SubDL searches need a free API key. Get one at subdl.com/panel/api. Saving it makes SubDL the online source and enables automatic search. Exact-match selection stays a separate opt-in switch. OpenSubtitles remains available in the Subtitles menu.";
+"settings.verifyOpenSubAudio.desc" = "Optional. Downloads two pinned speech and voice-activity models from Hugging Face on first use, then checks up to three candidates per search using a short audio sample locally. Candidate downloads count against your OpenSubtitles quota. Leave off for ordinary manual selection.";
+"settings.subdl.help" = "SubDL searches need a free API key. Get one at subdl.com/panel/api. Saving it makes SubDL the online source. Turn on Search online subtitles automatically separately if you want Reel to search while local videos play. Exact-match selection is a separate opt-in switch. OpenSubtitles remains available in the Subtitles menu.";
 "settings.subdl.key_placeholder" = "SubDL API key";
 "settings.subdl.key_missing" = "No API key saved";
 "settings.subdl.key_saved" = "API key saved in Keychain";
@@ -824,7 +825,7 @@
 "settings.subAlignY.items.2" = "Bottom";
 "settings.subAutoLoadIINA.items.0" = "Disabled";
 "settings.subAutoLoadIINA.items.1" = "Subtitles containing media filename";
-"settings.subAutoLoadIINA.items.2" = "Detect intelligently by IINA";
+"settings.subAutoLoadIINA.items.2" = "Detect intelligently by Reel";
 "settings.subAutoLoadIINA.label" = "Auto Load";
 "settings.subAutoLoadPriorityString.desc" = "Please enter a comma-separated list of strings.";
 "settings.subAutoLoadPriorityString.label" = "Subtitles have priority when filename containing";
@@ -863,7 +864,7 @@
 "settings.arrowBtnAction.label" = "Use left/right button for";
 "settings.controlBarAutoHideTimeout.label" = "Auto hide after";
 "settings.controlBarStickToCenter.label" = "Snap to center when dragging";
-"settings.disableAnimations.desc" = "When the macOS Reduce Motion accessibility setting is enabled IINA will reduce user interface animations that are known to cause problems for those with vestibular disorders. Should that be insufficient, this setting can be used to reduce motion further by eliminating user interface animations.";
+"settings.disableAnimations.desc" = "When the macOS Reduce Motion accessibility setting is enabled Reel will reduce user interface animations that are known to cause problems for those with vestibular disorders. Should that be insufficient, this setting can be used to reduce motion further by eliminating user interface animations.";
 "settings.disableAnimations.label" = "Disable animations";
 "settings.disableOSDFileStartMsg.label" = "File start";
 "settings.disableOSDPauseResumeMsgs.label" = "Pause / Resume";
@@ -907,7 +908,7 @@
 "settings.windowBehaviorWhenPip.label" = "Window";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "The following settings will require restarting IINA to take effect.";
+"settings.enableAdvancedSettings.desc" = "The following settings will require restarting Reel to take effect.";
 "settings.enableAdvancedSettings.label" = "Enable advanced settings";
 "settings.enableLogging.label" = "Enable logging to file";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -963,7 +964,7 @@
 "settings.$FailedToLoadThePage" = "Failed to load the page.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "Font";
-"settings.$GetBrowserExtensionsForIINA" = "Get Browser Extensions for IINA";
+"settings.$GetBrowserExtensionsForIINA" = "Get Browser Extensions for Reel";
 "settings.$GetPlugins" = "Get Plugins…";
 "settings.$Hardware" = "Hardware";
 "settings.$Height" = "Height";
@@ -997,7 +998,7 @@
 "settings.$OnScreenController" = "On Screen Controller";
 "settings.$OnScreenDisplay" = "On Screen Display";
 "settings.$OnlineSubtitles" = "Online Subtitles";
-"settings.$OpenLinksOrCurrentWebpage" = "Open links or current webpage in IINA with one click. The website must be supported by youtube-dl.";
+"settings.$OpenLinksOrCurrentWebpage" = "Open links or current webpage in Reel with one click. The website must be supported by youtube-dl.";
 "settings.$OpenLogDirectory" = "Open Log Directory";
 "settings.$OpenLogWindow" = "Open the log viewer";
 "settings.$OrSelectFrom" = "Or select from available plugins";
@@ -1007,7 +1008,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "Picture-in-Picture";
 "settings.$Playlist" = "Playlist";
-"settings.$PleaseSelectTheMediaTypes" = "Please select the media types that you want to make IINA as the default Application for.";
+"settings.$PleaseSelectTheMediaTypes" = "Please select the media types that you want to make Reel as the default Application for.";
 "settings.$Position" = "Position";
 "settings.$PreferredLanguage" = "Preferred language";
 "settings.$RestoreAlerts" = "Restore Alerts";
@@ -1017,7 +1018,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "Screenshots";
-"settings.$SetIINAAsTheDefault" = "Set IINA as the Default Application";
+"settings.$SetIINAAsTheDefault" = "Set Reel as the Default Application";
 "settings.$Settings" = "Settings";
 "settings.$Shadow" = "Shadow";
 "settings.$ShowInFinder" = "Show in Finder";
@@ -1060,4 +1061,4 @@
 "settings.$sideOfTheScreen" = "side of the screen";
 "settings.$toThe" = "to the";
 "settings.$top" = "top";
-"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";

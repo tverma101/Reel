@@ -44,7 +44,9 @@ private final class LiveCaptionOverlay: NSView {
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-final class AppleLiveCaptions {
+/// Mutable state and AppKit objects are confined to the main thread; background decode and Speech
+/// tasks return to the main thread before reading or updating the instance.
+final class AppleLiveCaptions: @unchecked Sendable {
   private struct Cue {
     let chunkStart: Double
     let start: Double
@@ -65,6 +67,9 @@ final class AppleLiveCaptions {
   private var recognitionStartedAt: Date?
   private var authorizationRequested = false
   private var cues: [Cue] = []
+  private var unavailableSpeechLocales = Set<String>()
+  private var installedSpeechLanguageCodes: Set<String>?
+  private var speechLocaleCheckTask: Task<Void, Never>?
   private let chunkDuration: Double = 10
 
   init(player: PlayerCore) { self.player = player }
@@ -83,8 +88,14 @@ final class AppleLiveCaptions {
   /// Called when media or tracks change. A real subtitle immediately supersedes generated text.
   func updateEligibility() {
     guard let player else { stop(); return }
-    guard Preference.bool(for: .appleLiveCaptionsFallback),
-          player.info.state.loaded,
+    guard Preference.bool(for: .appleLiveCaptionsFallback) else {
+      // Let a user retry after installing a speech model while the app is open.
+      unavailableSpeechLocales.removeAll()
+      installedSpeechLanguageCodes = nil
+      stop()
+      return
+    }
+    guard player.info.state.loaded,
           player.info.vid != nil, player.info.vid != 0,
           player.info.subTracks.isEmpty,
           let url = player.info.currentURL, url.isFileURL else {
@@ -97,6 +108,24 @@ final class AppleLiveCaptions {
     // Apple's newer transcriber runs entirely on-device and does not use the legacy Speech
     // Recognition authorization prompt. Keep SFSpeechRecognizer for older macOS releases.
     if #available(macOS 26, *), SpeechTranscriber.isAvailable {
+      let locale = selectedSpeechLocale
+      let localeID = canonicalLocaleID(locale)
+      guard !unavailableSpeechLocales.contains(localeID) else {
+        stop()
+        return
+      }
+      guard let installedSpeechLanguageCodes else {
+        checkInstalledSpeechLocales(for: locale, localeID: localeID, mediaURL: url)
+        return
+      }
+      guard let languageCode = locale.language.languageCode?.identifier,
+            installedSpeechLanguageCodes.contains(languageCode) else {
+        unavailableSpeechLocales.insert(localeID)
+        Logger.log("Apple live captions have no installed on-device model for \(locale.identifier)",
+                   level: .warning, subsystem: Logger.Sub.onlinesub)
+        stop()
+        return
+      }
       if timer == nil, player.info.state == .playing { startTimer() }
       tick()
       return
@@ -152,6 +181,8 @@ final class AppleLiveCaptions {
     task = nil
     analyzerTask?.cancel()
     analyzerTask = nil
+    speechLocaleCheckTask?.cancel()
+    speechLocaleCheckTask = nil
     recognizer = nil
     requestedStart = nil
     inFlight = false
@@ -172,9 +203,14 @@ final class AppleLiveCaptions {
           Preference.bool(for: .appleLiveCaptionsFallback),
           player.info.state.loaded,
           player.info.subTracks.isEmpty,
-          let url = player.info.currentURL, url.isFileURL,
-          let position = player.info.videoPosition?.second,
-          position.isFinite, position >= 0 else {
+          let url = player.info.currentURL, url.isFileURL else {
+      stop()
+      return
+    }
+    // The UI timer stops after the OSC hides. Keep the cached position current so the chunk
+    // scheduler continues through a normal playback session with no visible controls.
+    player.syncPositionIfNeeded()
+    guard let position = player.info.videoPosition?.second, position.isFinite, position >= 0 else {
       stop()
       return
     }
@@ -220,7 +256,10 @@ final class AppleLiveCaptions {
   private func transcribe(url: URL, start: Double) {
     guard let player else { return }
     if #available(macOS 26, *), SpeechTranscriber.isAvailable {
-      // The analyzer path below is available for this chunk.
+      let localeID = canonicalLocaleID(selectedSpeechLocale)
+      // The model check is performed before decoding; if analyzer setup previously confirmed that
+      // the selected locale has no usable model, avoid reopening and probing the media on every chunk.
+      guard !unavailableSpeechLocales.contains(localeID) else { return }
     } else {
       guard recognizer?.isAvailable == true else { return }
     }
@@ -228,7 +267,7 @@ final class AppleLiveCaptions {
     guard duration >= 1 else { return }
     requestedStart = start
     inFlight = true
-    recognitionStartedAt = Date()
+    recognitionStartedAt = nil
     let token = generation
     decodeQueue.async { [weak self] in
       let data = FFmpegController.readMonoAudio(fromFile: url.path, startTime: start, duration: duration)
@@ -246,6 +285,9 @@ final class AppleLiveCaptions {
         }
         data.copyBytes(to: UnsafeMutableRawBufferPointer(start: channel, count: data.count))
         buffer.frameLength = buffer.frameCapacity
+        // Start the recognition timeout after FFmpeg has finished. A slow local-container probe
+        // must not make us abandon a chunk before the on-device recognizer has even started.
+        self.recognitionStartedAt = Date()
         if #available(macOS 26, *), SpeechTranscriber.isAvailable {
           self.transcribeWithSpeechAnalyzer(buffer, start: start, token: token, url: url)
           return
@@ -292,8 +334,8 @@ final class AppleLiveCaptions {
 
   @available(macOS 26, *)
   private func transcribeWithSpeechAnalyzer(_ buffer: AVAudioPCMBuffer, start: Double, token: Int, url: URL) {
-    let selected = Preference.string(for: .appleLiveCaptionsLanguage) ?? ""
-    let locale = selected.isEmpty ? Locale.current : Locale(identifier: selected)
+    let locale = selectedSpeechLocale
+    let localeID = canonicalLocaleID(locale)
     analyzerTask = Task { [weak self] in
       guard let captions = self else { return }
       do {
@@ -303,8 +345,14 @@ final class AppleLiveCaptions {
                      level: .warning, subsystem: Logger.Sub.onlinesub)
           await MainActor.run {
             guard captions.generation == token else { return }
+            captions.unavailableSpeechLocales.insert(localeID)
+            captions.timer?.invalidate()
+            captions.timer = nil
             captions.inFlight = false
             captions.recognitionStartedAt = nil
+            captions.cues.removeAll()
+            captions.overlay.isHidden = true
+            captions.overlay.textField.stringValue = ""
           }
           return
         }
@@ -363,6 +411,37 @@ final class AppleLiveCaptions {
         captions.inFlight = false
         captions.recognitionStartedAt = nil
         captions.analyzerTask = nil
+      }
+    }
+  }
+
+  private var selectedSpeechLocale: Locale {
+    let selected = Preference.string(for: .appleLiveCaptionsLanguage) ?? ""
+    return selected.isEmpty ? Locale.current : Locale(identifier: selected)
+  }
+
+  private func canonicalLocaleID(_ locale: Locale) -> String {
+    Locale.canonicalIdentifier(from: locale.identifier)
+  }
+
+  @available(macOS 26, *)
+  private func checkInstalledSpeechLocales(for locale: Locale, localeID: String, mediaURL: URL) {
+    guard speechLocaleCheckTask == nil else { return }
+    let token = generation
+    speechLocaleCheckTask = Task { [weak self] in
+      let locales = await SpeechTranscriber.installedLocales
+      let languageCodes = Set(locales.compactMap { $0.language.languageCode?.identifier })
+      DispatchQueue.main.async {
+        guard let self, self.generation == token else { return }
+        self.speechLocaleCheckTask = nil
+        guard Preference.bool(for: .appleLiveCaptionsFallback) else { return }
+        guard self.player?.info.currentURL == mediaURL,
+              self.canonicalLocaleID(self.selectedSpeechLocale) == localeID else {
+          self.updateEligibility()
+          return
+        }
+        self.installedSpeechLanguageCodes = languageCodes
+        self.updateEligibility()
       }
     }
   }

@@ -8,17 +8,19 @@ same [GNU General Public License, version 3](LICENSE) as IINA.
 ## Credit, claimed by no one here
 
 IINA was created by Collider Li and is developed by the IINA contributors and
-community. Every part of Reel that plays, decodes, renders, or manages media is
-their work. Reel claims no credit for IINA, mpv, FFmpeg, or any project listed
-in the in-app credits, and is not affiliated with or endorsed by the IINA
-project. The IINA name and logo belong to the IINA project; Reel ships under
-its own name, bundle identifier, and icon.
+community. Reel inherits its core player and playback architecture from IINA;
+fork-specific additions are described below. Reel claims no credit for IINA,
+mpv, FFmpeg, or any project listed in the in-app credits, and is not affiliated
+with or endorsed by the IINA project. The IINA name and logo belong to the IINA
+project; Reel ships under its own name, bundle identifier, and icon.
 
 ## Provenance
 
 - Upstream: https://github.com/iina/iina
-- Fork point: upstream `master`, at the commit tagged in this repository's
-  history immediately before the first `reel:` commit.
+- Fork point: upstream `develop` at `3133714` ("New icon (#6401)"), the last
+  upstream commit before this repository's two `reel:` commits. The first
+  fork commit is `2205042`; the rebrand and fork documentation follow in
+  `996be01`.
 - The full upstream commit history is preserved in this repository on purpose:
   attribution and blame flow back to their authors.
 
@@ -42,6 +44,10 @@ its own name, bundle identifier, and icon.
   compares them against a locally decoded audio excerpt using a pinned,
   checksum-verified on-device VAD/Whisper model. Only a same-language dialogue
   match may auto-select an OpenSubtitles result.
+- **Automatic search is opt-in.** Saving a provider's API key stores the key
+  and nothing else: it no longer turns on automatic online searching as a side
+  effect. Only the **Search online subtitles automatically** setting does that,
+  so a key cannot silently start network searches.
 
 ### Captions
 
@@ -51,6 +57,18 @@ its own name, bundle identifier, and icon.
   `requiresOnDeviceRecognition` otherwise) captions the audio over the video.
   Off by default; audio is never uploaded, recorded from a microphone, or sent
   to subtitle providers; it stops the moment a real subtitle track appears.
+
+### Audio output
+
+- Device selection itself is inherited, not reimplemented: Settings → Audio,
+  *Preferred audio device*, and the Audio → Audio Device menu both set mpv's
+  `audio-device`, and selecting an AirPlay destination such as a HomePod routes
+  Reel's playback there while other Mac applications keep using macOS's
+  configured output. Reel documents this in
+  [docs/audio-output.md](docs/audio-output.md).
+- The upstream reset of a vanished device to mpv's `auto` now also runs when a
+  file finishes loading, so a speaker that dropped off the network during load
+  does not leave playback pointing at a device that cannot be used.
 
 ### Playback stability
 
@@ -79,6 +97,26 @@ its own name, bundle identifier, and icon.
   files it uses at runtime are downloaded once, pinned to specific upstream
   commits, and verified by SHA-256 before use.
 
+### Repository hygiene
+
+- CI runs on this repository's `main` branch and builds `Reel.app`; the
+  upstream workflow referenced a `develop` branch and an `IINA.app` build
+  product that no longer exists here.
+- `other/generate_dmg.sh` looks for the built `Reel.app`, its `Reel`
+  executable, and the `OpenInIINA.appex` extension (the extension target keeps
+  its upstream name), and writes a `Reel.v<version>.dmg`.
+- `.github/FUNDING.yml` no longer lists upstream IINA's donation accounts, so
+  a reader clicking Sponsor on this fork is not silently sent to the IINA
+  project's funding pages.
+- The upstream `crowdin.yml` was removed. This fork has no localization
+  project of its own and must not push translations into upstream's Crowdin
+  project; translations arrive through upstream merges.
+- `CONTRIBUTING.md` is fork-specific. It no longer asks contributors to assign
+  their work to the IINA team, and it points general upstream bugs upstream.
+- The app's project, issue-report, release, and contributor links now point to
+  Reel. The Crowdin translator link remains upstream because Reel inherits those
+  translations and does not operate its own localization project.
+
 ### Upstream contributions
 
 Several of the playback-stability fixes above are general IINA bugs, not fork
@@ -87,16 +125,24 @@ upstream more than attribution.
 
 ## Legal notes
 
-- **License:** Reel, like IINA, is GPLv3-or-later. All of Reel's own code is
-  published under the same license, and the LICENSE file is upstream's file,
-  unchanged. If you distribute a build of Reel, you owe recipients the
-  Corresponding Source, the license text, and the notices — same as IINA.
+- **License:** Reel's application code is distributed under GPLv3, and the
+  LICENSE file is upstream's file, unchanged. Individual third-party
+  components retain their own licenses. If you distribute a build of Reel,
+  provide recipients the Corresponding Source, the license text, and required
+  notices.
 - **Trademarks:** the IINA name and logo are not Reel's to use as branding.
   They appear in this repository only to attribute the upstream project.
 - **Third-party components:** mpv (mostly GPLv2+, portions LGPL), FFmpeg
   (LGPL/GPL depending on configuration), and the bundled libraries listed in
   the in-app credits are carried from upstream. whisper.cpp is MIT. Model files
   are fetched at runtime from their official upstream releases and verified.
+- **Warranty and liability:** GPLv3 sections 15 and 16 already disclaim
+  warranty and limit liability to the extent permitted by applicable law.
+  Reel makes no separate promise beyond that, and no statement in this
+  repository can extend the protection of the IINA, mpv, FFmpeg, or
+  whisper.cpp contributors to code they do not own. A disclaimer added by
+  this fork cannot remove upstream obligations or liability that other parties
+  hold.
 - **No content is included.** Reel ships no media, no catalogs of media, and no
   keys. Online subtitle providers are user-configured; each provider's terms
   are the user's responsibility.

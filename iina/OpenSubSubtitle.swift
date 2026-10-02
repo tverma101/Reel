@@ -26,7 +26,7 @@ class OpenSub {
     private let subtitle: OpenSubClient.Subtitle
     private let downloadLock = NSLock()
     private var cachedDownloadURL: URL?
-    var audioMatchStatus: SubtitleAudioMatchStatus = .pending
+    @Atomic var audioMatchStatus: SubtitleAudioMatchStatus = .pending
 
     override var canAutomaticallySelect: Bool {
       audioMatchStatus == .dialogueMatch
@@ -220,9 +220,9 @@ class OpenSub {
       // Property access is serialized on the main queue: this chain can complete on a URLSession
       // queue, while `stop()` and `fileStarted()` read and clear the same property on main.
       DispatchQueue.main.async {
+        guard player.onlineSubtitleSearchID == searchID else { return }
         player.cancelOnlineSubtitleSearch = {
           cancellation.cancel()
-          player.cancelOnlineSubtitleSearch = nil
         }
       }
       return login().then { _ in

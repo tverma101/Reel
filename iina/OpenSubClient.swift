@@ -208,9 +208,15 @@ class OpenSubClient {
   /// - Returns: A [Data](https://developer.apple.com/documentation/foundation/data) object containing the
   ///            file contents
   func downloadFileContents(_ url: URL) -> Promise<Data> {
+    guard Self.isTrustedOpenSubtitlesURL(url) else {
+      return Promise(error: Error.callFailed(statusCode: nil, message: "Untrusted subtitle download URL"))
+    }
     return after(seconds: rateLimiter.delayBeforeCall()).then { [self] in
       Promise { resolver in
-        Just.get(url, headers: formHeaders(), asyncCompletionHandler: { [self] result in
+        // The API returns a short-lived file URL. Do not forward the account JWT or API key to
+        // the file server; the URL itself authorizes this download.
+        let headers = ["Accept": "*/*", "User-Agent": userAgent]
+        Just.get(url, headers: headers, asyncCompletionHandler: { [self] result in
           logHTTPResult(result)
           if let error = result.error {
             resolver.reject(error)
@@ -293,22 +299,19 @@ class OpenSubClient {
           logHTTPResult(result)
           do {
             let response = try self.decodeResponse(LoginResponse.self, from: result)
-            resolver.fulfill(response)
+            if let hostname = response.baseUrl {
+              guard let baseURL = OpenSubClient.formBaseURL(hostname: hostname) else {
+                log("Rejecting unsupported API host returned by Open Subtitles: \(hostname)", level: .warning)
+                resolver.reject(Error.callFailed(statusCode: nil, message: "Unsupported API host"))
+                return
+              }
+              apiBaseURL = baseURL
+            }
             // Use a fresh rate limiter to avoid delaying the next request.
             rateLimiter = RateLimiter()
             token = response.token
             tokenExpiration = Date() + tokenLifetime
-            // Open Subtitles may direct the client to use a different host for further requests.
-            guard let hostname = response.baseUrl else {
-              return
-            }
-            guard let baseURL = OpenSubClient.formBaseURL(hostname: hostname) else {
-              // Should not occur. Malformed data returned by Open Subtitles? As login was
-              // apparently successful we will treat this as a warning.
-              log("Unable to form URL from: \(hostname)", level: .warning)
-              return
-            }
-            apiBaseURL = baseURL
+            resolver.fulfill(response)
           } catch {
             resolver.reject(error)
           }
@@ -465,11 +468,27 @@ class OpenSubClient {
   /// - Parameter hostname: Host to send REST API requests to.
   /// - Returns: Base `URL` to append a method name to.
   private static func formBaseURL(hostname: String) -> URL? {
+    let hostname = hostname.lowercased()
+    guard hostname == "api.opensubtitles.com" || hostname == "vip-api.opensubtitles.com" else {
+      return nil
+    }
     var components = URLComponents()
     components.scheme = "https"
     components.host = hostname
     components.path = "/api/v1/"
     return components.url
+  }
+
+  /// Only Open Subtitles HTTPS hosts may receive API-returned subtitle links. File URLs do not
+  /// need account credentials, so an unexpected host must never receive a download request.
+  private static func isTrustedOpenSubtitlesURL(_ url: URL) -> Bool {
+    guard url.scheme?.lowercased() == "https",
+          let host = url.host?.lowercased(),
+          url.user == nil, url.password == nil,
+          url.port == nil || url.port == 443 else {
+      return false
+    }
+    return host == "opensubtitles.com" || host.hasSuffix(".opensubtitles.com")
   }
 
   /// Form an error if the given API response content is HTML.

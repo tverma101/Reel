@@ -1686,9 +1686,12 @@ class PlayerCore: NSObject {
   }
 
   func setCrop(fromString str: String) {
-    let vwidth = info.videoWidth!
-    let vheight = info.videoHeight!
     if let aspect = Aspect(string: str) {
+      guard let vwidth = info.videoWidth, vwidth > 0,
+            let vheight = info.videoHeight, vheight > 0 else {
+        log("Ignoring crop request before valid video dimensions are available", level: .warning)
+        return
+      }
       let cropped = NSMakeSize(CGFloat(vwidth), CGFloat(vheight)).crop(withAspect: aspect)
       let vf = MPVFilter.crop(w: Int(cropped.width), h: Int(cropped.height), x: nil, y: nil)
       vf.label = Constants.FilterName.crop
@@ -2251,6 +2254,13 @@ class PlayerCore: NSObject {
     trackListChanged()
     getPlaylist()
     getChapters()
+    // These property notifications can be delivered while an mpv loading hook is still running.
+    // Their handlers intentionally avoid synchronous mpv reads during that phase, so resync their
+    // current values now that FILE_LOADED makes those reads safe. This also catches a selected
+    // CoreAudio/AirPlay device that disappeared during loading.
+    chapterChanged()
+    currentAoChanged()
+    audioDeviceListChanged()
     syncAbLoop()
     refreshSyncUITimer()
     touchBarSupport.setupTouchBarUI()
@@ -2932,21 +2942,34 @@ class PlayerCore: NSObject {
     }
   }
 
-  func sendOSD(_ osd: OSDMessage, autoHide: Bool = true, forcedTimeout: Float? = nil, accessoryView: NSView? = nil, context: Any? = nil, external: Bool = false) {
+  func sendOSD(_ osd: OSDMessage, autoHide: Bool = true, forcedTimeout: Float? = nil, accessoryView: NSView? = nil, context: Any? = nil, external: Bool = false, presentationCheck: (() -> Bool)? = nil, onDisplayed: ((Bool) -> Void)? = nil) {
     // querying `mainWindow.isWindowLoaded` will initialize mainWindow unexpectedly
     guard !isInMiniPlayer, mainWindow.loaded, info.state.loaded,
-          Preference.bool(for: .enableOSD) || osd.alwaysEnabled, !osd.isDisabled else { return }
+          Preference.bool(for: .enableOSD) || osd.alwaysEnabled, !osd.isDisabled else {
+      if let onDisplayed {
+        DispatchQueue.main.async { onDisplayed(false) }
+      }
+      return
+    }
     if info.disableOSDForFileLoading && !external {
       guard case .fileStart = osd else {
+        if let onDisplayed {
+          DispatchQueue.main.async { onDisplayed(false) }
+        }
         return
       }
     }
     DispatchQueue.main.async {
-      self.mainWindow.displayOSD(osd,
-                                 autoHide: autoHide,
-                                 forcedTimeout: forcedTimeout,
-                                 accessoryView: accessoryView,
-                                 context: context)
+      guard presentationCheck?() ?? true else {
+        onDisplayed?(false)
+        return
+      }
+      let displayed = self.mainWindow.displayOSD(osd,
+                                                 autoHide: autoHide,
+                                                 forcedTimeout: forcedTimeout,
+                                                 accessoryView: accessoryView,
+                                                 context: context)
+      onDisplayed?(displayed)
     }
   }
 

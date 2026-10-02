@@ -2,14 +2,14 @@
 
 ## Goal
 
-When an online subtitle search returns an exactly matching result, IINA may select it automatically
+When an online subtitle search returns an exactly matching result, Reel may select it automatically
 while leaving the user free to choose another subtitle. For OpenSubtitles, filename and provider
 metadata alone are not enough: automatic selection also requires a same-language dialogue match
 from a local audio sample.
 
 ## What existed before
 
-None of this. IINA had no notion of a match score:
+None of this. IINA had no notion of a match score, and neither did this fork before the change:
 
 - `OnlineSubtitle.search` → provider fetch → `showSubSelectWindow` in each provider's `Fetcher`.
 - The chooser appeared only when a provider returned more than one result; a single result was
@@ -103,7 +103,7 @@ dialogue matches the current audio.
 
 OpenSubtitles now presents its full result list for ordinary manual fallback without spending a
 download until the user chooses one. The separate `verifyOpenSubAudio` setting is off by default.
-When enabled, IINA downloads at most the first three candidates to inspect their text and reuses a
+When enabled, Reel downloads at most the first three candidates to inspect their text and reuses a
 selected file instead of downloading it twice. This opt-in check may spend three provider downloads
 in one search.
 
@@ -123,7 +123,7 @@ declared language matches Whisper's detected language. A text score of at least 
 **Possible dialogue match**. A different language, too little speech, or a failed check remains
 unverified and cannot be auto-selected.
 
-The models are downloaded lazily from pinned public revisions into IINA's Application Support
+The models are downloaded lazily from pinned public revisions into Reel's Application Support
 folder, with SHA-256 verification, and are reused afterward. The VAD model is under 1 MiB; the
 multilingual Whisper base-Q5_1 model is about 57 MiB and is downloaded only when the timing check
 cannot settle all candidates. If a model cannot be downloaded or loaded, the chooser still appears
@@ -132,7 +132,7 @@ with candidates marked unverified.
 The local `IINAWhisper` package contains a static universal XCFramework built from upstream
 whisper.cpp v1.9.4 for macOS 12.0. It is split into arm64 and x86_64 builds so each gets its CPU
 backend; the Intel slice uses AVX and SSE4.2 without assuming AVX2. Metal BF16 is disabled to keep
-the upstream library's default 13.3 deployment target from raising IINA's macOS 12 minimum. Details
+the upstream library's default 13.3 deployment target from raising Reel's macOS 12 minimum. Details
 and upstream source links are in [Packages/IINAWhisper/README.md](../../Packages/IINAWhisper/README.md).
 
 ### Efficiency spot-check
@@ -163,7 +163,7 @@ does not claim a dialogue match across languages.
 - **A stuck `isSearchingOnlineSubtitle`.** If the chooser is destroyed without a click, nothing
   settles the promise, and the flag stays set. Because `menuFindOnlineSub` returns early when it is
   set, and idle player cores are recycled, that would leave online subtitle search silently dead for
-  every later file in that window, recoverable only by quitting IINA.
+  every later file in that window, recoverable only by quitting Reel.
 
   Clearing the flag directly is *not* a safe fix and was tried first. `PlayerCore.stop()` also runs
   while the player is merely idle — pressing ⌘. after playback has ended, or the background task

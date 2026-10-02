@@ -30,11 +30,11 @@
 "guide.faq" = "Često postavljena pitanja";
 
 // Initial Window
-"initial.announcement" = "Koristite %@ verziju IINA programa";
-"initial.beta.desc" = "Ako se želiš vratiti na stariju verziju izdanja, odznači opciju „Primaj aktualiziranja za beta verzije” u Postavke > Općenito i instaliraj stabilno izdanje s naše <a href=\"https://iina.io\">službene web stranice</a>.";
-"initial.nightly.desc" = "Ne preporučujemo noćna izdanja za svakodnevnu upotrebu. Noćne izgradnje trenutačno ne podržavaju automatsko aktualiziranje. Preuzmi novije izgradnje s naše <a href=\"https://nightly.iina.io\">web stranice noćnih izdanja</a>.";
+"initial.announcement" = "Koristite %@ verziju Reel programa";
+"initial.beta.desc" = "Ako se želiš vratiti na stariju verziju izdanja, odznači opciju „Primaj aktualiziranja za beta verzije” u Postavke > Općenito i instaliraj stabilno izdanje s naše <a href=\"https://github.com/tverma101/Reel\">službene web stranice</a>.";
+"initial.nightly.desc" = "Ne preporučujemo noćna izdanja za svakodnevnu upotrebu. Noćne izgradnje trenutačno ne podržavaju automatsko aktualiziranje. Preuzmi novije izgradnje s naše <a href=\"https://github.com/tverma101/Reel/actions\">web stranice noćnih izdanja</a>.";
 "initial.debug.desc" = "Izdanja za otklanjanje grešaka obično nisu optimizirane za performanse, stoga se ne preporučuje njihova svakodnevna upotreba. Izdanja za otklanjanje grešaka ne podržavaju automatsko aktualiziranje.";
-"initial.bug_report" = "Prijavi na stranici <a href=\"https://github.com/iina/iina/issues\">GitHub issues</a>.";
+"initial.bug_report" = "Prijavi na stranici <a href=\"https://github.com/tverma101/Reel/issues\">GitHub issues</a>.";
 
 // Inspector Window
 "inspector.error" = "Greška";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "Novi filtar";
 "alert.add_filter.message" = "Upiši znakovni niz za filtar u formatu mpv-ove naredbe vf ili af.";
 
-"alert.keybinding_config.error" = "Greška pri obradi datoteke konfiguracije tipkovnih prečaca „%@”! Vraća se na zadanu postavku tipkovnih prečaca za IINA. Provjeri svoju konfiguraciju.";
+"alert.keybinding_config.error" = "Greška pri obradi datoteke konfiguracije tipkovnih prečaca „%@”! Vraća se na zadanu postavku tipkovnih prečaca za Reel. Provjeri svoju konfiguraciju.";
 "alert.delete_keybindingset.title" = "Izbriši skup tipkovnih prečaca";
 "alert.delete_keybindingset.message" = "Stvarno želiš izbrisati ovaj skup tipkovnih prečaca?";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "Neuspjela prijava. Provjeri svoje korisničko ime, lozinku i stanje mreže.\n\n%@";
 "alert.sub.save_downloaded.title" = "Spremi preuzeti titl";
 
-"alert.set_default.title" = "Postavljanje programa IINA kao standardnog programa";
-"alert.set_default.message" = "IINA će se postaviti kao standardni program za sve formate koje podržava.";
+"alert.set_default.title" = "Postavljanje programa Reel kao standardnog programa";
+"alert.set_default.message" = "Reel će se postaviti kao standardni program za sve formate koje podržava.";
 "alert.set_default.success" = "Završeno: uspjelo: %d, neuspjelo: %d.";
 
 "alert.add_watch.title" = "Dodaj svojstvo gledanja";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "Datoteka paketa nije pronađena.";
 "plugin.install_error.cannot_download" = "Neuspjelo preuzimanje dodatka.\n\nRezultat:%@\n";
 "plugin.install_error.cannot_unpackage" = "Neuspjelo raspakiranje dodatka.\n\nRezultat:%@\n";
-"plugin.install_error.cannot_load" = "IINA ne može učitati ovaj dodatak. Možda je u pogrešnom formatu.";
+"plugin.install_error.cannot_load" = "Reel ne može učitati ovaj dodatak. Možda je u pogrešnom formatu.";
 "plugin.check_for_updates" = "Traži nove verzije ";
 "plugin.updating" = "Preuzimanje nove verzije …";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "Pauziraj";
 "settings.pauseresumeWhen" = "Pauziraj/nastavi kada";
 "settings.playWhenEnteringFullScreen.label" = "Pokreni nakon uključivanja cjeloekranskog prikaza";
-"settings.playlistAutoAdd.desc" = "Za primjenu se IINA mora ponovo pokrenuti.";
+"settings.playlistAutoAdd.desc" = "Za primjenu se Reel mora ponovo pokrenuti.";
 "settings.playlistAutoAdd.label" = "Dodaj datoteke u istu mapu automatski";
 "settings.playlistAutoPlayNext.label" = "Automatski reprodukciraj sljedeći medij";
 "settings.playlistShowMetadata.label" = "Prikaži pjevača i ime trake za audio datoteke, ako su dostupni";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "Ciljani najviši ton";
 "settings.videoThreads.desc" = "Standardno: 0 (Automatski)";
 "settings.videoThreads.label" = "Broj niza";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Standardno: 153.600";
 "settings.defaultCacheSize.label" = "Veličina predmemorije (KiB)";
 "settings.enableCache.label" = "Prethodno učitaj i spremi mrežne podatke u međuspremnik";
-"settings.httpProxy.desc" = "Za primjenu se IINA mora ponovo pokrenuti.";
+"settings.httpProxy.desc" = "Za primjenu se Reel mora ponovo pokrenuti.";
 "settings.httpProxy.label" = "HTTP proxy";
 "settings.secPrefech.desc" = "Standardno: 36.000";
 "settings.secPrefech.label" = "Broj sekundi predučitavanja";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Aktiviraj mpv-ovu youtube-dl skriptu";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "Opcije neobrađenih podataka";
-"settings.ytdlSearchPath.desc" = "IINA će tražiti za youtube-dl u ovoj datoteci. Ponovno pokrenite je potrebno.";
+"settings.ytdlSearchPath.desc" = "Reel će tražiti za youtube-dl u ovoj datoteci. Ponovno pokrenite je potrebno.";
 "settings.ytdlSearchPath.label" = "Zadana youtube-dl staza";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "Ako je aktivirano, IINA će automatski pretraživati ​​online titlove samo za videa bez učitanih titlova i duljih od 20 minuta.";
+"settings.autoSearchOnlineSub.desc" = "Ako je aktivirano, Reel će automatski pretraživati ​​online titlove samo za videa bez učitanih titlova i duljih od 20 minuta.";
 "settings.autoSearchOnlineSub.label" = "Traži titlove na internetu automatski";
 "settings.displayInLetterBox.label" = "Prikaži titlove u crnoj traci kad je uključen cjeloekranski prikaz";
 "settings.subAlignX.items.0" = "Lijevo";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "Dolje";
 "settings.subAutoLoadIINA.items.0" = "Deaktivirano";
 "settings.subAutoLoadIINA.items.1" = "Titlovi koji sadrže ime medijske datoteke";
-"settings.subAutoLoadIINA.items.2" = "Inteligentno otkrij pomoću IINA";
+"settings.subAutoLoadIINA.items.2" = "Inteligentno otkrij pomoću Reel";
 "settings.subAutoLoadIINA.label" = "Auto load";
 "settings.subAutoLoadPriorityString.desc" = "Upiši zarezima odvojen popis nizova.";
 "settings.subAutoLoadPriorityString.label" = "Titlovi imaju prioritet kada naziv datoteke sadrži";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "Koristi gumb lijevo/desno za";
 "settings.controlBarAutoHideTimeout.label" = "Automatski sakrij nakon";
 "settings.controlBarStickToCenter.label" = "Privuci u središte prilikom povlačenja";
-"settings.disableAnimations.desc" = "Kada je macOS postavka pristupačnosti „Smanji pomicanje” aktivirana, IINA će smanjiti animacije korisničkog sučelja koje su poznate da uzrokuju probleme osobama s vestibularnim poremećajima. Ako to nije dovoljno, ova se postavka može koristiti za dodatno smanjenje pomicanja uklanjanjem animacija korisničkog sučelja.";
+"settings.disableAnimations.desc" = "Kada je macOS postavka pristupačnosti „Smanji pomicanje” aktivirana, Reel će smanjiti animacije korisničkog sučelja koje su poznate da uzrokuju probleme osobama s vestibularnim poremećajima. Ako to nije dovoljno, ova se postavka može koristiti za dodatno smanjenje pomicanja uklanjanjem animacija korisničkog sučelja.";
 "settings.disableAnimations.label" = "Deaktiviraj animacije";
 "settings.disableOSDFileStartMsg.label" = "Početak datoteke";
 "settings.disableOSDPauseResumeMsgs.label" = "Zaustavi/Nastavi";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "Prozor";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "Sljedeće postavke zahtijevaju ponovno pokretanje IINA-e kako bi stupile na snagu.";
+"settings.enableAdvancedSettings.desc" = "Sljedeće postavke zahtijevaju ponovno pokretanje Reel-e kako bi stupile na snagu.";
 "settings.enableAdvancedSettings.label" = "Aktiviraj napredne postavke";
 "settings.enableLogging.label" = "Aktiviraj zapisivanje u datoteku";
 "settings.logLevel.desc" = "Zapisnike možeš pregledati odabirom opcije Prozor - Preglednik zapisnika iz izbornika.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "Neuspjelo učitavanje stranice.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "Font";
-"settings.$GetBrowserExtensionsForIINA" = "Nabavi proširenja preglednika za IINA";
+"settings.$GetBrowserExtensionsForIINA" = "Nabavi proširenja preglednika za Reel";
 "settings.$GetPlugins" = "Nabavi dodatke …";
 "settings.$Hardware" = "Hardver";
 "settings.$Height" = "Visina";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "Kontrole na ekranu";
 "settings.$OnScreenDisplay" = "Prikaz na ekranu";
 "settings.$OnlineSubtitles" = "Titlovi s interneta";
-"settings.$OpenLinksOrCurrentWebpage" = "Otvori poveznice ili aktualnu web stranicu u IINA jednim klikom. Web stranica mora podržavati youtube-dl.";
+"settings.$OpenLinksOrCurrentWebpage" = "Otvori poveznice ili aktualnu web stranicu u Reel jednim klikom. Web stranica mora podržavati youtube-dl.";
 "settings.$OpenLogDirectory" = "Otvori direktorij dnevnika";
 "settings.$OpenLogWindow" = "Otvori preglednik zapisnika";
 "settings.$OrSelectFrom" = "Ili odaberi iz dostupnih dodataka";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "Slika u slici";
 "settings.$Playlist" = "Playlista";
-"settings.$PleaseSelectTheMediaTypes" = "Odaberi vrste medija koje želiš standardno otvarati s aplikacijom IINA.";
+"settings.$PleaseSelectTheMediaTypes" = "Odaberi vrste medija koje želiš standardno otvarati s aplikacijom Reel.";
 "settings.$Position" = "Položaj";
 "settings.$PreferredLanguage" = "Željeni jezik";
 "settings.$RestoreAlerts" = "Obnovi upozorenja";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "Snimke ekrana";
-"settings.$SetIINAAsTheDefault" = "Postavi IINA kao standardnu aplikaciju";
+"settings.$SetIINAAsTheDefault" = "Postavi Reel kao standardnu aplikaciju";
 "settings.$Settings" = "Postavke";
 "settings.$Shadow" = "Sjena";
 "settings.$ShowInFinder" = "Prikaži u Finderu";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "strana ekrana";
 "settings.$toThe" = "na";
 "settings.$top" = "gore";
-"settings.$ytdlWarning" = "Dodatak Online Media ima dodatne funkcije kao što su promjena kvalitete i preuzimanje videa. IINA će koristiti dodatak ako je instaliran i aktiviran. Postavke u nastavku rade ako dodatak nije dostupan.";
+"settings.$ytdlWarning" = "Dodatak Online Media ima dodatne funkcije kao što su promjena kvalitete i preuzimanje videa. Reel će koristiti dodatak ako je instaliran i aktiviran. Postavke u nastavku rade ako dodatak nije dostupan.";
