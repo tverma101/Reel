@@ -237,6 +237,35 @@ class PlayerCore: NSObject {
   var overrideAutoSwitchToMusicMode = false
 
   var isSearchingOnlineSubtitle = false
+  /// Identifies the search belonging to this media, so late provider replies cannot affect a new file.
+  var onlineSubtitleSearchID: UUID?
+
+  /**
+   Cancels an online subtitle search that is waiting for the user to answer the chooser.
+
+   Set by the chooser while it is on screen and cleared once it answers. `stop()` invokes it so that
+   abandoning a search settles its promise through the normal error path, which is what resets
+   `isSearchingOnlineSubtitle`; see `cancelOnlineSubtitleSearchIfNeeded()`.
+   */
+  var cancelOnlineSubtitleSearch: (() -> Void)?
+
+  /// Abandon an online subtitle search that is waiting on the chooser, if there is one.
+  ///
+  /// Rejecting the pending promise lets `OnlineSubtitle._search` clear
+  /// `isSearchingOnlineSubtitle` and dismiss the OSD, instead of the flag being left set — which
+  /// would make every later search return early and silently disable the feature.
+  func cancelOnlineSubtitleSearchIfNeeded() {
+    let hadSearch = onlineSubtitleSearchID != nil
+    onlineSubtitleSearchID = nil
+    isSearchingOnlineSubtitle = false
+    guard let cancel = cancelOnlineSubtitleSearch else {
+      if hadSearch { hideOSD() }
+      return
+    }
+    // Clear first so the cancel action cannot run twice, and so a re-entrant call is a no-op.
+    cancelOnlineSubtitleSearch = nil
+    cancel()
+  }
 
   /// For supporting mpv `--shuffle` arg, to shuffle playlist when launching from command line
   @Atomic private var shufflePending = false
@@ -947,6 +976,15 @@ class PlayerCore: NSObject {
   func stop() {
     guard info.state != .shutDown else { return }
     savePlaybackPosition()
+    if mainWindow.loaded { mainWindow.liveCaptions.stop() }
+
+    // Any online subtitle search still waiting on the user is abandoned: the media it applies to is
+    // going away, and the chooser is about to be torn down without ever answering. Rejecting settles
+    // the promise, which is what clears `isSearchingOnlineSubtitle` through the normal error path.
+    // Clearing that flag directly would be wrong, because `stop()` also runs while the player is
+    // merely idle — the chooser would still be on screen, a second search would be admitted, and its
+    // OSD would then be dropped, wedging the feature for good.
+    cancelOnlineSubtitleSearchIfNeeded()
 
     // The player may already be stopped in which case the state must not be set to stopping.
     if info.state != .idle {
@@ -2070,6 +2108,11 @@ class PlayerCore: NSObject {
     guard info.state.active else { return }
     log("File started")
 
+    // Opening another file in the same window does not necessarily go through `stop()`, so abandon
+    // a search that was waiting on the chooser for the previous file — its chooser is stale now.
+    cancelOnlineSubtitleSearchIfNeeded()
+    if mainWindow.loaded { mainWindow.liveCaptions.stop() }
+
     Task { @MainActor in
       mainWindow.liveText.clearAnalysis()
     }
@@ -2101,7 +2144,9 @@ class PlayerCore: NSObject {
       }
     }
 
-    NowPlayingInfoManager.shared.updateInfo(withTitle: true)
+    // The start-file event precedes mpv's synchronous loading hooks. Updating Now Playing here
+    // reads mpv properties on the main thread and can deadlock while a hook waits to continue.
+    // fileLoaded() updates Now Playing once those hooks have completed.
 
     // Auto load
     $backgroundQueueTicket.withLock { $0 += 1 }
@@ -2166,6 +2211,12 @@ class PlayerCore: NSObject {
     log("File loaded")
 
     info.state = .loaded
+
+    // Showing the OSD refreshes playback timing, which synchronously reads mpv properties.
+    // The loading hook can still be waiting on the main thread at START_FILE, so display the
+    // filename only after FILE_LOADED confirms the loading hooks have completed.
+    let startMessage = info.isNetworkResource ? info.currentURL?.absoluteString : info.currentURL?.lastPathComponent
+    sendOSD(.fileStart(startMessage ?? "-"))
 
     // Must force drawing to cover the case where this player was previously used to play a video
     // and is now playing an audio file without an album cover and without using music mode.
@@ -2236,6 +2287,7 @@ class PlayerCore: NSObject {
       }
     }
     postNotification(.iinaFileLoaded)
+    if mainWindow.loaded { mainWindow.liveCaptions.updateEligibility() }
     events.emit(.fileLoaded, data: info.currentURL?.absoluteString ?? "")
 
     Task { @MainActor in
@@ -2261,9 +2313,9 @@ class PlayerCore: NSObject {
     postNotification(.iinaAFChanged)
   }
 
-  func aidChanged() {
+  func aidChanged(_ id: Int) {
     guard info.state.active else { return }
-    info.aid = Int(mpv.getInt(MPVOption.TrackSelection.aid))
+    info.aid = id
     guard mainWindow.loaded else { return }
     mainWindow?.muteButton.isHidden = (info.aid == 0)
     mainWindow?.volumeSlider.isHidden = (info.aid == 0)
@@ -2282,7 +2334,9 @@ class PlayerCore: NSObject {
   ///     property is set to `auto` so that both IINA and mpv are in agreement on the selected audio device. For more information
   ///     see issue [#6034](https://github.com/iina/iina/issues/6034).
   func audioDeviceListChanged() {
-    guard info.state.active else { return }
+    // The initial notification can arrive during an mpv loading hook. Do not synchronously query
+    // mpv from the main thread until the file has finished loading.
+    guard info.state.loaded else { return }
     let devices = getAudioDevices()
     let device = mpv.getString(MPVProperty.audioDevice)
     guard !devices.contains(where: {$0.name == device}) else { return }
@@ -2291,7 +2345,7 @@ class PlayerCore: NSObject {
   }
 
   func chapterChanged() {
-    guard info.state.active else { return }
+    guard info.state.loaded else { return }
     info.chapter = Int(mpv.getInt(MPVProperty.chapter))
     syncUI(.time)
     postNotification(.iinaChapterListChanged)
@@ -2303,6 +2357,7 @@ class PlayerCore: NSObject {
   /// When the audio output driver changes it may cause the currently selected audio device to be invalid because a mpv audio device
   /// is tied to a specific audio output driver. Attempt to find and configure the same audio device with the current audio output driver.
   func currentAoChanged() {
+    guard info.state.loaded else { return }
     guard let currentAo = mpv.getString(MPVProperty.currentAo),
           let audioDevice = mpv.getString(MPVProperty.audioDevice) else { return }
     let device = MPVAudioDevice(desc: "", name: audioDevice)
@@ -2327,7 +2382,7 @@ class PlayerCore: NSObject {
   }
 
   func fullscreenChanged() {
-    guard mainWindow.loaded, info.state.active else { return }
+    guard mainWindow.loaded, info.state.loaded else { return }
     let fs = mpv.getFlag(MPVOption.Window.fullscreen)
     if fs != mainWindow.fsState.isFullscreen {
       mainWindow.toggleWindowFullScreen()
@@ -2368,12 +2423,12 @@ class PlayerCore: NSObject {
   }
 
   func mediaTitleChanged() {
-    guard info.state.active else { return }
+    guard info.state.loaded else { return }
     postNotification(.iinaMediaTitleChanged)
   }
 
   func ontopChanged() {
-    guard mainWindow.loaded, info.state.active else { return }
+    guard mainWindow.loaded, info.state.loaded else { return }
     let ontop = mpv.getFlag(MPVOption.Window.ontop)
     if ontop != mainWindow.isOntop {
       mainWindow.setWindowFloatingOnTop(ontop)
@@ -2388,6 +2443,7 @@ class PlayerCore: NSObject {
       // position must be updated before notifying the manager.
       syncUITime()
       info.state = paused ? .paused : .playing
+      if mainWindow.loaded { mainWindow.liveCaptions.pauseChanged(paused) }
       refreshSyncUITimer()
       // Follow energy efficiency best practices and ensure IINA is absolutely idle when the video
       // is paused to avoid wasting energy with needless processing. If paused shutdown the timer
@@ -2446,18 +2502,20 @@ class PlayerCore: NSObject {
   }
 
   func secondarySubDelayChanged(_ delay: Double) {
+    info.secondarySubDelay = delay
     sendOSD(.secondSubDelay(delay))
     postNotification(.iinaSubDelayChanged)
   }
 
   func secondarySubPosChanged(_ position: Double) {
+    info.secondarySubPos = position
     sendOSD(.secondSubPos(position))
     postNotification(.iinaSubPositionChanged)
   }
 
-  func secondarySidChanged() {
+  func secondarySidChanged(_ id: Int) {
     guard info.state.active else { return }
-    info.secondSid = Int(mpv.getInt(MPVOption.Subtitles.secondarySid))
+    info.secondSid = id
     postNotification(.iinaSIDChanged)
     sendOSD(.track(info.currentTrack(.secondSub) ?? .noneSubTrack))
     if isInMiniPlayer {
@@ -2475,9 +2533,9 @@ class PlayerCore: NSObject {
     }
   }
 
-  func sidChanged() {
+  func sidChanged(_ id: Int) {
     guard info.state.active else { return }
-    info.sid = Int(mpv.getInt(MPVOption.TrackSelection.sid))
+    info.sid = id
     postNotification(.iinaSIDChanged)
     sendOSD(.track(info.currentTrack(.sub) ?? .noneSubTrack))
     if isInMiniPlayer {
@@ -2491,6 +2549,7 @@ class PlayerCore: NSObject {
 
   func subScaleChanged(_ scale: Double) {
     guard scale != 0 else { return }
+    info.subScale = scale
     let displayValue = scale >= 1 ? scale : -1 / scale
     let truncated = round(displayValue * 100) / 100
     sendOSD(.subScale(truncated))
@@ -2513,6 +2572,7 @@ class PlayerCore: NSObject {
   }
 
   func subPosChanged(_ position: Double) {
+    info.subPos = position
     sendOSD(.subPos(position))
     postNotification(.iinaSubPositionChanged)
   }
@@ -2527,14 +2587,22 @@ class PlayerCore: NSObject {
     }
   }
 
-  func trackListChanged() {
+  func trackListChanged(_ tracks: [[String: Any]]? = nil) {
     // No need to process track list changes if playback is being stopped. Must not process track
     // list changes if mpv is terminating as accessing mpv once shutdown has been initiated can
     // trigger a crash.
     guard info.state.active else { return }
     log("Track list changed")
-    getTrackInfo()
-    getSelectedTracks()
+    if let tracks {
+      setTrackInfo(tracks)
+    } else {
+      // File-loaded has already passed mpv's loading hooks, so a final snapshot is safe here.
+      getTrackInfo()
+      getSelectedTracks()
+    }
+    // Property changes are delivered before mpv's loading hooks have necessarily completed.
+    // Keep the snapshot, then let fileLoaded() perform UI and metadata work when queries are safe.
+    guard info.state.loaded else { return }
     let audioStatus = info.isAudio
 
     // Now Playing is first updated when the file starts, before the track list is known, so the
@@ -2562,6 +2630,7 @@ class PlayerCore: NSObject {
     }
 
     postNotification(.iinaTracklistChanged)
+    if mainWindow.loaded { mainWindow.liveCaptions.updateEligibility() }
   }
 
   func onVideoReconfig() {
@@ -2587,9 +2656,9 @@ class PlayerCore: NSObject {
     postNotification(.iinaVFChanged)
   }
 
-  func vidChanged() {
+  func vidChanged(_ id: Int) {
     guard info.state.active else { return }
-    info.vid = Int(mpv.getInt(MPVOption.TrackSelection.vid))
+    info.vid = id
     postNotification(.iinaVIDChanged)
     sendOSD(.track(info.currentTrack(.video) ?? .noneVideoTrack))
     if isInMiniPlayer {
@@ -2600,7 +2669,7 @@ class PlayerCore: NSObject {
   }
 
   func windowScaleChanged() {
-    guard mainWindow.loaded, info.state.active else { return }
+    guard mainWindow.loaded, info.state.loaded else { return }
     let windowScale = mpv.getDouble(MPVOption.Window.windowScale)
     if fabs(windowScale - info.cachedWindowScale) > 10e-10 {
       mainWindow.setWindowScale(windowScale)
@@ -2608,15 +2677,16 @@ class PlayerCore: NSObject {
   }
 
   private func autoSearchOnlineSub() {
+    let expectedURL = info.currentURL
     Thread.sleep(forTimeInterval: 0.5)
     if Preference.bool(for: .autoSearchOnlineSub) && !info.isNetworkResource &&
       (info.videoDuration?.second ?? 0.0) >= Preference.double(for: .autoSearchThreshold) * 60 {
-      info.$subTracks.withLock {
-        if $0.isEmpty {
-          DispatchQueue.main.async {
-            self.mainWindow.menuActionHandler.menuFindOnlineSub(.dummy)
-          }
-        }
+      DispatchQueue.main.async {
+        guard self.info.currentURL == expectedURL, self.info.subTracks.isEmpty,
+              SubDL.apiKey != nil else { return }
+        let item = NSMenuItem()
+        item.representedObject = OnlineSubtitle.Providers.subDL.id
+        self.mainWindow.menuActionHandler.menuFindOnlineSub(item)
       }
     }
   }
@@ -2758,6 +2828,7 @@ class PlayerCore: NSObject {
         mpv.setFlag(MPVOption.PlaybackControl.pause, false, level: .verbose)
       }
       info.state = Preference.bool(for: .pauseWhenOpen) ? .paused : .playing
+      if mainWindow.loaded { mainWindow.liveCaptions.updateEligibility() }
       syncUI(.playButton)
       if Preference.bool(for: .fullScreenWhenOpen) && !mainWindow.fsState.isFullscreen && !isInMiniPlayer {
         mainWindow.toggleWindowFullScreen()
@@ -2863,7 +2934,7 @@ class PlayerCore: NSObject {
 
   func sendOSD(_ osd: OSDMessage, autoHide: Bool = true, forcedTimeout: Float? = nil, accessoryView: NSView? = nil, context: Any? = nil, external: Bool = false) {
     // querying `mainWindow.isWindowLoaded` will initialize mainWindow unexpectedly
-    guard !isInMiniPlayer, mainWindow.loaded, info.state.active,
+    guard !isInMiniPlayer, mainWindow.loaded, info.state.loaded,
           Preference.bool(for: .enableOSD) || osd.alwaysEnabled, !osd.isDisabled else { return }
     if info.disableOSDForFileLoading && !external {
       guard case .fileStart = osd else {
@@ -2948,18 +3019,20 @@ class PlayerCore: NSObject {
   // MARK: - Getting info
 
   func getTrackInfo() {
+    let raw = mpv.getNode(MPVProperty.trackList)
+    guard let tracks = raw as? [[String: Any]] else {
+      log("Cast of mpv node failed while getting track list: \(String(describing: raw))", level: .error)
+      return
+    }
+    setTrackInfo(tracks)
+  }
+
+  private func setTrackInfo(_ tracks: [[String: Any]]) {
     info.audioTracks.removeAll(keepingCapacity: true)
     info.videoTracks.removeAll(keepingCapacity: true)
     info.$subTracks.withLock {
       $0.removeAll(keepingCapacity: true)
-      let raw = mpv.getNode(MPVProperty.trackList)
-      guard let list = raw as? [[String: Any]] else {
-        // Internal error, should not occur.
-        log("Cast of mpv node failed while getting track list: \(String(describing: raw))",
-            level: .error)
-        return
-      }
-      for dict in list {
+      for dict in tracks {
         guard let track = MPVTrack(dict) else {
           // Internal error, should not occur.
           log("Unable to construct MPVTrack from mpv node map: \(dict)", level: .error)

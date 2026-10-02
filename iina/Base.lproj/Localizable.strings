@@ -788,8 +788,33 @@
 "settings.ytdlSearchPath.label" = "Custom youtube-dl path";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "If enabled, IINA will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
+"settings.autoSearchOnlineSub.desc" = "With a SubDL API key, search local videos longer than 20 minutes when no subtitle track is loaded. OpenSubtitles remains available for manual search from the Subtitles menu.";
 "settings.autoSearchOnlineSub.label" = "Search online subtitles automatically";
+"settings.autoSelectMatchingSubtitle.desc" = "Automatically load a single exact release match. OpenSubtitles also requires a local dialogue check. Other results open a chooser so you can select them manually.";
+"settings.verifyOpenSubAudio.label" = "Check OpenSubtitles dialogue against audio";
+"settings.verifyOpenSubAudio.desc" = "Optional. Downloads up to three candidates per search to check a short audio sample locally. These downloads count against your OpenSubtitles quota. Leave off for ordinary manual selection.";
+"settings.subdl.help" = "SubDL searches need a free API key. Get one at subdl.com/panel/api. Saving it makes SubDL the online source and enables automatic search. Exact-match selection stays a separate opt-in switch. OpenSubtitles remains available in the Subtitles menu.";
+"settings.subdl.key_placeholder" = "SubDL API key";
+"settings.subdl.key_missing" = "No API key saved";
+"settings.subdl.key_saved" = "API key saved in Keychain";
+"settings.subdl.save" = "Save Key";
+"settings.subdl.remove" = "Remove Key";
+"settings.opensub.manual_help" = "OpenSubtitles remains available for manual search. Results open a chooser so you can select a subtitle before downloading. Optional audio checking uses your download quota.";
+"settings.$LiveCaptions" = "Apple Live Captions";
+"settings.appleLiveCaptionsFallback.label" = "Caption video when no subtitles are available";
+"settings.appleLiveCaptionsFallback.desc" = "Caption local video with no subtitle track using Apple's on-device speech engine. macOS 26 and later uses SpeechTranscriber; older systems ask for Speech Recognition permission. Captions follow playback and stop when a subtitle track appears.";
+"settings.appleLiveCaptionsLanguage.label" = "Speech language";
+"settings.appleLiveCaptionsLanguage.desc" = "Leave empty to use the Mac's current language, or enter a language tag such as en-US. On-device recognition must be available for that language.";
+"live_captions.accessibility" = "Apple live captions";
+"settings.autoSelectMatchingSubtitle.label" = "Automatically select an exactly matching subtitle";
+"subtitle.audioMatch.pending" = "Checking audio match…";
+"subtitle.audioMatch.timing" = "Strong timing match · text unchecked";
+"subtitle.audioMatch.timingOtherLanguage" = "Strong timing match · text unverified in another language";
+"subtitle.audioMatch.dialogue" = "Dialogue matches audio sample";
+"subtitle.audioMatch.possible" = "Possible dialogue match";
+"subtitle.audioMatch.noMatch" = "No dialogue match in sample";
+"subtitle.audioMatch.otherLanguage" = "Text unverified · different language";
+"subtitle.audioMatch.unverified" = "Audio check unverified";
 "settings.displayInLetterBox.label" = "Display subtitles in letterboxes while in full screen";
 "settings.subAlignX.items.0" = "Left";
 "settings.subAlignX.items.1" = "Center";
@@ -955,7 +980,6 @@
 "settings.$Installing" = "Installing";
 "settings.$KeyBindingSet" = "Key binding set";
 "settings.$Layout" = "Layout";
-"settings.$LegacyOpenSubAlert" = "⚠️ The old OpenSubtitles support is deprecated. Please use the OpenSubtitles plugin instead. If you need to login, please access it from the legacy Settings window.";
 "settings.$LiveText" = "Live Text";
 "settings.$Logging" = "Logging";
 "settings.$Login" = "Login";

@@ -103,7 +103,7 @@ fileprivate class AudioDelayView: SidebarSliderView {
   }
 
   override func update() {
-    let audioDelay = player.mpv.getDouble(MPVOption.Audio.audioDelay)
+    let audioDelay = player.info.audioDelay
     slider.doubleValue = audioDelay
     input.doubleValue = audioDelay
     resetButton.isHidden = slider.doubleValue == 0

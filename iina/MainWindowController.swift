@@ -119,6 +119,7 @@ class MainWindowController: PlayerWindowController {
   var isDragging: Bool = false
 
   lazy var liveText = LiveTextController(mainWindow: self)
+  lazy var liveCaptions = AppleLiveCaptions(player: player)
   lazy var interactiveMode = InteractiveModeController(mainWindow: self)
   var pipStatus = PIPStatus.notInPIP
   var isVideoLoaded: Bool = false
@@ -171,6 +172,9 @@ class MainWindowController: PlayerWindowController {
   /** Whether current osd needs user interaction to be dismissed */
   var isShowingPersistentOSD = false
   var osdContext: Any?
+
+  /** Height constraint currently installed on the OSD accessory view, if any. */
+  private var osdAccessoryHeightConstraint: NSLayoutConstraint?
 
   /** Activated during interactive mode to prevent video view from being compressed */
   var aspectRatioConstraintForInteractiveMode: NSLayoutConstraint?
@@ -289,7 +293,9 @@ class MainWindowController: PlayerWindowController {
     .useLiquidGlassOSC,
     .useLiquidGlassOSD,
     .useLiquidGlassSidebar,
-    .enableLiveText
+    .enableLiveText,
+    .appleLiveCaptionsFallback,
+    .appleLiveCaptionsLanguage
   ]
 
   override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey: Any]?, context: UnsafeMutableRawPointer?) {
@@ -373,6 +379,9 @@ class MainWindowController: PlayerWindowController {
           liveText.clearAnalysis()
         }
       }
+    case PK.appleLiveCaptionsFallback.rawValue, PK.appleLiveCaptionsLanguage.rawValue:
+      liveCaptions.stop()
+      liveCaptions.updateEligibility()
     default:
       return
     }
@@ -478,18 +487,6 @@ class MainWindowController: PlayerWindowController {
 
     videoViewContainer = NSView()
     videoViewContainer.translatesAutoresizingMaskIntoConstraints = false
-
-    DispatchQueue.main.async { [weak self] in
-      if #available(macOS 14, *) {
-        self?.sidebars.quickSettingView.loadViewIfNeeded()
-        self?.sidebars.playlistView.loadViewIfNeeded()
-        self?.sidebars.pluginView.loadViewIfNeeded()
-      } else {
-        _ = self?.sidebars.quickSettingView.view
-        _ = self?.sidebars.playlistView.view
-        _ = self?.sidebars.pluginView.view
-      }
-    }
 
     // create translucent views
     oscBottomView = OSCBottomView(mainWindow: self)
@@ -631,6 +628,7 @@ class MainWindowController: PlayerWindowController {
     setupVideoContainerConstraints()
 
     addVideoViewToWindow()
+    liveCaptions.install(in: cv, above: videoViewContainer)
     player.initVideo()
     videoView.postsFrameChangedNotifications = true
 
@@ -2244,9 +2242,15 @@ class MainWindowController: PlayerWindowController {
         osdContext = context
       }
 
+      // The accessory view (e.g. the online subtitle chooser) can be presented more than once over
+      // its lifetime, so any height constraint left over from a previous presentation has to be
+      // deactivated before a new one is added. Leaking them accumulates conflicting constraints on
+      // the view and makes the panel grow a little more each time.
+      osdAccessoryHeightConstraint?.isActive = false
       let heightConstraint = NSLayoutConstraint(item: accessoryView, attribute: .height, relatedBy: .greaterThanOrEqual, toItem: nil, attribute: .notAnAttribute, multiplier: 1, constant: 300)
       heightConstraint.priority = .defaultLow
       heightConstraint.isActive = true
+      osdAccessoryHeightConstraint = heightConstraint
 
       osdView.addAccessoryView(accessoryView)
 
@@ -2278,6 +2282,13 @@ class MainWindowController: PlayerWindowController {
 
   @objc
   func hideOSD() {
+    // Dismissing the subtitle chooser reaches here twice in quick succession — once from the
+    // chooser's own action and once from the `.ensure` of the search that presented it. Starting a
+    // second `animator()` animation of the same property cancels the first group's animation and
+    // invokes its completion immediately, which would hide the OSD almost immediately instead of
+    // fading it. Ignore the request while a hide is already under way.
+    guard osdAnimationState != .willHide, osdAnimationState != .hidden else { return }
+
     NSAnimationContext.runAnimationGroup({ (context) in
       self.osdAnimationState = .willHide
       context.duration = OSDAnimationDuration
@@ -2286,12 +2297,19 @@ class MainWindowController: PlayerWindowController {
       if self.osdAnimationState == .willHide {
         self.osdAnimationState = .hidden
         self.osdView.isHidden = true
-        self.osdView.removeAccessoryView()
+        self.teardownOSDAccessoryView()
       }
     }
     isShowingPersistentOSD = false
     osdContext = nil
     player.refreshSyncUITimer()
+  }
+
+  /// Detach the OSD accessory view and release the height constraint installed alongside it.
+  private func teardownOSDAccessoryView() {
+    osdView.removeAccessoryView()
+    osdAccessoryHeightConstraint?.isActive = false
+    osdAccessoryHeightConstraint = nil
   }
 
   // MARK: - UI: Interactive mode

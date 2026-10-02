@@ -21,6 +21,17 @@ class JSPluginSub {
       super.init(index: index)
     }
 
+    /// Plugins describe their results with a display name, which is the best match signal available.
+    override var releaseName: String? {
+      let name = getDescription().name
+      return name.isEmpty ? nil : name
+    }
+
+    /// A display name is not a release name: it is chosen by a plugin author rather than reflecting
+    /// the file a subtitle was authored for. Plugin results are preselected by their score but are
+    /// never auto-selected on it.
+    override var canAutomaticallySelect: Bool { false }
+
     override func getDescription() -> (name: String, left: String, right: String) {
       let data = item.desc;
       return (
@@ -70,8 +81,10 @@ class JSPluginSub {
         return .value([])
       }
       let api = plugin.apis["subtitle"] as! JavascriptAPISubtitle
+      // Keep the string the search is based on so the results can be matched back against it.
+      let mediaName = url.isFileURL ? url.deletingPathExtension().lastPathComponent : player.getMediaTitle()
       return search(api: api, id: provider.id).then { subs in
-        self.showSubSelectWindow(with: subs)
+        self.showSubSelectWindow(with: subs, mediaName: mediaName, expectedURL: url, player: player)
       }
     }
 
@@ -94,26 +107,12 @@ class JSPluginSub {
       }
     }
 
-    func showSubSelectWindow(with subs: [Subtitle]) -> Promise<[Subtitle]> {
-      return Promise { resolver in
-        // return when found 0 or 1 sub
-        if subs.count <= 1 {
-          resolver.fulfill(subs)
-          return
-        }
-        subChooseViewController.subtitles = subs
-        // prevent self being deallocated for unknown reason
-        subChooseViewController.context = self
-
-        subChooseViewController.userDoneAction = { subs in
-          resolver.fulfill(subs as! [Subtitle])
-        }
-        subChooseViewController.userCanceledAction = {
-          resolver.reject(OnlineSubtitle.CommonError.canceled)
-        }
-        PlayerCore.active.sendOSD(.foundSub(subs.count), autoHide: false, accessoryView: subChooseViewController.view)
-        subChooseViewController.tableView.reloadData()
-      }
+    func showSubSelectWindow(with subs: [Subtitle], mediaName: String, expectedURL: URL,
+                             player: PlayerCore) -> Promise<[Subtitle]> {
+      // `self` is assigned as the chooser's context to keep this fetcher alive for as long as the
+      // chooser is on screen.
+      OnlineSubtitle.resolveSelection(subs, mediaName: mediaName, expectedURL: expectedURL, player: player,
+                                      chooser: subChooseViewController, context: self)
     }
   }
 }

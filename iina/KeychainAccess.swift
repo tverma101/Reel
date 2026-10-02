@@ -29,6 +29,7 @@ class KeychainAccess {
     }
 
     static let openSubAccount = ServiceName(rawValue: "IINA OpenSubtitles Account")
+    static let subDLAPIKey = ServiceName(rawValue: "IINA SubDL API Key")
     static let httpAuth = ServiceName(rawValue: "IINA Saved HTTP Password")
   }
 
@@ -56,7 +57,7 @@ class KeychainAccess {
       var query: [String: Any] = [kSecAttrService as String: serviceName.rawValue,
                                   kSecAttrLabel as String: serviceName.rawValue,
                                   kSecAttrAccount as String: username,
-                                  kSecValueData as String: password]
+                                  kSecValueData as String: Data(password.utf8)]
       if let server { query[kSecAttrServer as String] = server }
       if let port { query[kSecAttrPort as String] = port }
       query[kSecClass as String] = server == nil && port == nil ? kSecClassGenericPassword : kSecClassInternetPassword
@@ -103,5 +104,16 @@ class KeychainAccess {
     return (account, password)
   }
 
-}
+  static func delete(username: String, forService serviceName: ServiceName) throws {
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: serviceName.rawValue,
+      kSecAttrAccount as String: username,
+    ]
+    let status = SecItemDelete(query as CFDictionary)
+    guard status == errSecSuccess || status == errSecItemNotFound else {
+      throw KeychainError.unhandledError(message: (SecCopyErrorMessageString(status, nil) as String?) ?? "")
+    }
+  }
 
+}

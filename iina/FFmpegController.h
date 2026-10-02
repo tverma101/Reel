@@ -66,4 +66,9 @@
 
 + (nullable NSDictionary *)probeVideoInfoForFile:(nonnull NSString *)file;
 
+/// Decode a short local audio excerpt as 16 kHz mono float PCM for on-device matching.
++ (nullable NSData *)readMonoAudioFromFile:(nonnull NSString *)file
+                                 startTime:(double)startTime
+                                  duration:(double)duration;
+
 @end

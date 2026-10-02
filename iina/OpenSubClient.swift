@@ -783,6 +783,8 @@ class OpenSubClient {
       var downloadCount: Int
       var featureDetails: SubtitleFeatureDetails
       var files: [SubtitleFile]
+      var hearingImpaired: Bool?
+      var moviehashMatch: Bool?
 #if DEBUG
       var foreignPartsOnly: Bool?
 #endif
@@ -790,7 +792,6 @@ class OpenSubClient {
 #if DEBUG
       var fromTrusted: Bool?
       var hd: Bool?
-      var hearingImpaired: Bool?
 #endif
       var language: String
 #if DEBUG

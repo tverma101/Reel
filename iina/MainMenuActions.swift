@@ -345,9 +345,15 @@ extension MainMenuActionHandler {
     let currentDir = player.info.currentURL?.deletingLastPathComponent()
     // In addition to subtitle files allow the user to choose video files as mpv will look for and
     // load embedded subtitle streams in the video file.
+    // Several subtitle extensions (including .srt) have only dynamic UTTypes on macOS. Passing
+    // those dynamic types to NSOpenPanel disables otherwise valid files in the chooser. Allow
+    // selection here and validate the extension before asking mpv to load it.
     Utility.quickOpenPanel(title: "Load external subtitle", chooseDir: false, dir: currentDir,
-                           sheetWindow: player.currentWindow,
-                           allowedFileTypes: Utility.containsSubExt) { url in
+                           sheetWindow: player.currentWindow) { url in
+      guard Utility.containsSubExt.contains(url.pathExtension.lowercased()) else {
+        Utility.showAlert("unsupported_sub")
+        return
+      }
       self.player.loadExternalSubFile(url, delay: true)
     }
   }
@@ -404,13 +410,20 @@ extension MainMenuActionHandler {
     // return if last search is not finished
     guard let url = player.info.currentURL, !player.isSearchingOnlineSubtitle else { return }
 
+    let searchID = UUID()
+    player.onlineSubtitleSearchID = searchID
     player.isSearchingOnlineSubtitle = true
     OnlineSubtitle.search(forFile: url, player: player, providerID: sender.representedObject as? String) { urls in
+      guard self.player.onlineSubtitleSearchID == searchID,
+            self.player.info.currentURL == url else { return }
       if urls.isEmpty {
         self.player.sendOSD(.foundSub(0))
       } else {
         for url in urls {
           Logger.log("Saved subtitle to \(url.path)")
+          // `sub-add` makes the new track current, which is the same path a manually loaded
+          // external subtitle takes, so a subtitle IINA downloaded on the user's behalf is shown
+          // rather than merely loaded.
           self.player.loadExternalSubFile(url)
         }
         self.player.sendOSD(.downloadedSub(
@@ -418,6 +431,7 @@ extension MainMenuActionHandler {
         ))
       }
       self.player.isSearchingOnlineSubtitle = false
+      self.player.onlineSubtitleSearchID = nil
     }
   }
 

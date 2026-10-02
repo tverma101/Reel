@@ -20,6 +20,9 @@ class OSDView: TranslucentView {
 
   private var accessoryView: NSView?
 
+  /// Minimum-width constraint installed on the current accessory view, if any.
+  private var accessoryWidthConstraint: NSLayoutConstraint?
+
   init(mainWindow: MainWindowController) {
     self.mainWindow = mainWindow
 
@@ -134,17 +137,30 @@ class OSDView: TranslucentView {
 
 
   func addAccessoryView(_ view: NSView) {
+    // Detaching any previous accessory view also releases the width constraint installed for it.
     removeAccessoryView()
+    // The accessory view outlives a single presentation, so the constraint is created afresh here
+    // and released in `removeAccessoryView()`. Adding one without releasing it would pile a new one
+    // onto the view on every presentation.
+    let widthConstraint = view.widthAnchor.constraint(greaterThanOrEqualToConstant: 240)
+    widthConstraint.isActive = true
+    accessoryWidthConstraint = widthConstraint
     stackView.addArrangedSubview(view)
-    view.widthAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
     accessoryView = view
   }
 
   func removeAccessoryView() {
-    guard let accessoryView else { return }
-    if stackView.subviews.contains(accessoryView) {
-      stackView.removeArrangedSubview(accessoryView)
-      accessoryView.removeFromSuperview()
+    if let accessoryView {
+      if stackView.subviews.contains(accessoryView) {
+        stackView.removeArrangedSubview(accessoryView)
+        accessoryView.removeFromSuperview()
+      }
+      // This is the OSD's only strong reference to the accessory view, and the subtitle chooser
+      // holds a reference back to the fetcher that owns it. Keeping a detached view alive here
+      // would retain that whole chain for as long as the OSD lives.
+      self.accessoryView = nil
     }
+    accessoryWidthConstraint?.isActive = false
+    accessoryWidthConstraint = nil
   }
 }

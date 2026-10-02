@@ -118,7 +118,7 @@ class MPVController: NSObject {
   private var hookCounter: UInt64 = 1
 
   let observeProperties: [String: mpv_format] = [
-    MPVProperty.trackList: MPV_FORMAT_NONE,
+    MPVProperty.trackList: MPV_FORMAT_NODE,
     MPVProperty.vf: MPV_FORMAT_NONE,
     MPVProperty.af: MPV_FORMAT_NONE,
     MPVProperty.audioDeviceList: MPV_FORMAT_NONE,
@@ -1141,9 +1141,6 @@ class MPVController: NSObject {
       DispatchQueue.main.async { [self] in
         player.info.state = .starting
         player.fileStarted(path: path)
-        let url = player.info.currentURL
-        let message = player.info.isNetworkResource ? url?.absoluteString : url?.lastPathComponent
-        player.sendOSD(.fileStart(message ?? "-"))
       }
 
     case MPV_EVENT_FILE_LOADED:
@@ -1273,16 +1270,20 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.refreshEdrMode() }
 
     case MPVOption.TrackSelection.vid:
-      DispatchQueue.main.async { self.player.vidChanged() }
+      guard let id = UnsafePointer<Int64>(OpaquePointer(property.data))?.pointee else { break }
+      DispatchQueue.main.async { self.player.vidChanged(Int(id)) }
 
     case MPVOption.TrackSelection.aid:
-      DispatchQueue.main.async { self.player.aidChanged() }
+      guard let id = UnsafePointer<Int64>(OpaquePointer(property.data))?.pointee else { break }
+      DispatchQueue.main.async { self.player.aidChanged(Int(id)) }
 
     case MPVOption.TrackSelection.sid:
-      DispatchQueue.main.async { self.player.sidChanged() }
+      guard let id = UnsafePointer<Int64>(OpaquePointer(property.data))?.pointee else { break }
+      DispatchQueue.main.async { self.player.sidChanged(Int(id)) }
 
     case MPVOption.Subtitles.secondarySid:
-      DispatchQueue.main.async { self.player.secondarySidChanged() }
+      guard let id = UnsafePointer<Int64>(OpaquePointer(property.data))?.pointee else { break }
+      DispatchQueue.main.async { self.player.secondarySidChanged(Int(id)) }
 
     case MPVOption.PlaybackControl.pause:
       guard let paused = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee else {
@@ -1303,6 +1304,7 @@ class MPVController: NSObject {
 
     case MPVOption.PlaybackControl.loopPlaylist, MPVOption.PlaybackControl.loopFile:
       DispatchQueue.main.async { [self] in
+        guard player.info.state.loaded else { return }
         let loopMode = player.getLoopMode()
         switch loopMode {
         case .file:
@@ -1493,7 +1495,12 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.postNotification(.iinaPlaylistChanged) }
 
     case MPVProperty.trackList:
-      DispatchQueue.main.async { self.player.trackListChanged() }
+      // Parse while mpv's event data is alive. Querying track-list again on the main thread can
+      // deadlock with mpv's file-loading hooks and leave the player window unresponsive.
+      guard property.format == MPV_FORMAT_NODE, let data = property.data,
+            let tracks = (try? MPVNode.parse(data.assumingMemoryBound(to: mpv_node.self).pointee))
+              as? [[String: Any]] else { break }
+      DispatchQueue.main.async { self.player.trackListChanged(tracks) }
 
     case MPVProperty.vf:
       DispatchQueue.main.async { [self] in

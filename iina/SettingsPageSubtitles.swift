@@ -43,6 +43,7 @@ class SettingsPageSubtitles: SettingsPage {
       sectionText()
       sectionPosition()
       sectionOnlineSubtitles()
+      sectionLiveCaptions()
       sectionOther()
     }
   }
@@ -148,10 +149,19 @@ class SettingsPageSubtitles: SettingsPage {
       SettingsList(title: .text_OnlineSubtitles) {
         SettingsItem.General(title: .text_SubtitleSource)
           .image(name: "server.rack")
+          .withHelpLink("https://subdl.com/panel/api")
           .withDetailView(subtitleSourceView)
         SettingsItem.Switch()
           .image(name: ["text.magnifyingglass", "magnifyingglass"])
           .bindTo(.autoSearchOnlineSub)
+          .hasDescription()
+        SettingsItem.Switch()
+          .image(name: ["checkmark.seal", "checkmark.circle"])
+          .bindTo(.autoSelectMatchingSubtitle)
+          .hasDescription()
+        SettingsItem.Switch()
+          .image(name: ["waveform", "waveform.path"])
+          .bindTo(.verifyOpenSubAudio)
           .hasDescription()
       }
     }
@@ -169,6 +179,21 @@ class SettingsPageSubtitles: SettingsPage {
           )
         SettingsItem.General(title: .text_DefaultEncoding)
           .withDetailView(subtitlesEncodingView)
+      }
+    }
+  }
+
+  private func sectionLiveCaptions() -> SettingsSection {
+    return section {
+      SettingsList(title: .text_LiveCaptions) {
+        SettingsItem.Switch()
+          .image(name: ["captions.bubble", "captions.bubble.fill"])
+          .bindTo(.appleLiveCaptionsFallback)
+          .hasDescription()
+        SettingsItem.Input()
+          .image(name: "character.book.closed")
+          .bindTo(.appleLiveCaptionsLanguage)
+          .hasDescription()
       }
     }
   }
@@ -463,6 +488,8 @@ fileprivate class SubtitleSourceView: SettingsAccessory.Base {
   var subSourceStackView: NSStackView!
   let subSourcePopUpButton: NSPopUpButton
   let loginIndicator: NSProgressIndicator
+  private let subDLKeyField = NSSecureTextField()
+  private let subDLStatus = NSTextField(labelWithString: "")
 
   override init() {
     self.subSourcePopUpButton = NSPopUpButton()
@@ -477,12 +504,25 @@ fileprivate class SubtitleSourceView: SettingsAccessory.Base {
 
     let descLabel = ui.smallLabel(bindTo: .text_SubtitleSource_desc).makeMultiLine()
 
-    // don't add legacy opensub support (is the API still alive?)
-    let legacyOpenSubLabel = ui.smallLabel(bindTo: .text_LegacyOpenSubAlert).makeMultiLine()
-//    let openSubAccountName = ui.smallLabel(bindTo: .text_NotLoggedIn)
-//    let openSubLoginBtn = ui.button(.text_Login)
-//    let legacyOpenSubSettingsView = makeStackView([openSubLoginBtn, openSubAccountName, loginIndicator])
-    let legacyOpenSubView = ui.vStack(legacyOpenSubLabel)
+    let openSubHelp = NSTextField(labelWithString: NSLocalizedString("settings.opensub.manual_help", comment: ""))
+    openSubHelp.makeMultiLine()
+    openSubHelp.textColor = .secondaryLabelColor
+    let openSubView = ui.vStack(openSubHelp)
+
+    let subDLHelp = NSTextField(labelWithString: NSLocalizedString("settings.subdl.help", comment: ""))
+    subDLHelp.makeMultiLine()
+    subDLHelp.textColor = .secondaryLabelColor
+    subDLKeyField.placeholderString = NSLocalizedString("settings.subdl.key_placeholder", comment: "")
+    subDLKeyField.translatesAutoresizingMaskIntoConstraints = false
+    subDLKeyField.widthAnchor.constraint(greaterThanOrEqualToConstant: 190).isActive = true
+    let saveSubDLButton = NSButton(title: NSLocalizedString("settings.subdl.save", comment: ""),
+                                  target: self, action: #selector(saveSubDLKey))
+    let removeSubDLButton = NSButton(title: NSLocalizedString("settings.subdl.remove", comment: ""),
+                                    target: self, action: #selector(removeSubDLKey))
+    subDLStatus.textColor = .secondaryLabelColor
+    let subDLView = ui.vStack(subDLHelp,
+                             ui.hStack(subDLKeyField, saveSubDLButton, removeSubDLButton),
+                             subDLStatus)
 
     let assrtHelpBtn = NSButton(title: "", target: self, action: #selector(assrtHelpBtnAction))
     assrtHelpBtn.bezelStyle = .helpButton
@@ -493,7 +533,7 @@ fileprivate class SubtitleSourceView: SettingsAccessory.Base {
     let pluginDescLabel = ui.smallLabel(bindTo: .text_SubtitleSourcePluginDesc).makeMultiLine()
 
     subSourceStackView = ui.vStack(
-      subSourcePopUpButton, descLabel, legacyOpenSubView, assrtView, pluginDescLabel
+      subSourcePopUpButton, descLabel, subDLView, openSubView, assrtView, pluginDescLabel
     )
     subSourcePopUpButton.padding(.horizontal)
 
@@ -505,6 +545,43 @@ fileprivate class SubtitleSourceView: SettingsAccessory.Base {
 
     refreshSubSources()
     refreshSubSourceAccessoryView()
+    updateSubDLStatus()
+  }
+
+  private func updateSubDLStatus() {
+    subDLStatus.stringValue = NSLocalizedString(SubDL.apiKey == nil ?
+      "settings.subdl.key_missing" : "settings.subdl.key_saved", comment: "")
+  }
+
+  @objc private func saveSubDLKey() {
+    let key = subDLKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !key.isEmpty else { return }
+    do {
+      try KeychainAccess.write(username: "subdl", password: key, forService: .subDLAPIKey)
+      subDLKeyField.stringValue = ""
+      Preference.set(OnlineSubtitle.Providers.subDL.id, for: .onlineSubProvider)
+      Preference.set(true, for: .autoSearchOnlineSub)
+      refreshSubSources()
+      refreshSubSourceAccessoryView()
+      updateSubDLStatus()
+    } catch {
+      NSAlert(error: error).runModal()
+    }
+  }
+
+  @objc private func removeSubDLKey() {
+    do {
+      try KeychainAccess.delete(username: "subdl", forService: .subDLAPIKey)
+      subDLKeyField.stringValue = ""
+      if Preference.string(for: .onlineSubProvider) == OnlineSubtitle.Providers.subDL.id {
+        Preference.set(OnlineSubtitle.Providers.openSub.id, for: .onlineSubProvider)
+      }
+      refreshSubSources()
+      refreshSubSourceAccessoryView()
+      updateSubDLStatus()
+    } catch {
+      NSAlert(error: error).runModal()
+    }
   }
 
   @objc private func assrtHelpBtnAction(_ sender: AnyObject) {
@@ -519,12 +596,14 @@ fileprivate class SubtitleSourceView: SettingsAccessory.Base {
   }
 
   @objc private func refreshSubSourceAccessoryView() {
-    let map = [OnlineSubtitle.Providers.openSub.id: 2, OnlineSubtitle.Providers.assrt.id: 3]
+    let map = [OnlineSubtitle.Providers.subDL.id: 2,
+               OnlineSubtitle.Providers.openSub.id: 3,
+               OnlineSubtitle.Providers.assrt.id: 4]
     let id = subSourcePopUpButton.selectedItem?.representedObject as? String ?? ""
     let isSourceFromPlugin = !id.hasPrefix(":")
     for (index, view) in subSourceStackView.views.enumerated() {
       if index == 0 || index == 1 { continue }
-      if index == 4 {
+      if index == 5 {
         subSourceStackView.setVisibilityPriority(isSourceFromPlugin ? .mustHold : .notVisible, for: view)
       } else {
         subSourceStackView.setVisibilityPriority(index == map[id] ? .mustHold : .notVisible, for: view)

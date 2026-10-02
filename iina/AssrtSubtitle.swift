@@ -12,6 +12,9 @@ import PromiseKit
 
 class Assrt {
   class Subtitle: OnlineSubtitle {
+    /// Stand-in used when the provider returns a subtitle with no name.
+    static let untitledPlaceholder = "[No title]"
+
     struct File {
       var url: URL
       var filename: String
@@ -33,7 +36,7 @@ class Assrt {
       self.id = id
       self.nativeName = nativeName
       if self.nativeName.isEmpty {
-        self.nativeName = "[No title]"
+        self.nativeName = Self.untitledPlaceholder
       }
       self.uploadTime = uploadTime
       if let subType = subType {
@@ -43,6 +46,14 @@ class Assrt {
       }
       self.subLang = subLang
       super.init(index: index)
+    }
+
+    /// assrt.net names each subtitle after the release it was made for.
+    ///
+    /// The placeholder `init` substitutes for a missing name is not a real release name, so it is
+    /// reported as unknown rather than being matched against.
+    override var releaseName: String? {
+      nativeName == Self.untitledPlaceholder ? nil : nativeName
     }
 
     override func download() -> Promise<[URL]> {
@@ -139,13 +150,14 @@ class Assrt {
     }
 
     func fetch(from url: URL, withProviderID id: String, playerCore player: PlayerCore) -> Promise<[Subtitle]> {
-      firstly { () -> Promise<[Subtitle]> in
+      let mediaName = url.deletingPathExtension().lastPathComponent
+      return firstly { () -> Promise<[Subtitle]> in
         if !self.checkToken() {
           throw OnlineSubtitle.CommonError.canceled
         }
-        return self.search(url.deletingPathExtension().lastPathComponent)
+        return self.search(mediaName)
       }.then { subs in
-        self.showSubSelectWindow(with: subs)
+        self.showSubSelectWindow(with: subs, mediaName: mediaName, expectedURL: url, player: player)
       }.thenMap { sub -> Promise<Subtitle> in
         self.loadDetails(forSub: sub)
       }
@@ -230,25 +242,12 @@ class Assrt {
       }
     }
 
-    func showSubSelectWindow(with subs: [Subtitle]) -> Promise<[Subtitle]> {
-      return Promise { resolver in
-        // return when found 0 or 1 sub
-        if subs.count <= 1 {
-          resolver.fulfill(subs)
-          return
-        }
-        subChooseViewController.subtitles = subs
-        subChooseViewController.context = self
-
-        subChooseViewController.userDoneAction = { subs in
-          resolver.fulfill(subs as! [Subtitle])
-        }
-        subChooseViewController.userCanceledAction = {
-          resolver.reject(OnlineSubtitle.CommonError.canceled)
-        }
-        PlayerCore.active.sendOSD(.foundSub(subs.count), autoHide: false, accessoryView: subChooseViewController.view)
-        subChooseViewController.tableView.reloadData()
-      }
+    func showSubSelectWindow(with subs: [Subtitle], mediaName: String, expectedURL: URL,
+                             player: PlayerCore) -> Promise<[Subtitle]> {
+      // `self` is assigned as the chooser's context to keep this fetcher alive for as long as the
+      // chooser is on screen.
+      OnlineSubtitle.resolveSelection(subs, mediaName: mediaName, expectedURL: expectedURL, player: player,
+                                      chooser: subChooseViewController, context: self)
     }
 
     func loadDetails(forSub sub: Subtitle) -> Promise<Subtitle> {

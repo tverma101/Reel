@@ -24,10 +24,58 @@ class OpenSub {
     }()
 
     private let subtitle: OpenSubClient.Subtitle
+    private let downloadLock = NSLock()
+    private var cachedDownloadURL: URL?
+    var audioMatchStatus: SubtitleAudioMatchStatus = .pending
+
+    override var canAutomaticallySelect: Bool {
+      audioMatchStatus == .dialogueMatch
+    }
+
+    override var verifiedSelectionBoost: Int {
+      audioMatchStatus == .dialogueMatch ? 1000 : 0
+    }
+
+    var movieHashMatch: Bool? { subtitle.attributes.moviehashMatch }
+    var subtitleLanguage: String { subtitle.attributes.language }
 
     init(index: Int, subtitle: OpenSubClient.Subtitle) {
       self.subtitle = subtitle
       super.init(index: index)
+    }
+
+    /// The subtitle file name doubles as the release name, e.g. `Movie.2019.1080p.BluRay.x264-GROUP.srt`.
+    override var releaseName: String? {
+      subtitle.attributes.files.first?.fileName
+    }
+
+    /// Clean provider-only labels for display. This does not affect `releaseName`: the uploader's
+    /// original filename remains the input to conservative matching, and provider metadata is not
+    /// proof that a subtitle's dialogue matches the media.
+    private func displayName(fileName: String, featureTitle: String, hearingImpaired: Bool) -> String {
+      var name = (fileName as NSString).deletingPathExtension
+      let formatLabels = ["subrip", "substation alpha", "webvtt", "vtt", "srt", "ass", "ssa", "sub", "smi", "sami"]
+      for format in formatLabels {
+        let suffix = "(\(format))"
+        if let range = name.range(of: suffix, options: .caseInsensitive), range.upperBound == name.endIndex {
+          name = String(name[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+          break
+        }
+      }
+
+      let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      let normalizedFeatureTitle = featureTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+      let genericNames: Set<String> = ["", "no title", "[no title]", "untitled", "unknown", "no name"]
+      let hasFeatureTitle = !genericNames.contains(normalizedFeatureTitle.lowercased())
+      let title = hasFeatureTitle ? normalizedFeatureTitle : NSLocalizedString("general.no_title", comment: "No Title")
+
+      if normalizedName == "sdh" || normalizedName == "cc" {
+        return "\(title) — \(normalizedName.uppercased())"
+      }
+      if genericNames.contains(normalizedName) {
+        return hearingImpaired ? "\(title) — SDH" : title
+      }
+      return hearingImpaired ? "\(name) — SDH" : name
     }
 
     /// Asynchronously download this subtitle.
@@ -41,6 +89,13 @@ class OpenSub {
     /// - Returns: A [URL](https://developer.apple.com/documentation/foundation/url) to the file containing
     ///            the downloaded subtitle.
     override func download() -> Promise<[URL]> {
+      downloadLock.lock()
+      let cachedURL = cachedDownloadURL
+      downloadLock.unlock()
+      if let cachedURL, FileManager.default.fileExists(atPath: cachedURL.path) {
+        return .value([cachedURL])
+      }
+
       let fileId = subtitle.attributes.files[0].fileId
       return OpenSubClient.shared.download(fileId: fileId).then { downloadResponse in
         OpenSubClient.shared.downloadFileContents(downloadResponse.link).then { data in
@@ -61,9 +116,22 @@ class OpenSub {
               resolver.reject(OnlineSubtitle.CommonError.fsError)
               return
             }
+            self.downloadLock.lock()
+            self.cachedDownloadURL = url
+            self.downloadLock.unlock()
             resolver.fulfill([url])
           }
         }
+      }
+    }
+
+    func discardCachedDownload() {
+      downloadLock.lock()
+      let url = cachedDownloadURL
+      cachedDownloadURL = nil
+      downloadLock.unlock()
+      if let url {
+        try? FileManager.default.removeItem(at: url)
       }
     }
 
@@ -87,7 +155,12 @@ class OpenSub {
       let downloadCount = "\u{2b07}\(attributes.downloadCount)"
       tokens.append(downloadCount)
 
-      let fileName = attributes.files[0].fileName
+      let fileName = displayName(fileName: attributes.files[0].fileName,
+                                 featureTitle: attributes.featureDetails.title,
+                                 hearingImpaired: attributes.hearingImpaired == true)
+      if audioMatchStatus != .pending {
+        tokens.append(audioMatchStatus.displayString)
+      }
       let description = tokens.joined(separator: "  ")
       let uploadDate = OpenSub.Subtitle.dateFormatter.string(from: attributes.uploadDate)
       return (fileName, description, uploadDate)
@@ -140,6 +213,18 @@ class OpenSub {
     static let shared = Fetcher()
 
     func fetch(from url: URL, withProviderID id: String, playerCore player: PlayerCore) -> Promise<[Subtitle]> {
+      // Keep the string the search is based on so the results can be matched back against it.
+      let mediaName = url.isFileURL ? url.deletingPathExtension().lastPathComponent : player.getMediaTitle()
+      let cancellation = SubtitleAudioMatcher.Cancellation()
+      let searchID = player.onlineSubtitleSearchID
+      // Property access is serialized on the main queue: this chain can complete on a URLSession
+      // queue, while `stop()` and `fileStarted()` read and clear the same property on main.
+      DispatchQueue.main.async {
+        player.cancelOnlineSubtitleSearch = {
+          cancellation.cancel()
+          player.cancelOnlineSubtitleSearch = nil
+        }
+      }
       return login().then { _ in
         self.obtainLanguageCodes()
         }.then {
@@ -147,9 +232,44 @@ class OpenSub {
         }.then {
           self.hash(url)
         }.then { hash in
-          self.searchForSubtitles(url, hash, player.getMediaTitle())
+          self.searchForSubtitles(url, hash, mediaName)
         }.then { subs in
-          self.showSubSelectWindow(with: subs)
+          guard !cancellation.isCancelled else { throw OnlineSubtitle.CommonError.dismissed }
+          // A manual fallback must not spend several of OpenSubtitles' limited downloads merely
+          // to fill the chooser. Audio verification is a separate opt-in and checks at most three.
+          subs.forEach { $0.audioMatchStatus = .unverified }
+          let checkCandidates = Array(subs.prefix(3))
+          let verification: Promise<Void> = Preference.bool(for: .verifyOpenSubAudio) ?
+            SubtitleAudioMatcher.verify(mediaURL: url, candidates: checkCandidates, cancellation: cancellation) :
+            .value(())
+          return verification
+            .recover { error -> Promise<Void> in
+              checkCandidates.forEach { $0.audioMatchStatus = .unverified }
+              Logger.log("Subtitle audio verification could not complete: \(error.localizedDescription)",
+                         level: .warning, subsystem: Logger.Sub.opensub)
+              return .value(())
+            }
+            .then { _ -> Promise<[Subtitle]> in
+              guard !cancellation.isCancelled else { throw OnlineSubtitle.CommonError.dismissed }
+              return self.showSubSelectWindow(with: subs, mediaName: mediaName,
+                                              expectedURL: url, player: player)
+            }
+            .map { selected in
+              subs.filter { candidate in !selected.contains(where: { $0 === candidate }) }
+                .forEach { $0.discardCachedDownload() }
+              return selected
+            }
+            .recover { error -> Promise<[Subtitle]> in
+              subs.forEach { $0.discardCachedDownload() }
+              throw error
+            }
+        }
+        .ensure {
+          DispatchQueue.main.async {
+            if player.onlineSubtitleSearchID == searchID {
+              player.cancelOnlineSubtitleSearch = nil
+            }
+          }
         }
     }
 
@@ -352,7 +472,7 @@ class OpenSub {
             resolver.reject(OnlineSubtitle.CommonError.noResult)
             return
           }
-          resolver.fulfill((result))
+          resolver.fulfill(result)
         }
       }.recover { error -> Promise<[Subtitle]> in
         switch error {
@@ -364,25 +484,12 @@ class OpenSub {
       }
     }
 
-    func showSubSelectWindow(with subs: [Subtitle]) -> Promise<[Subtitle]> {
-      return Promise { resolver in
-        // return when found 0 or 1 sub
-        if subs.count <= 1 {
-          resolver.fulfill(subs)
-          return
-        }
-        subChooseViewController.subtitles = subs
-        subChooseViewController.context = self
-
-        subChooseViewController.userDoneAction = { subs in
-          resolver.fulfill(subs as! [Subtitle])
-        }
-        subChooseViewController.userCanceledAction = {
-          resolver.reject(OnlineSubtitle.CommonError.canceled)
-        }
-        PlayerCore.active.sendOSD(.foundSub(subs.count), autoHide: false, accessoryView: subChooseViewController.view)
-        subChooseViewController.tableView.reloadData()
-      }
+    func showSubSelectWindow(with subs: [Subtitle], mediaName: String, expectedURL: URL,
+                             player: PlayerCore) -> Promise<[Subtitle]> {
+      // `self` is assigned as the chooser's context to keep this fetcher alive for as long as the
+      // chooser is on screen.
+      OnlineSubtitle.resolveSelection(subs, mediaName: mediaName, expectedURL: expectedURL, player: player,
+                                      chooser: subChooseViewController, context: self)
     }
   }
 

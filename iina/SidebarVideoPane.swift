@@ -573,7 +573,9 @@ fileprivate class SpeedView: SidebarSliderView {
   }
 
   override func update() {
-    let speed = player.mpv.getDouble(MPVOption.PlaybackControl.speed)
+    // The pane is built while mpv may be opening a file. A synchronous property request here can
+    // block the main thread before the Video, Audio, and Subtitles tabs finish loading.
+    let speed = player.info.playSpeed
     slider.allowsTickMarkValuesOnly = false
     updateSpeed(to: speed)
   }

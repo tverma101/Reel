@@ -169,6 +169,10 @@ class PlaybackInfo {
 
   var audioDelay: Double = 0
   var subDelay: Double = 0
+  var secondarySubDelay: Double = 0
+  var subPos: Double = Double(Preference.float(for: .subPos))
+  var secondarySubPos: Double = 100
+  var subScale: Double = 1
 
   // cache related
   var pausedForCache: Bool = false

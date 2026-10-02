@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		3EB9DF44DD05478D9CBE77EF /* SubtitleAudioMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = E96DA2816B5A4253BB63AA35 /* SubtitleAudioMatcher.swift */; };
+		7E28504B65A44CBCAA1D4047 /* SubDLSubtitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E28504B65A44CBCAA1D4048 /* SubDLSubtitle.swift */; };
+		7E28504B65A44CBCAA1D4049 /* AppleLiveCaptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E28504B65A44CBCAA1D4050 /* AppleLiveCaptions.swift */; };
+		24BEF9FB6EF24D0F8A5A45B9 /* whisper in Frameworks */ = {isa = PBXBuildFile; productRef = 7118E23746884C528117280D /* whisper */; };
 		1326717E20852D0D000FA7E2 /* SubChooseViewController.xib in Resources */ = {isa = PBXBuildFile; fileRef = 1326718020852D0D000FA7E2 /* SubChooseViewController.xib */; };
 		3412DB8E2C2FC64C00BBC142 /* Equalizations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3412DB8D2C2FC64800BBC142 /* Equalizations.swift */; };
 		3415BC8A2FC82FD9003B3FBD /* TimePreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3415BC892FC82FD5003B3FBD /* TimePreviewView.swift */; };
@@ -534,6 +538,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		E96DA2816B5A4253BB63AA35 /* SubtitleAudioMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubtitleAudioMatcher.swift; sourceTree = "<group>"; };
+		7E28504B65A44CBCAA1D4048 /* SubDLSubtitle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubDLSubtitle.swift; sourceTree = "<group>"; };
+		7E28504B65A44CBCAA1D4050 /* AppleLiveCaptions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleLiveCaptions.swift; sourceTree = "<group>"; };
 		0507C25E2B5617650043AD05 /* he */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = he; path = he.lproj/MainMenu.strings; sourceTree = "<group>"; };
 		0507C25F2B5617660043AD05 /* he */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = he; path = he.lproj/MainWindowController.strings; sourceTree = "<group>"; };
 		0507C2622B5617660043AD05 /* he */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = he; path = he.lproj/InspectorWindowController.strings; sourceTree = "<group>"; };
@@ -1843,6 +1850,7 @@
 				5196819A29EC963F00B05D55 /* CoreDisplay.framework in Frameworks */,
 				B4E446E825CB53920069F06E /* PromiseKit in Frameworks */,
 				B4E446F725CB54EF0069F06E /* Mustache in Frameworks */,
+				24BEF9FB6EF24D0F8A5A45B9 /* whisper in Frameworks */,
 				34FB40A63033F746007E0F72 /* libSvtAv1Enc.4.dylib in Frameworks */,
 				34AAF7CE302EAF6500E9835C /* libjxl.0.11.dylib in Frameworks */,
 				34AAF7CF302EAF6500E9835C /* libunibreak.7.dylib in Frameworks */,
@@ -2237,6 +2245,9 @@
 		84A886E21E24F2D3008755BB /* Sub */ = {
 			isa = PBXGroup;
 			children = (
+				E96DA2816B5A4253BB63AA35 /* SubtitleAudioMatcher.swift */,
+				7E28504B65A44CBCAA1D4048 /* SubDLSubtitle.swift */,
+				7E28504B65A44CBCAA1D4050 /* AppleLiveCaptions.swift */,
 				84A886E31E24F37D008755BB /* ShooterSubtitle.swift */,
 				840AF5831E73CE3900F4AF92 /* OpenSubSubtitle.swift */,
 				E33BA5C3204315740069A0F6 /* AssrtSubtitle.swift */,
@@ -2636,6 +2647,7 @@
 			name = iina;
 			packageProductDependencies = (
 				B4E446E725CB53920069F06E /* PromiseKit */,
+				7118E23746884C528117280D /* whisper */,
 				B4E446F625CB54EF0069F06E /* Mustache */,
 				B4E4470025CE3F930069F06E /* Sparkle */,
 				8451E6D82604AEFC009A15D7 /* Just */,
@@ -2760,6 +2772,7 @@
 				B4E446F525CB54EF0069F06E /* XCRemoteSwiftPackageReference "GRMustache" */,
 				B4E446FF25CE3F930069F06E /* XCRemoteSwiftPackageReference "Sparkle" */,
 				8451E6D72604AEFC009A15D7 /* XCRemoteSwiftPackageReference "Just" */,
+				D8BD4AAE52EC448A9D58855A /* XCLocalSwiftPackageReference "IINAWhisper" */,
 			);
 			productRefGroup = 84EB1ED71D2F51D3004FA5A1 /* Products */;
 			projectDirPath = "";
@@ -3049,6 +3062,9 @@
 				84ED99FF1E009C8100A5159B /* PrefAdvancedViewController.swift in Sources */,
 				51CA83E22E35AD6300A44B22 /* MPVAudioDevice.swift in Sources */,
 				840AF5841E73CE3900F4AF92 /* OpenSubSubtitle.swift in Sources */,
+				3EB9DF44DD05478D9CBE77EF /* SubtitleAudioMatcher.swift in Sources */,
+				7E28504B65A44CBCAA1D4047 /* SubDLSubtitle.swift in Sources */,
+				7E28504B65A44CBCAA1D4049 /* AppleLiveCaptions.swift in Sources */,
 				E32B157D21BC27B100CDBCEA /* JavascriptAPIMenu.swift in Sources */,
 				84AABE8B1DBF634600D138FD /* CharEncoding.swift in Sources */,
 				8488D6DC1E1167EF00D5B952 /* FloatingPointByteCountFormatter.swift in Sources */,
@@ -4793,6 +4809,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		D8BD4AAE52EC448A9D58855A /* XCLocalSwiftPackageReference "IINAWhisper" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/IINAWhisper;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		8451E6D72604AEFC009A15D7 /* XCRemoteSwiftPackageReference "Just" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -4833,6 +4856,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 8451E6D72604AEFC009A15D7 /* XCRemoteSwiftPackageReference "Just" */;
 			productName = Just;
+		};
+		7118E23746884C528117280D /* whisper */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D8BD4AAE52EC448A9D58855A /* XCLocalSwiftPackageReference "IINAWhisper" */;
+			productName = whisper;
 		};
 		B4E446E725CB53920069F06E /* PromiseKit */ = {
 			isa = XCSwiftPackageProductDependency;

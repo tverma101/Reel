@@ -18,9 +18,6 @@ extension NSImage.SymbolConfiguration {
 
 
 class SidebarTabViewController: NSTabViewController {
-  let transitionDuration: TimeInterval = 0.3
-  private let prefObserver = Preference.Observer()
-
   // -1 for the first tab switch, don't show animation in this case
   var previousIndex: Int = -1
 
@@ -28,16 +25,10 @@ class SidebarTabViewController: NSTabViewController {
     super.viewDidLoad()
 
     view.translatesAutoresizingMaskIntoConstraints = false
-    tabView.wantsLayer = true
     tabStyle = .unspecified
-
-    prefObserver.add(.disableAnimations, runNow: true) { [unowned self] _ in
-      if Preference.bool(for: .disableAnimations) {
-        transitionOptions = []
-      } else {
-        transitionOptions = [.slideLeft, .slideRight]
-      }
-    }
+    // The direction is chosen in transition(from:to:options:completionHandler:).
+    // AppKit documents slideLeft and slideRight as mutually exclusive options.
+    transitionOptions = []
   }
 
   override func transition(
@@ -46,7 +37,8 @@ class SidebarTabViewController: NSTabViewController {
     options: NSViewController.TransitionOptions = [],
     completionHandler completion: (() -> Void)? = nil
   ) {
-    if Preference.bool(for: .disableAnimations) || previousIndex < 0 {
+    if Preference.bool(for: .disableAnimations) ||
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || previousIndex < 0 {
       previousIndex = selectedTabViewItemIndex
       super.transition(from: fromVC, to: toVC, options: [], completionHandler: completion)
       return
@@ -56,21 +48,10 @@ class SidebarTabViewController: NSTabViewController {
     let goingRight = currentIndex > previousIndex
     previousIndex = currentIndex
 
-    guard let containerView = fromVC.view.superview else {
-      super.transition(from: fromVC, to: toVC, options: options,
-                       completionHandler: completion)
-      return
-    }
-
-    let transition = CATransition()
-    transition.type = .push
-    transition.subtype = goingRight ? .fromRight : .fromLeft
-    transition.duration = transitionDuration
-    transition.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-
-    containerView.layer?.add(transition, forKey: kCATransition)
-
-    super.transition(from: fromVC, to: toVC, options: [],
+    // Let AppKit own the complete transition and view hierarchy. A manually added CATransition
+    // remained on the container layer and could animate a later resize instead of this tab change.
+    super.transition(from: fromVC, to: toVC,
+                     options: goingRight ? .slideLeft : .slideRight,
                      completionHandler: completion)
   }
 }

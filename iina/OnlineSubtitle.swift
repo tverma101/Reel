@@ -41,6 +41,8 @@ class OnlineSubtitle: NSObject {
     switch id {
     case Providers.openSub.id:
       return Providers.openSub.getFetcher().loggedIn
+    case Providers.subDL.id:
+      return Providers.subDL.getFetcher().loggedIn
     case Providers.shooter.id:
       return Providers.shooter.getFetcher().loggedIn
     case Providers.assrt.id:
@@ -55,6 +57,21 @@ class OnlineSubtitle: NSObject {
 
   /** Prepend a number before file name to avoid overwriting. */
   var index: Int
+
+  /**
+   The name of the release this subtitle was authored for, e.g. `Movie.2019.1080p.BluRay.x264-GROUP`.
+
+   Providers override this so IINA can score how well a result matches the media being played.
+   `nil` means the provider cannot describe its results, and such results never auto-select.
+   */
+  var releaseName: String? { nil }
+
+  /// Whether this provider result has enough content evidence to be selected without review.
+  /// Providers that do not perform content verification keep the historic behavior.
+  var canAutomaticallySelect: Bool { true }
+
+  /// Provider-supplied preference for chooser preselection, without changing result ordering.
+  var verifiedSelectionBoost: Int { 0 }
 
   init(index: Int) {
     self.index = index
@@ -86,6 +103,7 @@ class OnlineSubtitle: NSObject {
   }
 
   class Providers {
+    static let subDL = Provider<SubDL.Fetcher>(id: ":subdl", name: "SubDL")
     static let shooter = Provider<Shooter.Fetcher>(id: ":shooter", name: "shooter.cn")
     static let openSub = Provider<OpenSub.Fetcher>(id: ":opensubtitles", name: "opensubtitles.com")
     static let assrt = Provider<Assrt.Fetcher>(id: ":assrt", name: "assrt.net")
@@ -109,6 +127,8 @@ class OnlineSubtitle: NSObject {
 
     static func nameForID(_ id: String) -> String {
       switch id {
+      case Providers.subDL.id:
+        return Providers.subDL.name
       case Providers.openSub.id:
         return Providers.openSub.name
       case Providers.shooter.id:
@@ -160,6 +180,8 @@ class OnlineSubtitle: NSObject {
   static func logout(timeout: TimeInterval? = nil) {
     let id = Preference.string(for: .onlineSubProvider) ?? Providers.openSub.id
     switch id {
+    case Providers.subDL.id:
+      _logout(using: Providers.subDL, timeout: timeout)
     case Providers.openSub.id:
       _logout(using: Providers.openSub, timeout: timeout)
     case Providers.shooter.id:
@@ -199,6 +221,8 @@ class OnlineSubtitle: NSObject {
   static func search(forFile url: URL, player: PlayerCore, providerID: String? = nil, callback: @escaping ([URL]) -> Void) {
     let id = providerID ?? Preference.string(for: .onlineSubProvider) ?? Providers.openSub.id
     switch id {
+    case Providers.subDL.id:
+      _search(using: Providers.subDL, forFile: url, player, callback)
     case Providers.openSub.id:
       _search(using: Providers.openSub, forFile: url, player, callback)
     case Providers.shooter.id:
@@ -217,12 +241,16 @@ class OnlineSubtitle: NSObject {
   fileprivate static func _search<P: ProviderProtocol>(using provider: P, forFile url: URL, _ player: PlayerCore, _ callback: @escaping ([URL]) -> Void) {
     log("Search subtitle from \(provider.name)...")
     player.sendOSD(.startFindingSub(provider.name), autoHide: false)
+    let searchID = player.onlineSubtitleSearchID
 
     provider.fetchSubtitles(url: url, player: player).done {
+      guard player.onlineSubtitleSearchID == searchID else { return }
       callback($0)
     }.ensure {
+      guard player.onlineSubtitleSearchID == searchID else { return }
       player.hideOSD()
     }.catch { err in
+      guard player.onlineSubtitleSearchID == searchID else { return }
       let osdMessage: OSDMessage
       let prefix = "Failed to obtain subtitles for \(url) from \(provider.name). "
       switch err {
@@ -259,6 +287,12 @@ class OnlineSubtitle: NSObject {
       case OpenSub.Error.loginFailed(let reason):
         osdMessage = .cannotLogin
         log("\(prefix)Login failed, \(reason)", level: .error)
+      case SubDL.Error.missingAPIKey:
+        osdMessage = .customWithDetail(err.localizedDescription, provider.name)
+        log("\(prefix)SubDL API key has not been configured", level: .warning)
+      case let subDLError as SubDL.Error:
+        osdMessage = .customWithDetail(subDLError.localizedDescription, provider.name)
+        log("\(prefix)\(subDLError.localizedDescription)", level: .warning)
       case JSPluginSub.Error.pluginError(let message):
         osdMessage = .customWithDetail(message, provider.name)
         log("\(prefix)\(message)", level: .error)
@@ -270,6 +304,7 @@ class OnlineSubtitle: NSObject {
         // Operation dismissed by, for example, a plugin with custom implementation.
         log("Default subtitle search wokflow dismissed")
         player.isSearchingOnlineSubtitle = false
+        player.onlineSubtitleSearchID = nil
         return
       default:
         osdMessage = .networkError
@@ -278,6 +313,7 @@ class OnlineSubtitle: NSObject {
       let timeout: Float? = shouldExtendTimeout(for: osdMessage) ? 5 : nil
       player.sendOSD(osdMessage, forcedTimeout: timeout)
       player.isSearchingOnlineSubtitle = false
+      player.onlineSubtitleSearchID = nil
     }
   }
 
@@ -313,6 +349,7 @@ class OnlineSubtitle: NSObject {
 
   static func populateMenu(_ menu: NSMenu, action: Selector? = nil, insertSeparator: Bool = true) {
     let defaultProviders = [
+      (Providers.subDL.name, Providers.subDL.id),
       (Providers.openSub.name, Providers.openSub.id),
       (Providers.assrt.name, Providers.assrt.id),
       (Providers.shooter.name, Providers.shooter.id)
@@ -338,5 +375,240 @@ class OnlineSubtitle: NSObject {
 extension Logger {
   struct Sub {
     static let onlinesub = Logger.makeSubsystem("onlinesub")
+  }
+}
+
+
+// MARK: - Matching a search result against the current media
+
+/// Scores how well an online subtitle's release name matches the media being played.
+///
+/// Only a score of `100` may trigger automatic download and selection, and it is awarded
+/// conservatively. The release name is untrusted input — it is whatever name the uploader of a
+/// remote subtitle chose — so a name-based comparison can never be treated as proof that a
+/// subtitle belongs to a file. `100` therefore requires **all** of the following:
+///
+/// 1. Both names reduce to exactly the same title, token for token. Tokens are compared as a
+///    sequence; comparing them with separators removed is not safe, because shifting a word
+///    boundary by one character (`The.Matrix` vs `t.hematrix`) would then look like a match.
+/// 2. Both names carry the same set of *identity anchors* — a release year, or an episode marker —
+///    and that set is not empty. The anchors are read from the whole name, not from the reduced
+///    title, so a release cannot escape comparison simply by omitting them.
+/// 3. Neither name is empty after reduction.
+///
+/// Requirement 2 is what separates a remake from its original: `The.Thing.1982` and
+/// `The.Thing.2011` share a title but not a year, so they never auto-select. It is also why a file
+/// with no year and no episode marker in its name — `Movie.mkv` — is never auto-selected: with no
+/// anchor there is nothing to corroborate the title with, and the title alone is not evidence.
+///
+/// A name-based check cannot be made proof against a deliberately crafted release name, because
+/// `The.Matrix.1999.1080p.Sinners` is indistinguishable from a legitimate
+/// `The.Matrix.1999.1080p.BluRay`. That is why automatic selection is opt-in, why the result is
+/// still only ever a *default* the user can change, and why anything short of `100` is capped
+/// below it.
+enum SubtitleMatchScorer {
+
+  /// Score of a result considered an exact match for the current media.
+  static let perfectMatch = 100
+
+  /// Longest name scored. Names arrive from a remote server and are otherwise unbounded, and every
+  /// step below is linear in the token count, so this bounds the work a single result can cause.
+  private static let maxNameLength = 4096
+
+  /// File extensions that are stripped from a release name before comparing, so that `Movie.srt`
+  /// and `Movie` compare equal. Only subtitle formats are stripped, which keeps titles containing
+  /// a dot — `Dr. Strangelove` — intact.
+  private static let subtitleExtensions: Set<String> = [
+    "srt", "ass", "ssa", "sub", "vtt", "smi", "sami", "txt", "ttml", "dfxp", "mpl2", "jss", "epub",
+  ]
+
+  /// Tokens that begin the release-tag section of a name, i.e. that describe *how* a release was
+  /// produced rather than *what* it is.
+  ///
+  /// Only the *first* such token matters for reducing a name to its title: everything from it
+  /// onwards is discarded. That is what lets an arbitrary release group — `x264-NTb`, `x264-YIFY`,
+  /// `x264-组` — be ignored without having to be enumerated.
+  private static let releaseTagTokens: Set<String> = [
+    // source
+    "bluray", "blu", "brrip", "bdrip", "bdremux", "remux", "webrip", "webdl", "web", "dl", "rip",
+    "hdtv", "pdtv", "dvdrip", "dvd", "dvdscr", "scr", "cam", "ts", "tc", "r5", "hc", "korsub",
+    // video
+    "x264", "x265", "h264", "h265", "hevc", "avc", "xvid", "divx", "vp9", "av1", "bit", "hi10p",
+    "hdr", "hdr10", "dv", "dolby", "vision", "sdr",
+    // audio
+    "aac", "ac3", "eac3", "dd", "dts", "dtshd", "truehd", "atmos", "flac", "opus", "mp3", "lpcm",
+    // edition
+    "extended", "unrated", "remastered", "directors", "director", "cut", "proper", "repack",
+    "internal", "limited", "complete", "season", "series", "collection", "anniversary",
+    // provenance
+    "multi", "dual", "subbed", "dubbed", "subs", "dubs", "retail", "imax", "sbs", "hsbs",
+    "yify", "yts", "amzn", "nf", "hmax", "atvp", "criterion",
+  ]
+
+  /// Release tags that are not plain words, such as `1080p` or `4k`.
+  private static let releaseTagPatterns = [
+    #"^\d{3,4}[pi]$"#,  // 1080p, 576i
+    #"^\d{3,4}$"#,      // 1080
+    #"^\d+k$"#,         // 4k
+    #"^(hd|sd|uhd|fhd|hd1080|hd720)$"#,
+  ].compactMap { try? NSRegularExpression(pattern: $0) }
+
+  /// Patterns for an episode marker, which identifies *which* episode a release belongs to.
+  ///
+  /// These are deliberately **not** release tags: an episode marker is part of the title, so it is
+  /// always compared, and it doubles as an identity anchor. The first pattern also covers
+  /// multi-episode releases such as `S01E01E02`; the dotted and hyphenated spellings that
+  /// `tokenize` splits into separate `S01` / `E02` tokens are recombined by
+  /// `normalizeEpisodeMarkers(_:)` before anything is compared.
+  private static let episodePatterns = [
+    #"^s\d+e\d+(e\d+)*$"#,  // S01E02, S01E01E02
+    #"^\d+x\d+$"#,          // 1x02
+  ].compactMap { try? NSRegularExpression(pattern: $0) }
+
+  /// Season and episode halves, matched separately so that `S01.E02` and `S01-E02` can be
+  /// recombined into the single anchor `s01e02`.
+  private static let seasonPatterns = [
+    #"^s\d+$"#,  // S01
+  ].compactMap { try? NSRegularExpression(pattern: $0) }
+
+  private static let episodeHalfPatterns = [
+    #"^e\d+$"#,  // E02
+  ].compactMap { try? NSRegularExpression(pattern: $0) }
+
+  /// - Parameters:
+  ///   - releaseName: The release the subtitle was authored for, e.g.
+  ///     `Movie.2019.1080p.BluRay.x264-GROUP.srt`. Untrusted input.
+  ///   - mediaName: The name of the media being played, without extension.
+  /// - Returns: A score from `0` (no useful resemblance) to `100` (same title, same year or
+  ///   episode), where only a `100` may trigger automatic selection.
+  static func score(releaseName: String?, mediaName: String) -> Int {
+    guard let releaseName, !releaseName.isEmpty, !mediaName.isEmpty else { return 0 }
+
+    let release = normalizeEpisodeMarkers(tokenize(clip(stripSubtitleExtension(from: releaseName))))
+    let media = normalizeEpisodeMarkers(tokenize(clip(mediaName)))
+    guard !release.isEmpty, !media.isEmpty else { return 0 }
+
+    if isIdenticalTitleAndAnchor(release, media) { return perfectMatch }
+
+    // Partial resemblance, used only to order and preselect in the chooser. Capped below
+    // `perfectMatch` so it can never trigger automatic selection.
+    //
+    // A release whose title matches but whose anchor differs — a remake, or an extra year hiding a
+    // different film — is ranked just below a real match rather than being lumped in with
+    // unrelated results, so it still surfaces near the top for the user to judge.
+    let shared = Set(media).intersection(release).count
+    guard shared > 0 else { return 0 }
+    var value = Int(((2.0 * Double(shared)) / Double(media.count + release.count) * 100).rounded())
+    if titleTokens(of: release) == titleTokens(of: media), !titleTokens(of: release).isEmpty {
+      value = max(value, 90)
+    }
+    return min(95, value)
+  }
+
+  /// Whether `release` and `media` describe the same title *and* agree on their identity anchors.
+  private static func isIdenticalTitleAndAnchor(_ release: [String], _ media: [String]) -> Bool {
+    let releaseTitle = titleTokens(of: release)
+    let mediaTitle = titleTokens(of: media)
+    // An empty title means the very first token was a release tag, which says nothing about the
+    // title — the film "1917" reduces to nothing.
+    guard !releaseTitle.isEmpty, !mediaTitle.isEmpty else { return false }
+    // Compared as an ordered sequence. Joining the tokens instead would treat "The.Matrix" and
+    // "t.hematrix" as equal, which is not a property worth having.
+    guard releaseTitle == mediaTitle else { return false }
+    // Read from the full names, so a release cannot dodge the comparison by leaving its year or
+    // episode out, and so a second year or episode cannot be smuggled in after a release tag.
+    let releaseAnchors = identityAnchors(in: release)
+    let mediaAnchors = identityAnchors(in: media)
+    return !mediaAnchors.isEmpty && releaseAnchors == mediaAnchors
+  }
+
+  /// The leading tokens of `tokens` that belong to the title, discarding the token that starts the
+  /// release-tag section and everything after it.
+  private static func titleTokens(of tokens: [String]) -> [String] {
+    for (index, token) in tokens.enumerated() where isReleaseTag(token) {
+      return Array(tokens[..<index])
+    }
+    return tokens
+  }
+
+  /// The years and episode markers appearing anywhere in `tokens`.
+  private static func identityAnchors(in tokens: [String]) -> Set<String> {
+    var anchors = Set<String>()
+    for token in tokens where isYear(token) || isEpisodeMarker(token) {
+      anchors.insert(token)
+    }
+    return anchors
+  }
+
+  /// Merge a season token immediately followed by an episode token, so that the three spellings of
+  /// the same marker — `S01E02`, `S01.E02` and `S01-E02` — tokenize alike. Without this the two
+  /// halves would sit in the title as separate tokens and never compare equal.
+  ///
+  /// Requiring the season to come first keeps a title that merely contains a word like `E2` from
+  /// being rewritten.
+  private static func normalizeEpisodeMarkers(_ tokens: [String]) -> [String] {
+    var result: [String] = []
+    var index = 0
+    while index < tokens.count {
+      if isSeasonMarker(tokens[index]), index + 1 < tokens.count, isEpisodeHalf(tokens[index + 1]) {
+        result.append(tokens[index] + tokens[index + 1])
+        index += 2
+      } else {
+        result.append(tokens[index])
+        index += 1
+      }
+    }
+    return result
+  }
+
+  private static func isReleaseTag(_ token: String) -> Bool {
+    // An episode marker is never a release tag: it identifies the episode, so it belongs to the
+    // title and must always be compared.
+    if isEpisodeMarker(token) { return false }
+    if releaseTagTokens.contains(token) { return true }
+    if isYear(token) { return true }
+    return matches(releaseTagPatterns, token)
+  }
+
+  private static func isYear(_ token: String) -> Bool {
+    guard token.count == 4, let value = Int(token) else { return false }
+    return (1900...2099).contains(value)
+  }
+
+  private static func isEpisodeMarker(_ token: String) -> Bool {
+    matches(episodePatterns, token)
+  }
+
+  private static func isSeasonMarker(_ token: String) -> Bool {
+    matches(seasonPatterns, token)
+  }
+
+  private static func isEpisodeHalf(_ token: String) -> Bool {
+    matches(episodeHalfPatterns, token)
+  }
+
+  private static func matches(_ patterns: [NSRegularExpression], _ token: String) -> Bool {
+    let range = NSRange(token.startIndex..., in: token)
+    return patterns.contains { $0.firstMatch(in: token, range: range) != nil }
+  }
+
+  /// Strip a trailing subtitle extension, keeping the rest of the path intact.
+  private static func stripSubtitleExtension(from name: String) -> String {
+    let ext = (name as NSString).pathExtension.lowercased()
+    guard subtitleExtensions.contains(ext) else { return name }
+    return (name as NSString).deletingPathExtension
+  }
+
+  /// Truncate an over-long name so that scoring stays cheap.
+  private static func clip(_ name: String) -> String {
+    name.count > maxNameLength ? String(name.prefix(maxNameLength)) : name
+  }
+
+  /// Lowercase, drop diacritics, and split on everything that is not a letter or a digit.
+  private static func tokenize(_ name: String) -> [String] {
+    let folded = name.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                               locale: Locale(identifier: "en_US_POSIX"))
+    let separated = String(folded.map { $0.isLetter || $0.isNumber ? $0 : " " })
+    return separated.split(separator: " ").map(String.init)
   }
 }

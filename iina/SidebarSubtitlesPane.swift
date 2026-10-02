@@ -196,8 +196,11 @@ fileprivate class LoadSubtitleView: NSView {
     if sender.selectedSegment == 0 {
       let currentDir = player.info.currentURL?.deletingLastPathComponent()
       Utility.quickOpenPanel(title: "Load external subtitle", chooseDir: false, dir: currentDir,
-                             sheetWindow: player.currentWindow,
-                             allowedFileTypes: Utility.containsSubExt) { url in
+                             sheetWindow: player.currentWindow) { url in
+        guard Utility.containsSubExt.contains(url.pathExtension.lowercased()) else {
+          Utility.showAlert("unsupported_sub")
+          return
+        }
         self.player.loadExternalSubFile(url, delay: true)
       }
     } else if sender.selectedSegment == 1 {
@@ -249,8 +252,7 @@ fileprivate class SubDelayView: SidebarSliderView {
   }
 
   override func update() {
-    let delayOption = isPrimary ? MPVOption.Subtitles.subDelay : MPVOption.Subtitles.secondarySubDelay
-    let subDelay = player.mpv.getDouble(delayOption)
+    let subDelay = isPrimary ? player.info.subDelay : player.info.secondarySubDelay
     slider.doubleValue = subDelay
     input.doubleValue = subDelay
     resetButton.isHidden = slider.doubleValue == 0
@@ -358,8 +360,7 @@ fileprivate class SubPositionDelayView: NSView {
   }
 
   private func updatePosition() {
-    let posOption = isPrimary ? MPVOption.Subtitles.subPos : MPVOption.Subtitles.secondarySubPos
-    positionSlider.intValue = Int32(player.mpv.getInt(posOption))
+    positionSlider.doubleValue = isPrimary ? player.info.subPos : player.info.secondarySubPos
   }
 
   @objc private func switchAction(_ sender: AnyObject) {
@@ -512,20 +513,20 @@ fileprivate class SubStyleView: NSView {
   }
 
   private func updateScale() {
-    let subFont = player.mpv.getString(MPVOption.Subtitles.subFont) ??
+    let subFont = Preference.string(for: .subTextFont) ??
       NSLocalizedString("sidebar.font", comment: "");
     fontChooser.title = subFont
 
-    let currSubScale = player.mpv.getDouble(MPVOption.Subtitles.subScale).clamped(to: 0.1...10)
+    let currSubScale = player.info.subScale.clamped(to: 0.1...10)
     let displaySubScale = Utility.toDisplaySubScale(fromRealSubScale: currSubScale)
     scaleSlider.doubleValue = displaySubScale + (displaySubScale > 0 ? -1 : 1)
   }
 
   private func updateTextStyle() {
-    let fontSize = player.mpv.getInt(MPVOption.Subtitles.subFontSize)
+    let fontSize = Int(Preference.float(for: .subTextSize))
     fontSizePicker.selectItem(withTitle: fontSize.description)
 
-    let borderWidth = player.mpv.getDouble(MPVOption.Subtitles.subOutlineSize)
+    let borderWidth = Double(Preference.float(for: .subBorderSize))
     borderSizePicker.selectItem(at: -1)
     borderSizePicker.itemArray.forEach { item in
       if borderWidth == Double(item.title) {
@@ -533,12 +534,12 @@ fileprivate class SubStyleView: NSView {
       }
     }
 
-    for (op, colorWell) in [
-      (MPVOption.Subtitles.subColor, textColorWell),
-      (MPVOption.Subtitles.subOutlineColor, borderColorWell),
-      (MPVOption.Subtitles.subBackColor, backgroundColorWell),
+    for (key, colorWell) in [
+      (Preference.Key.subTextColorString, textColorWell),
+      (Preference.Key.subBorderColorString, borderColorWell),
+      (Preference.Key.subShadowColorString, backgroundColorWell),
     ] {
-      if let colorString = player.mpv.getString(op), let color = NSColor(mpvColorString: colorString) {
+      if let colorString = Preference.string(for: key), let color = NSColor(mpvColorString: colorString) {
         colorWell?.color = color
       }
     }
