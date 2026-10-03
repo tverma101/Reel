@@ -215,6 +215,7 @@ class OpenSub {
     func fetch(from url: URL, withProviderID id: String, playerCore player: PlayerCore) -> Promise<[Subtitle]> {
       // Keep the string the search is based on so the results can be matched back against it.
       let mediaName = url.isFileURL ? url.deletingPathExtension().lastPathComponent : player.getMediaTitle()
+      let mediaDuration = player.info.videoDuration?.second
       let cancellation = SubtitleAudioMatcher.Cancellation()
       let searchID = player.onlineSubtitleSearchID
       // Property access is serialized on the main queue: this chain can complete on a URLSession
@@ -240,7 +241,8 @@ class OpenSub {
           subs.forEach { $0.audioMatchStatus = .unverified }
           let checkCandidates = Array(subs.prefix(3))
           let verification: Promise<Void> = Preference.bool(for: .verifyOpenSubAudio) ?
-            SubtitleAudioMatcher.verify(mediaURL: url, candidates: checkCandidates, cancellation: cancellation) :
+            SubtitleAudioMatcher.verify(mediaURL: url, mediaDuration: mediaDuration,
+                                        candidates: checkCandidates, cancellation: cancellation) :
             .value(())
           return verification
             .recover { error -> Promise<Void> in

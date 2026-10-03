@@ -61,6 +61,13 @@ return -1;\
 
 @end
 
+static int FFmpegAudioReadInterruptCallback(void *opaque) {
+  if (opaque == NULL) {
+    return 0;
+  }
+  BOOL (^cancellationCheck)(void) = (__bridge BOOL (^)(void))opaque;
+  return cancellationCheck() ? 1 : 0;
+}
 
 @implementation FFmpegController
 
@@ -418,6 +425,7 @@ return -1;\
 + (NSData *)readMonoAudioFromFile:(nonnull NSString *)file
                          startTime:(double)startTime
                           duration:(double)duration
+                cancellationCheck:(nullable BOOL (^)(void))cancellationCheck
 {
   if (file.length == 0 || !isfinite(startTime) || !isfinite(duration) || startTime < 0 || duration <= 0) {
     return nil;
@@ -438,6 +446,14 @@ return -1;\
   double mediaOrigin = 0;
   double sampleEnd = startTime + duration;
 
+  formatContext = avformat_alloc_context();
+  if (formatContext == NULL) {
+    goto cleanup;
+  }
+  if (cancellationCheck != nil) {
+    formatContext->interrupt_callback.callback = FFmpegAudioReadInterruptCallback;
+    formatContext->interrupt_callback.opaque = (__bridge void *)cancellationCheck;
+  }
   if (avformat_open_input(&formatContext, file.fileSystemRepresentation, NULL, NULL) < 0 ||
       avformat_find_stream_info(formatContext, NULL) < 0) {
     goto cleanup;
@@ -484,11 +500,13 @@ return -1;\
     goto cleanup;
   }
 
-  while (!reachedEnd && av_read_frame(formatContext, packet) >= 0) {
+  while (!reachedEnd && !(cancellationCheck && cancellationCheck()) &&
+         av_read_frame(formatContext, packet) >= 0) {
     if (packet->stream_index == audioStreamIndex) {
       ret = avcodec_send_packet(decoder, packet);
       if (ret >= 0) {
-        while ((ret = avcodec_receive_frame(decoder, frame)) >= 0) {
+        while (!(cancellationCheck && cancellationCheck()) &&
+               (ret = avcodec_receive_frame(decoder, frame)) >= 0) {
           if (frame->best_effort_timestamp == AV_NOPTS_VALUE) {
             av_frame_unref(frame);
             continue;

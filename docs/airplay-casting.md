@@ -31,11 +31,14 @@ stops or Reel quits.
 
 ## Network and privacy
 
-The helper listens on the Mac's selected LAN IPv4 address and an ephemeral port. Each cast URL has
-a cryptographically random 128-bit path token, the server only serves expected HLS files, and the
-cast directory is private to the current user. The token limits casual discovery and guessing; it
-does not encrypt the HTTP stream. Someone who can observe local-network traffic can read the URL
-and the video while the cast is active. Stop the cast when finished.
+The helper listens on the Mac's selected network IPv4 address and an ephemeral port. When macOS
+routes the default connection through a recognized VPN or tunnel interface, Reel selects an active
+non-tunnel interface address so a receiver on the local network can still reach the stream. With
+multiple active physical networks, the first eligible interface may not be the receiver's network.
+Each cast URL has a cryptographically random 128-bit path token, the server only serves expected HLS
+files, and the cast directory is private to the current user. The token limits casual discovery and
+guessing; it does not encrypt the HTTP stream. Someone who can observe local-network traffic can
+read the URL and the video while the cast is active. Stop the cast when finished.
 
 Reel's plugin permission sheet covers the filesystem access needed to launch the helper. macOS
 Local Network permission controls network access at the operating-system level. Reel and the

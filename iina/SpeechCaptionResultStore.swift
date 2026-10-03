@@ -63,3 +63,24 @@ struct SpeechCaptionResultStore {
     cues.sort { $0.start < $1.start }
   }
 }
+
+/// Tracks the media playhead so live captions can discard results from before a backward seek,
+/// including seeks that remain inside the result store's retention window.
+struct SpeechCaptionPlaybackTimeline {
+  private(set) var lastPosition: Double?
+  private let backwardSeekTolerance: Double = 1
+
+  mutating func movedBack(to position: Double) -> Bool {
+    guard position.isFinite, position >= 0 else {
+      lastPosition = nil
+      return false
+    }
+    defer { lastPosition = position }
+    guard let lastPosition else { return false }
+    return position < lastPosition - backwardSeekTolerance
+  }
+
+  mutating func reset() {
+    lastPosition = nil
+  }
+}

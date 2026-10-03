@@ -60,6 +60,14 @@ struct SpeechCaptionResultStoreChecks {
     displayStore.removeCues(endingBefore: 40.8)
     check(displayStore.cues.map(\.text) == ["Current"], "prunes cues before the playback window")
 
+    var timeline = SpeechCaptionPlaybackTimeline()
+    check(!timeline.movedBack(to: 100), "the first playhead sample establishes a baseline")
+    check(!timeline.movedBack(to: 99.5), "small playhead jitter does not reset captions")
+    check(timeline.movedBack(to: 90), "a backward seek is detected within the cue-retention window")
+    check(!timeline.movedBack(to: 90.2), "playback after a seek establishes a new baseline")
+    timeline.reset()
+    check(!timeline.movedBack(to: 10), "resetting the media timeline drops its old baseline")
+
     print("\(checks) speech caption result store checks passed")
   }
 }

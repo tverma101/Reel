@@ -44,6 +44,23 @@ private final class LiveCaptionOverlay: NSView {
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+private final class LiveCaptionDecodeCancellation: @unchecked Sendable {
+  private let lock = NSLock()
+  private var cancelled = false
+
+  var isCancelled: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return cancelled
+  }
+
+  func cancel() {
+    lock.lock()
+    cancelled = true
+    lock.unlock()
+  }
+}
+
 /// Mutable state and AppKit objects are confined to the main thread; background decode and Speech
 /// tasks return to the main thread before reading or updating the instance.
 final class AppleLiveCaptions: @unchecked Sendable {
@@ -62,6 +79,8 @@ final class AppleLiveCaptions: @unchecked Sendable {
   private var recognitionStartedAt: Date?
   private var authorizationRequested = false
   private var captionResults = SpeechCaptionResultStore()
+  private var playbackTimeline = SpeechCaptionPlaybackTimeline()
+  private var decodeCancellation: LiveCaptionDecodeCancellation?
   private var unavailableSpeechLocales = Set<String>()
   private var installedSpeechLanguageCodes: Set<String>?
   private var speechLocaleCheckTask: Task<Void, Never>?
@@ -170,6 +189,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
 
   func stop() {
     generation += 1
+    cancelDecode()
     timer?.invalidate()
     timer = nil
     task?.cancel()
@@ -182,6 +202,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
     requestedStart = nil
     exhaustedAtPosition = nil
     activeURL = nil
+    playbackTimeline.reset()
     inFlight = false
     recognitionStartedAt = nil
     captionResults.removeAll()
@@ -195,6 +216,11 @@ final class AppleLiveCaptions: @unchecked Sendable {
     }
   }
 
+  private func cancelDecode() {
+    decodeCancellation?.cancel()
+    decodeCancellation = nil
+  }
+
   private func tick() {
     guard let player,
           Preference.bool(for: .appleLiveCaptionsFallback),
@@ -206,6 +232,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
     }
     if activeURL != url {
       generation += 1
+      cancelDecode()
       task?.cancel()
       task = nil
       analyzerTask?.cancel()
@@ -215,6 +242,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
       requestedStart = nil
       exhaustedAtPosition = nil
       captionResults.removeAll()
+      playbackTimeline.reset()
       activeURL = url
     }
     // The UI timer stops after the OSC hides. Keep the cached position current so the chunk
@@ -223,6 +251,22 @@ final class AppleLiveCaptions: @unchecked Sendable {
     guard let position = player.info.videoPosition?.second, position.isFinite, position >= 0 else {
       stop()
       return
+    }
+    if playbackTimeline.movedBack(to: position) {
+      // The playhead can move backward without crossing the current recognition chunk boundary.
+      // Invalidate that work and clear text from the previous pass through this time range.
+      generation += 1
+      cancelDecode()
+      task?.cancel()
+      task = nil
+      analyzerTask?.cancel()
+      analyzerTask = nil
+      inFlight = false
+      recognitionStartedAt = nil
+      requestedStart = nil
+      exhaustedAtPosition = nil
+      captionResults.removeAll()
+      overlay.isHidden = true
     }
     // Bound result growth: chunks arrive throughout the session, so discard text the playhead can
     // no longer reach without a seek (a seek resets the store wholesale).
@@ -235,6 +279,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
     if inFlight, let recognitionStartedAt,
        Date().timeIntervalSince(recognitionStartedAt) > 15 {
       generation += 1
+      cancelDecode()
       task?.cancel()
       task = nil
       analyzerTask?.cancel()
@@ -246,6 +291,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
        position < requestedStart - 1 || position >= requestedStart + chunkDuration * 2 {
       // A seek invalidates both a pending recognition result and the displayed cues.
       generation += 1
+      cancelDecode()
       task?.cancel()
       task = nil
       analyzerTask?.cancel()
@@ -299,10 +345,15 @@ final class AppleLiveCaptions: @unchecked Sendable {
     inFlight = true
     recognitionStartedAt = nil
     let token = generation
+    let decodeCancellation = LiveCaptionDecodeCancellation()
+    self.decodeCancellation = decodeCancellation
     decodeQueue.async { [weak self] in
-      let data = FFmpegController.readMonoAudio(fromFile: url.path, startTime: start, duration: duration)
+      let data = FFmpegController.readMonoAudio(fromFile: url.path, startTime: start, duration: duration,
+                                                cancellationCheck: { decodeCancellation.isCancelled })
       DispatchQueue.main.async {
-        guard let self, self.generation == token, self.player?.info.currentURL == url else { return }
+        guard let self else { return }
+        if self.decodeCancellation === decodeCancellation { self.decodeCancellation = nil }
+        guard self.generation == token, self.player?.info.currentURL == url else { return }
         guard let data, !data.isEmpty,
               let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
                                          channels: 1, interleaved: false),

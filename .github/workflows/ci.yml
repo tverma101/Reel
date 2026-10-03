@@ -21,6 +21,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Run focused regression checks
+        run: |
+          bash other/check_speech_caption_result_store.sh
+          bash other/check_subtitle_audio_parser.sh
+          bash other/check_subtitle_matcher.sh
+          bash other/check_subdl_search_parser.sh
+
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
