@@ -317,7 +317,7 @@ index 72df6cc..5cf8e8c 100644
  	})
  	srv := &http.Server{Handler: handler}
  	go srv.Serve(ln)
-@@ -52,3 +65,46 @@ func StartServer(dir, subName, subLang string, bandwidth int) (int, func(), erro
+@@ -52,3 +65,46 @@ func StartServer(dir, subName, subLang string, bandwidth int) (int, func(), error
  	}
  	return ln.Addr().(*net.TCPAddr).Port, shutdown, nil
  }
