@@ -47,13 +47,6 @@ private final class LiveCaptionOverlay: NSView {
 /// Mutable state and AppKit objects are confined to the main thread; background decode and Speech
 /// tasks return to the main thread before reading or updating the instance.
 final class AppleLiveCaptions: @unchecked Sendable {
-  private struct Cue {
-    let chunkStart: Double
-    let start: Double
-    let end: Double
-    let text: String
-  }
-
   private weak var player: PlayerCore?
   private let overlay = LiveCaptionOverlay(frame: .zero)
   private let decodeQueue = DispatchQueue(label: "io.iina.live-captions.decode", qos: .userInitiated)
@@ -63,10 +56,12 @@ final class AppleLiveCaptions: @unchecked Sendable {
   private var analyzerTask: Task<Void, Never>?
   private var generation = 0
   private var requestedStart: Double?
+  private var exhaustedAtPosition: Double?
+  private var activeURL: URL?
   private var inFlight = false
   private var recognitionStartedAt: Date?
   private var authorizationRequested = false
-  private var cues: [Cue] = []
+  private var captionResults = SpeechCaptionResultStore()
   private var unavailableSpeechLocales = Set<String>()
   private var installedSpeechLanguageCodes: Set<String>?
   private var speechLocaleCheckTask: Task<Void, Never>?
@@ -185,9 +180,11 @@ final class AppleLiveCaptions: @unchecked Sendable {
     speechLocaleCheckTask = nil
     recognizer = nil
     requestedStart = nil
+    exhaustedAtPosition = nil
+    activeURL = nil
     inFlight = false
     recognitionStartedAt = nil
-    cues.removeAll()
+    captionResults.removeAll()
     overlay.isHidden = true
     overlay.textField.stringValue = ""
   }
@@ -207,6 +204,19 @@ final class AppleLiveCaptions: @unchecked Sendable {
       stop()
       return
     }
+    if activeURL != url {
+      generation += 1
+      task?.cancel()
+      task = nil
+      analyzerTask?.cancel()
+      analyzerTask = nil
+      inFlight = false
+      recognitionStartedAt = nil
+      requestedStart = nil
+      exhaustedAtPosition = nil
+      captionResults.removeAll()
+      activeURL = url
+    }
     // The UI timer stops after the OSC hides. Keep the cached position current so the chunk
     // scheduler continues through a normal playback session with no visible controls.
     player.syncPositionIfNeeded()
@@ -214,11 +224,10 @@ final class AppleLiveCaptions: @unchecked Sendable {
       stop()
       return
     }
-    // Bound cue growth: chunks arrive every few seconds for the whole session, so drop cues that no
-    // playback position can reach again without a seek (a seek resets `cues` wholesale).
-    cues.removeAll { $0.end < position - 20 }
-    let text = cues.filter { position >= $0.start - 0.15 && position <= $0.end + 0.6 }
-      .suffix(2).map(\.text).joined(separator: " ")
+    // Bound result growth: chunks arrive throughout the session, so discard text the playhead can
+    // no longer reach without a seek (a seek resets the store wholesale).
+    captionResults.removeCues(endingBefore: position - 20)
+    let text = captionResults.text(at: position)
     if overlay.textField.stringValue != text { overlay.textField.stringValue = text }
     overlay.isHidden = text.isEmpty
 
@@ -244,8 +253,17 @@ final class AppleLiveCaptions: @unchecked Sendable {
       inFlight = false
       recognitionStartedAt = nil
       self.requestedStart = nil
-      cues.removeAll()
+      self.exhaustedAtPosition = nil
+      captionResults.removeAll()
       overlay.isHidden = true
+    }
+    if let exhaustedAtPosition {
+      if position < exhaustedAtPosition - 1 {
+        self.exhaustedAtPosition = nil
+        requestedStart = nil
+      } else {
+        return
+      }
     }
     if !inFlight && (requestedStart == nil || position >= requestedStart! + chunkDuration - 2) {
       let start = requestedStart.map { $0 + chunkDuration } ?? floor(position / chunkDuration) * chunkDuration
@@ -263,9 +281,21 @@ final class AppleLiveCaptions: @unchecked Sendable {
     } else {
       guard recognizer?.isAvailable == true else { return }
     }
-    let duration = min(chunkDuration, max(0, (player.info.videoDuration?.second ?? start + chunkDuration) - start))
-    guard duration >= 1 else { return }
+    let mediaDuration = player.info.videoDuration?.second
+    let duration: Double
+    if let mediaDuration, mediaDuration.isFinite, mediaDuration > 0 {
+      duration = min(chunkDuration, max(0, mediaDuration - start))
+    } else {
+      duration = chunkDuration
+    }
     requestedStart = start
+    guard duration >= 1 else {
+      exhaustedAtPosition = mediaDuration
+      inFlight = false
+      recognitionStartedAt = nil
+      return
+    }
+    exhaustedAtPosition = nil
     inFlight = true
     recognitionStartedAt = nil
     let token = generation
@@ -305,15 +335,17 @@ final class AppleLiveCaptions: @unchecked Sendable {
           DispatchQueue.main.async {
             guard let self, self.generation == token, self.player?.info.currentURL == url else { return }
             if let result {
-              self.cues.removeAll { $0.chunkStart == start }
-              self.cues += result.bestTranscription.segments.compactMap { segment -> Cue? in
+              let replacements = result.bestTranscription.segments.compactMap { segment -> SpeechCaptionResultStore.Cue? in
                 let text = segment.substring.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { return nil }
                 let begin = start + segment.timestamp
-                return Cue(chunkStart: start, start: begin,
-                           end: begin + max(segment.duration, 0.7), text: text)
+                let audioEnd = begin + max(segment.duration, 0.001)
+                return SpeechCaptionResultStore.Cue(chunkStart: start, start: begin,
+                                                     end: begin + max(segment.duration, 0.7),
+                                                     audioEnd: audioEnd, text: text)
               }
-              self.cues.removeAll { $0.end < (self.player?.info.videoPosition?.second ?? 0) - 20 }
+              self.captionResults.replaceChunk(start, with: replacements)
+              self.captionResults.removeCues(endingBefore: (self.player?.info.videoPosition?.second ?? 0) - 20)
             }
             if result?.isFinal == true || error != nil {
               self.task = nil
@@ -350,7 +382,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
             captions.timer = nil
             captions.inFlight = false
             captions.recognitionStartedAt = nil
-            captions.cues.removeAll()
+            captions.captionResults.removeAll()
             captions.overlay.isHidden = true
             captions.overlay.textField.stringValue = ""
           }
@@ -384,11 +416,8 @@ final class AppleLiveCaptions: @unchecked Sendable {
             let end = start + result.range.end.seconds
             await MainActor.run {
               guard captions.generation == token, captions.player?.info.currentURL == url else { return }
-              captions.cues.removeAll { $0.chunkStart == start && abs($0.start - begin) < 0.1 }
-              if !text.isEmpty {
-                captions.cues.append(Cue(chunkStart: start, start: begin, end: max(begin + 0.7, end), text: text))
-                captions.cues.sort { $0.start < $1.start }
-              }
+              captions.captionResults.applyProgressiveResult(chunkStart: start, audioStart: begin,
+                                                              audioEnd: end, text: text)
             }
           }
         }

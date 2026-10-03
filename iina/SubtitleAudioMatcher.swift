@@ -89,15 +89,22 @@ enum SubtitleAudioMatcher {
         dialogueWordCount = 0
         return
       }
-      dialogueWordCount = Self.tokens(in: trimmed).count
+      dialogueWordCount = Self.wordCount(in: trimmed)
     }
 
     var isDialogue: Bool { dialogueWordCount >= 2 }
 
-    private static func tokens(in text: String) -> [String] {
-      text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-        .components(separatedBy: CharacterSet.alphanumerics.inverted)
-        .filter { !$0.isEmpty }
+    private static func wordCount(in text: String) -> Int {
+      var count = 0
+      var insideWord = false
+      for scalar in text.unicodeScalars {
+        let category = scalar.properties.generalCategory
+        let isWord = CharacterSet.alphanumerics.contains(scalar) ||
+          category == .nonspacingMark || category == .spacingMark || category == .enclosingMark
+        if isWord && !insideWord { count += 1 }
+        insideWord = isWord
+      }
+      return count
     }
   }
 
@@ -252,20 +259,14 @@ enum SubtitleAudioMatcher {
         return (parsed, plan, samples)
       }.then { parsed, plan, samples -> Promise<Void> in
         guard !cancellation.isCancelled else { throw MatcherError.cancelled }
-        let hashCandidates = parsed.filter { $0.subtitle.movieHashMatch == true }
         let assessmentPromise: Promise<VADAssessment>
-        if hashCandidates.isEmpty {
-          // Avoid downloading/loading the VAD model when the provider supplied no hash signal.
-          assessmentPromise = .value(VADAssessment(timingMatches: []))
-        } else {
-          assessmentPromise = ensureModel(vadModel, cancellation: cancellation).then { vadURL in
-            onWorker { assessTiming(candidates: hashCandidates, plan: plan, samples: samples, vadModelURL: vadURL) }
-          }.recover { error -> Promise<VADAssessment> in
-            if cancellation.isCancelled { throw MatcherError.cancelled }
-            Logger.log("Local voice-activity check unavailable: \(error.localizedDescription)",
-                       level: .warning, subsystem: Logger.Sub.opensub)
-            return .value(VADAssessment(timingMatches: []))
-          }
+        assessmentPromise = ensureModel(vadModel, cancellation: cancellation).then { vadURL in
+          onWorker { assessTiming(candidates: parsed, plan: plan, samples: samples, vadModelURL: vadURL) }
+        }.recover { error -> Promise<VADAssessment> in
+          if cancellation.isCancelled { throw MatcherError.cancelled }
+          Logger.log("Local voice-activity check unavailable: \(error.localizedDescription)",
+                     level: .warning, subsystem: Logger.Sub.opensub)
+          return .value(VADAssessment(timingMatches: []))
         }
         return assessmentPromise.then { assessment -> Promise<Void> in
           guard !cancellation.isCancelled else { throw MatcherError.cancelled }
@@ -355,7 +356,7 @@ enum SubtitleAudioMatcher {
       return VADAssessment(timingMatches: [])
     }
     var matches = Set<ObjectIdentifier>()
-    for candidate in candidates where candidate.subtitle.movieHashMatch == true {
+    for candidate in candidates {
       let aligned = speech.filter { segment in
         candidate.cues.contains { cue in
           cue.isDialogue && cue.start <= plan.start + segment.end + 0.7 &&
@@ -502,9 +503,62 @@ enum SubtitleAudioMatcher {
   }
 
   private static func normalizedTokens(_ text: String) -> [String] {
-    text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-      .components(separatedBy: CharacterSet.alphanumerics.inverted)
-      .filter { !$0.isEmpty }
+    let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive],
+                              locale: Locale(identifier: "en_US_POSIX"))
+    var tokens: [String] = []
+    var word = ""
+    var unspacedRun: [Character] = []
+
+    func flushWord() {
+      if !word.isEmpty { tokens.append(word); word.removeAll(keepingCapacity: true) }
+    }
+    func flushUnspacedRun() {
+      guard !unspacedRun.isEmpty else { return }
+      if unspacedRun.count == 1 {
+        tokens.append(String(unspacedRun[0]))
+      } else {
+        for index in 0..<(unspacedRun.count - 1) {
+          tokens.append(String(unspacedRun[index...index + 1]))
+        }
+      }
+      unspacedRun.removeAll(keepingCapacity: true)
+    }
+
+    for character in folded {
+      if isUnspacedScriptCharacter(character) {
+        flushWord()
+        unspacedRun.append(character)
+      } else if character.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }) {
+        flushUnspacedRun()
+        word.append(character)
+      } else {
+        flushWord()
+        flushUnspacedRun()
+      }
+    }
+    flushWord()
+    flushUnspacedRun()
+    return tokens
+  }
+
+  private static func isUnspacedScriptCharacter(_ character: Character) -> Bool {
+    guard let base = character.unicodeScalars.first else { return false }
+    let value = base.value
+    let isScriptScalar = (0x3400...0x4DBF).contains(value) ||
+      (0x4E00...0x9FFF).contains(value) || (0xF900...0xFAFF).contains(value) ||
+      (0x20000...0x3134F).contains(value) ||
+      (0x3040...0x30FF).contains(value) || (0x31F0...0x31FF).contains(value) ||
+      (0xFF66...0xFF9D).contains(value) ||
+      (0x1100...0x11FF).contains(value) || (0x3130...0x318F).contains(value) ||
+      (0xA960...0xA97F).contains(value) || (0xAC00...0xD7AF).contains(value) ||
+      (0xD7B0...0xD7FF).contains(value) ||
+      (0x0E00...0x0E7F).contains(value) || (0x0E80...0x0EFF).contains(value) ||
+      (0x1000...0x109F).contains(value) || (0x1780...0x17FF).contains(value)
+    guard isScriptScalar else { return false }
+    return character.unicodeScalars.dropFirst().allSatisfy {
+      let category = $0.properties.generalCategory
+      return category == .nonspacingMark || category == .spacingMark || category == .enclosingMark
+    }
   }
 
   private static func tokenF1(_ first: [String], _ second: [String]) -> Double {
@@ -625,7 +679,7 @@ enum SubtitleAudioMatcher {
     static func parse(fileURL: URL) -> [Cue]? {
       guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
             let size = attributes[.size] as? NSNumber,
-            size.intValue > 0, size.intValue <= SubtitleAudioMatcher.maxSubtitleBytes,
+            size.int64Value > 0, size.int64Value <= Int64(SubtitleAudioMatcher.maxSubtitleBytes),
             let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else { return nil }
       let text = String(data: data, encoding: .utf8)
         ?? String(data: data, encoding: .utf16)
@@ -639,33 +693,44 @@ enum SubtitleAudioMatcher {
 
     private static func parseASS(_ text: String) -> [Cue] {
       var cues: [Cue] = []
-      for line in text.components(separatedBy: .newlines) where line.hasPrefix("Dialogue:") {
+      text.enumerateLines { line, stop in
+        guard line.utf16.count <= 4_096, line.hasPrefix("Dialogue:") else { return }
         let fields = line.split(maxSplits: 9, omittingEmptySubsequences: false) { $0 == "," }
         guard fields.count == 10,
               let start = parseTime(String(fields[1])),
-              let end = parseTime(String(fields[2])), end > start else { continue }
+              let end = parseTime(String(fields[2])), end > start else { return }
         let body = cleanText(String(fields[9]).replacingOccurrences(of: #"\\[Nn]"#, with: " ", options: .regularExpression))
         if !body.isEmpty { cues.append(Cue(start: start, end: end, text: body)) }
-        if cues.count >= 50_000 { break }
+        if cues.count >= 50_000 { stop = true }
       }
       return cues
     }
 
     private static func parseTimedText(_ text: String) -> [Cue] {
       let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
-      let matches = timingRegex.matches(in: text, range: fullRange)
+      var matches: [NSTextCheckingResult] = []
+      timingRegex.enumerateMatches(in: text, range: fullRange) { match, _, stop in
+        guard let match else { return }
+        if matches.count >= 50_000 {
+          // The cue-body limit below bounds the final cue even without a lookahead timestamp.
+          stop.pointee = true
+          return
+        }
+        matches.append(match)
+      }
       guard !matches.isEmpty else { return [] }
       var cues: [Cue] = []
-      for (index, match) in matches.enumerated() {
+      for (index, match) in matches.prefix(50_000).enumerated() {
         guard let startRange = Range(match.range(at: 1), in: text),
               let endRange = Range(match.range(at: 2), in: text),
               let start = parseTime(String(text[startRange])),
               let end = parseTime(String(text[endRange])), end > start else { continue }
         let contentStart = match.range.location + match.range.length
         let nextStart = index + 1 < matches.count ? matches[index + 1].range.location : fullRange.length
-        guard nextStart >= contentStart,
-              let contentRange = Range(NSRange(location: contentStart, length: nextStart - contentStart), in: text) else { continue }
-        let body = cleanText(String(text[contentRange]))
+        guard nextStart >= contentStart else { continue }
+        let bodyLength = min(nextStart - contentStart, 4_096)
+        let rawBody = (text as NSString).substring(with: NSRange(location: contentStart, length: bodyLength))
+        let body = cleanText(rawBody)
         if !body.isEmpty { cues.append(Cue(start: start, end: end, text: body)) }
         if cues.count >= 50_000 { break }
       }

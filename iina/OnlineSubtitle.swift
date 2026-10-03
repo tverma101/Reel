@@ -66,9 +66,9 @@ class OnlineSubtitle: NSObject {
    */
   var releaseName: String? { nil }
 
-  /// Whether this provider result has enough content evidence to be selected without review.
-  /// Providers that do not perform content verification keep the historic behavior.
-  var canAutomaticallySelect: Bool { true }
+  /// Whether this provider result has independent evidence beyond uploader-controlled names.
+  /// Providers must opt in explicitly; exact filename matches alone are not proof of content.
+  var canAutomaticallySelect: Bool { false }
 
   /// Provider-supplied preference for chooser preselection, without changing result ordering.
   var verifiedSelectionBoost: Int { 0 }

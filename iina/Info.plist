@@ -622,6 +622,8 @@
 	</dict>
 	<key>NSPrefersDisplaySafeAreaCompatibilityMode</key>
 	<false/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Reel uses your local network to stream video to the AirPlay device you choose.</string>
 	<key>NSServices</key>
 	<array>
 		<dict>

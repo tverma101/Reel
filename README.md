@@ -18,6 +18,7 @@
 * Standalone Music Mode designed for audio files
 * Video thumbnails
 * Online subtitle searching and intelligent local subtitle matching
+* Optional AirPlay video casting to a TV while Reel stays the remote
 * Unlimited playback history
 * Convenient and interactive settings for video/audio filters
 * Fully customizable keyboard, mouse, trackpad, and gesture controls
@@ -76,6 +77,9 @@ Reel uses mpv for media playback. To build Reel, you can either fetch copies of 
 
 8. Build the project.
 
+The build script prepares Reel's pinned AirPlay plugin even when run with
+`--skip-plugins`; that option skips optional upstream plugin downloads.
+
 ## Subtitle setup
 
 For this checkout's SubDL automatic search, OpenSubtitles manual fallback, and Apple speech
@@ -89,6 +93,10 @@ see [Local macOS installation](docs/local-installation.md).
 Reel selects its own audio output device through mpv, so you can send playback to an AirPlay
 device without changing what the rest of the Mac does. See
 [Audio output devices](docs/audio-output.md).
+
+For video casting to an Apple TV while Reel remains the remote, see
+[AirPlay video casting](docs/airplay-casting.md). This is separate from selecting an AirPlay
+audio output device.
 
 ## Contributing
 
@@ -109,7 +117,14 @@ Reel is a fork, and its own development happens in this repository. Read
 ## Plugins
 
 The plugin interface and file formats are unchanged from IINA, so IINA's plugins work in
-Reel. These are upstream's plugins, maintained by their authors, not by this fork.
+Reel.
+
+### Bundled with Reel
+
+- **AirPlay video casting** (`ozykhan/iina-airplay` v0.3.2) ships installed but disabled. Enable
+  it under Settings → Plugins; Reel asks you to approve its filesystem permission before enabling
+  it. The first cast may also trigger macOS's Local Network permission prompt. Setup, limitations,
+  and privacy details are in [AirPlay video casting](docs/airplay-casting.md).
 
 ### Upstream-maintained plugins
 - **[Online Media](https://github.com/iina/plugin-online-media)** (`iina/plugin-online-media`) - Enhances online streaming and downloading.
@@ -117,7 +132,6 @@ Reel. These are upstream's plugins, maintained by their authors, not by this for
 - **[User Scripts](https://github.com/iina/plugin-userscript)** (`iina/plugin-userscript`) - Run custom JavaScript snippets.
 
 ### Community plugins
-- **[AirPlay](https://github.com/ozykhan/iina-airplay)** (`ozykhan/iina-airplay`) - Cast the current file to an Apple TV over AirPlay; the player stays the remote. Reel can also send its own audio to an AirPlay speaker through Settings → Audio without this plugin — see [Audio output devices](docs/audio-output.md).
 - **[Anime4K](https://github.com/yorkyang2333/iina-anime4k)** (`yorkyang2333/iina-anime4k`) - Apply Anime4K shaders for real-time anime upscaling.
 - **[Auto Skip](https://github.com/pangziqiang/iina-auto-skip)** (`pangziqiang/iina-auto-skip`) - Automatically skip intro and outro sections with visual drag-to-set overlay.
 - **[Bilingual Audio](https://github.com/glechic/iina-bilingual-audio)** (`glechic/iina-bilingual-audio`) - Play two audio tracks with left/right channel separation for bilingual viewing.

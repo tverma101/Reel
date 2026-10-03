@@ -1,0 +1,530 @@
+diff --git a/helper/e2e_test.go b/helper/e2e_test.go
+index 558bb06..9c1c88d 100644
+--- a/helper/e2e_test.go
++++ b/helper/e2e_test.go
+@@ -141,6 +141,7 @@ func TestRealFFmpegEndToEnd(t *testing.T) {
+ 		}
+ 	}
+ 
++	token := assertPrivateCastURL(t, url, "index.m3u8")
+ 	resp, err := http.Get(url)
+ 	if err != nil {
+ 		t.Fatal(err)
+@@ -153,6 +154,9 @@ func TestRealFFmpegEndToEnd(t *testing.T) {
+ 	}
+ 	// AAC expected: stereo FLAC goes down the ≤2ch branch
+ 	segURL := strings.Replace(url, "index.m3u8", "init.mp4", 1)
++	if !strings.Contains(segURL, "/"+token+"/") {
++		t.Fatalf("relative HLS asset URL lost cast token: %q", segURL)
++	}
+ 	resp2, err := http.Get(segURL)
+ 	if err != nil {
+ 		t.Fatal(err)
+@@ -215,9 +219,7 @@ func TestRealFFmpegSubtitledEndToEnd(t *testing.T) {
+ 	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+ 
+ 	url := waitReady(t, stdout, 60*time.Second)
+-	if !strings.HasSuffix(url, "/master.m3u8") {
+-		t.Fatalf("subtitled cast must advertise master.m3u8, got %q", url)
+-	}
++	token := assertPrivateCastURL(t, url, "master.m3u8")
+ 
+ 	resp, err := http.Get(url)
+ 	if err != nil {
+@@ -244,6 +246,9 @@ func TestRealFFmpegSubtitledEndToEnd(t *testing.T) {
+ 	// The rendition playlist and its first segment must be fetchable, and the
+ 	// cue text must have survived the WebVTT conversion.
+ 	vttPlaylistURL := strings.Replace(url, "master.m3u8", mediaURI(subLine), 1)
++	if !strings.Contains(vttPlaylistURL, "/"+token+"/") {
++		t.Fatalf("relative subtitle playlist URL lost cast token: %q", vttPlaylistURL)
++	}
+ 	resp2, err := http.Get(vttPlaylistURL)
+ 	if err != nil {
+ 		t.Fatal(err)
+@@ -264,14 +269,18 @@ func TestRealFFmpegSubtitledEndToEnd(t *testing.T) {
+ 	if seg == "" {
+ 		t.Fatalf("no segment in vtt playlist:\n%s", body2)
+ 	}
+-	resp3, err := http.Get(strings.Replace(url, "master.m3u8", seg, 1))
++	segmentURL := strings.Replace(url, "master.m3u8", seg, 1)
++	if !strings.Contains(segmentURL, "/"+token+"/") {
++		t.Fatalf("relative video segment URL lost cast token: %q", segmentURL)
++	}
++	resp3, err := http.Get(segmentURL)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	body3, _ := io.ReadAll(resp3.Body)
+ 	resp3.Body.Close()
+ 	if !strings.Contains(string(body3), "hello from iina-airplay") {
+-		t.Fatalf("cue text missing from first vtt segment:\n%s", body3)
++		t.Fatalf("cue text missing from first vtt segment %q (URL %q):\n%s", seg, segmentURL, body3)
+ 	}
+ }
+ 
+diff --git a/helper/main.go b/helper/main.go
+index b08607e..db11aa5 100644
+--- a/helper/main.go
++++ b/helper/main.go
+@@ -3,9 +3,11 @@ package main
+ import (
+ 	"flag"
+ 	"fmt"
++	"net"
+ 	"os"
+ 	"os/signal"
+ 	"path/filepath"
++	"strconv"
+ 	"syscall"
+ 	"time"
+ )
+@@ -91,7 +93,10 @@ func runServe(argv []string) {
+ 	if _, err := os.Stat(c.FFmpeg); err != nil {
+ 		fail("ffmpeg not found at " + c.FFmpeg + " — reinstall the plugin through IINA's plugin installer")
+ 	}
+-	if err := os.MkdirAll(c.OutDir, 0o755); err != nil {
++	if err := os.MkdirAll(c.OutDir, 0o700); err != nil {
++		fail(err.Error())
++	}
++	if err := os.Chmod(c.OutDir, 0o700); err != nil {
+ 		fail(err.Error())
+ 	}
+ 	pidfile = filepath.Join(c.OutDir, "helper.pid")
+@@ -111,16 +116,20 @@ func runServe(argv []string) {
+ 	if fi, serr := os.Stat(c.Source); serr == nil {
+ 		srcSize = fi.Size()
+ 	}
+-	port, shutdown, err := StartServer(c.OutDir, c.SubName, c.SubLang, EstimateBandwidth(srcSize, c.Duration))
++	ip, err := LanIP()
+ 	if err != nil {
+ 		fail(err.Error())
+ 	}
+-	defer shutdown()
+-
+-	ip, err := LanIP()
++	token, err := NewCastToken()
++	if err != nil {
++		fail("could not create a private cast URL")
++	}
++	port, shutdown, err := StartServer(c.OutDir, c.SubName, c.SubLang,
++		EstimateBandwidth(srcSize, c.Duration), ip, token)
+ 	if err != nil {
+ 		fail(err.Error())
+ 	}
++	defer shutdown()
+ 
+ 	var done <-chan error
+ 	stopJob, done = RunJob(c, os.Stdout)
+@@ -146,7 +155,7 @@ func runServe(argv []string) {
+ 	// it points at (media + subtitle rendition) must exist too before the
+ 	// URL is usable.
+ 	playlistName := c.PlaylistName()
+-	readyURL := fmt.Sprintf("http://%s:%d/%s", ip, port, playlistName)
++	readyURL := fmt.Sprintf("http://%s/%s/%s", net.JoinHostPort(ip, strconv.Itoa(port)), token, playlistName)
+ 	playlistReady := func() bool {
+ 		if _, err := os.Stat(filepath.Join(c.OutDir, playlistName)); err != nil {
+ 			return false
+diff --git a/helper/main_test.go b/helper/main_test.go
+index d8481a1..ce13922 100644
+--- a/helper/main_test.go
++++ b/helper/main_test.go
+@@ -7,9 +7,11 @@ import (
+ 	"fmt"
+ 	"io"
+ 	"net/http"
++	"net/url"
+ 	"os"
+ 	"os/exec"
+ 	"path/filepath"
++	"regexp"
+ 	"strings"
+ 	"testing"
+ 	"time"
+@@ -105,6 +107,9 @@ func TestLocateHelper(t *testing.T) {
+ func TestServeEndToEndWithStub(t *testing.T) {
+ 	bin := buildHelper(t)
+ 	out := t.TempDir()
++	if err := os.Chmod(out, 0o755); err != nil {
++		t.Fatal(err)
++	}
+ 	// Stub ffmpeg: writes a playlist like the real one would, then idles like a
+ 	// long transcode so `serve` stays up.
+ 	stub := filepath.Join(t.TempDir(), "ffmpeg")
+@@ -156,9 +161,17 @@ func TestServeEndToEndWithStub(t *testing.T) {
+ 			t.Fatal("no ready event within 15s")
+ 		}
+ 	}
+-	if !strings.HasSuffix(readyURL, "/index.m3u8") || strings.Contains(readyURL, "127.0.0.1") {
++	assertPrivateCastURL(t, readyURL, "index.m3u8")
++	if strings.Contains(readyURL, "127.0.0.1") {
+ 		t.Fatalf("bad ready url %q", readyURL)
+ 	}
++	info, err := os.Stat(out)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if info.Mode().Perm() != 0o700 {
++		t.Fatalf("cast directory permissions = %04o, want 0700", info.Mode().Perm())
++	}
+ 	resp, err := http.Get(readyURL)
+ 	if err != nil {
+ 		t.Fatal(err)
+@@ -216,9 +229,7 @@ func TestServeWithSubsAdvertisesRewrittenMaster(t *testing.T) {
+ 	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+ 
+ 	readyURL := waitReady(t, stdout, 15*time.Second)
+-	if !strings.HasSuffix(readyURL, "/master.m3u8") {
+-		t.Fatalf("with subs the helper must advertise the master playlist, got %q", readyURL)
+-	}
++	assertPrivateCastURL(t, readyURL, "master.m3u8")
+ 	resp, err := http.Get(readyURL)
+ 	if err != nil {
+ 		t.Fatal(err)
+@@ -231,6 +242,20 @@ func TestServeWithSubsAdvertisesRewrittenMaster(t *testing.T) {
+ 	}
+ }
+ 
++func assertPrivateCastURL(t *testing.T, rawURL, playlist string) string {
++	t.Helper()
++	u, err := url.Parse(rawURL)
++	if err != nil {
++		t.Fatalf("invalid cast URL %q: %v", rawURL, err)
++	}
++	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
++	if u.Scheme != "http" || len(parts) != 2 || parts[1] != playlist ||
++		!regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(parts[0]) {
++		t.Fatalf("cast URL does not have a random token path: %q", rawURL)
++	}
++	return parts[0]
++}
++
+ func TestServeCleansStaleSubtitleFiles(t *testing.T) {
+ 	bin := buildHelper(t)
+ 	out := t.TempDir()
+diff --git a/helper/playlist.go b/helper/playlist.go
+index a7c91bb..aeadae0 100644
+--- a/helper/playlist.go
++++ b/helper/playlist.go
+@@ -3,6 +3,7 @@ package main
+ import (
+ 	"strconv"
+ 	"strings"
++	"unicode"
+ )
+ 
+ // fallbackBandwidth is the BANDWIDTH advertised when the source's size or
+@@ -101,8 +102,22 @@ func setAttr(attrs []string, key, val string) []string {
+ 	return append(attrs, key+"="+val)
+ }
+ 
+-// quoteAttr renders a quoted-string attribute value; interior double quotes
+-// are illegal in the format, so they are stripped rather than escaped.
++// quoteAttr renders a quoted-string attribute value; quotes and controls are
++// removed, and newlines become spaces so media metadata cannot inject lines.
+ func quoteAttr(v string) string {
+-	return `"` + strings.ReplaceAll(v, `"`, "") + `"`
++	var safe strings.Builder
++	safe.Grow(len(v))
++	for _, r := range v {
++		switch {
++		case r == '"':
++			continue
++		case r == '\r' || r == '\n':
++			safe.WriteByte(' ')
++		case unicode.IsControl(r):
++			continue
++		default:
++			safe.WriteRune(r)
++		}
++	}
++	return `"` + safe.String() + `"`
+ }
+diff --git a/helper/playlist_test.go b/helper/playlist_test.go
+index f17a1ce..1226550 100644
+--- a/helper/playlist_test.go
++++ b/helper/playlist_test.go
+@@ -66,6 +66,17 @@ func TestRewriteRespectsQuotedCommasAndQuotesInName(t *testing.T) {
+ 	}
+ }
+ 
++func TestRewriteRemovesPlaylistLineInjectionFromMetadata(t *testing.T) {
++	in := `#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="default",NAME="subtitle_0",DEFAULT=NO,URI="index_vtt.m3u8"`
++	out := RewriteMasterPlaylist(in, "English\r\n#EXTINF:999,Injected", "en\nseg_0000.m4s")
++	if strings.Count(out, "\n") != strings.Count(in, "\n") {
++		t.Fatalf("media metadata injected playlist lines:\n%s", out)
++	}
++	if !strings.Contains(out, `NAME="English  #EXTINF:999,Injected"`) || strings.Contains(out, "LANGUAGE=\"en\n") {
++		t.Fatalf("metadata controls were not sanitized:\n%s", out)
++	}
++}
++
+ func TestRewriteIgnoresNonSubtitleMediaLines(t *testing.T) {
+ 	in := `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="a",DEFAULT=NO,URI="a.m3u8"`
+ 	if got := RewriteMasterPlaylist(in, "English", "en"); got != in {
+diff --git a/helper/server.go b/helper/server.go
+index 72df6cc..5cf8e8c 100644
+--- a/helper/server.go
++++ b/helper/server.go
+@@ -2,12 +2,16 @@ package main
+ 
+ import (
+ 	"context"
++	"crypto/subtle"
+ 	"io"
+ 	"mime"
+ 	"net"
+ 	"net/http"
+ 	"os"
++	"path"
+ 	"path/filepath"
++	"strconv"
++	"strings"
+ 	"time"
+ )
+ 
+@@ -27,21 +31,30 @@ func init() {
+ // one; everything else is a plain file serve. subName/subLang may be empty
+ // (no-subs casts never produce a master.m3u8, so the rewrite path simply
+ // never runs for them).
+-func StartServer(dir, subName, subLang string, bandwidth int) (int, func(), error) {
+-	ln, err := net.Listen("tcp", "0.0.0.0:0")
++func StartServer(dir, subName, subLang string, bandwidth int, lanIP, token string) (int, func(), error) {
++	ln, err := net.Listen("tcp", net.JoinHostPort(lanIP, "0"))
+ 	if err != nil {
+ 		return 0, nil, err
+ 	}
+ 	files := http.FileServer(http.Dir(dir))
+ 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-		if r.URL.Path == "/master.m3u8" {
++		name, ok := authorizedArtifact(r.URL.Path, token)
++		if !ok {
++			http.NotFound(w, r)
++			return
++		}
++		w.Header().Set("Cache-Control", "no-store")
++		if name == "master.m3u8" {
+ 			if b, rerr := os.ReadFile(filepath.Join(dir, "master.m3u8")); rerr == nil {
+ 				w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+ 				io.WriteString(w, EnsureVariant(RewriteMasterPlaylist(string(b), subName, subLang), bandwidth))
+ 				return
+ 			}
+ 		}
+-		files.ServeHTTP(w, r)
++		fileRequest := r.Clone(r.Context())
++		fileRequest.URL.Path = "/" + name
++		fileRequest.URL.RawPath = ""
++		files.ServeHTTP(w, fileRequest)
+ 	})
+ 	srv := &http.Server{Handler: handler}
+ 	go srv.Serve(ln)
+@@ -52,3 +65,46 @@ func StartServer(dir, subName, subLang string, bandwidth int) (int, func(), erro
+ 	}
+ 	return ln.Addr().(*net.TCPAddr).Port, shutdown, nil
+ }
++
++// authorizedArtifact accepts only the random per-cast path and files the HLS
++// muxer is expected to create. No request can list the output directory or
++// read helper.pid, even after a client obtains the cast URL.
++func authorizedArtifact(requestPath, token string) (string, bool) {
++	parts := strings.SplitN(strings.TrimPrefix(requestPath, "/"), "/", 2)
++	if len(parts) != 2 || len(parts[0]) != len(token) ||
++		subtle.ConstantTimeCompare([]byte(parts[0]), []byte(token)) != 1 {
++		return "", false
++	}
++	name := parts[1]
++	if name == "" || path.Clean(name) != name || strings.ContainsAny(name, `/\\`) {
++		return "", false
++	}
++	if !allowedCastArtifact(name) {
++		return "", false
++	}
++	return name, true
++}
++
++func allowedCastArtifact(name string) bool {
++	switch name {
++	case "index.m3u8", "master.m3u8", "index_vtt.m3u8", "init.mp4":
++		return true
++	}
++	for _, suffix := range []string{".m4s", ".vtt"} {
++		prefix := "seg_"
++		if suffix == ".vtt" && strings.HasPrefix(name, "index") {
++			prefix = "index"
++		}
++		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
++			continue
++		}
++		sequence := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
++		if sequence == "" {
++			return false
++		}
++		if _, err := strconv.ParseUint(sequence, 10, 64); err == nil {
++			return true
++		}
++	}
++	return false
++}
+diff --git a/helper/server_test.go b/helper/server_test.go
+index 4fad4fd..d9a97e5 100644
+--- a/helper/server_test.go
++++ b/helper/server_test.go
+@@ -10,18 +10,20 @@ import (
+ 	"testing"
+ )
+ 
++const testCastToken = "0123456789abcdef0123456789abcdef"
++
+ func TestServerMIMEAndRange(t *testing.T) {
+ 	dir := t.TempDir()
+ 	os.WriteFile(filepath.Join(dir, "index.m3u8"), []byte("#EXTM3U\n"), 0o644)
+ 	os.WriteFile(filepath.Join(dir, "seg_0000.m4s"), []byte("0123456789"), 0o644)
+ 
+-	port, shutdown, err := StartServer(dir, "", "", 0)
++	port, shutdown, err := StartServer(dir, "", "", 0, "127.0.0.1", testCastToken)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	defer shutdown()
+ 
+-	base := fmt.Sprintf("http://127.0.0.1:%d", port)
++	base := fmt.Sprintf("http://127.0.0.1:%d/%s", port, testCastToken)
+ 
+ 	resp, err := http.Get(base + "/index.m3u8")
+ 	if err != nil {
+@@ -54,12 +56,12 @@ func TestServerRewritesMasterPlaylist(t *testing.T) {
+ 	os.WriteFile(filepath.Join(dir, "master.m3u8"), []byte(master), 0o644)
+ 	os.WriteFile(filepath.Join(dir, "seg_0000.vtt"), []byte("WEBVTT\n"), 0o644)
+ 
+-	port, shutdown, err := StartServer(dir, "English", "en", 0)
++	port, shutdown, err := StartServer(dir, "English", "en", 0, "127.0.0.1", testCastToken)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	defer shutdown()
+-	base := fmt.Sprintf("http://127.0.0.1:%d", port)
++	base := fmt.Sprintf("http://127.0.0.1:%d/%s", port, testCastToken)
+ 
+ 	resp, err := http.Get(base + "/master.m3u8")
+ 	if err != nil {
+@@ -87,12 +89,12 @@ func TestServerRewritesMasterPlaylist(t *testing.T) {
+ 
+ func TestServerMissingMasterFallsThrough(t *testing.T) {
+ 	dir := t.TempDir()
+-	port, shutdown, err := StartServer(dir, "", "", 0)
++	port, shutdown, err := StartServer(dir, "", "", 0, "127.0.0.1", testCastToken)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	defer shutdown()
+-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/master.m3u8", port))
++	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/%s/master.m3u8", port, testCastToken))
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -110,13 +112,13 @@ func TestServerAddsVariantToIncompleteMaster(t *testing.T) {
+ 	dir := t.TempDir()
+ 	os.WriteFile(filepath.Join(dir, "master.m3u8"), []byte(ffmpegMasterNoVariant), 0o644)
+ 
+-	port, shutdown, err := StartServer(dir, "English", "en", 7_000_000)
++	port, shutdown, err := StartServer(dir, "English", "en", 7_000_000, "127.0.0.1", testCastToken)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	defer shutdown()
+ 
+-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/master.m3u8", port))
++	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/%s/master.m3u8", port, testCastToken))
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -130,3 +132,39 @@ func TestServerAddsVariantToIncompleteMaster(t *testing.T) {
+ 		t.Fatalf("subtitle rewrite must still apply:\n%s", s)
+ 	}
+ }
++
++func TestServerRejectsUnauthenticatedAndUnlistedPaths(t *testing.T) {
++	dir := t.TempDir()
++	os.WriteFile(filepath.Join(dir, "index.m3u8"), []byte("#EXTM3U\n"), 0o644)
++	os.WriteFile(filepath.Join(dir, "helper.pid"), []byte("1234\n"), 0o644)
++	port, shutdown, err := StartServer(dir, "", "", 0, "127.0.0.1", testCastToken)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer shutdown()
++	base := fmt.Sprintf("http://127.0.0.1:%d", port)
++	for _, path := range []string{"/", "/index.m3u8", "/wrong-token/index.m3u8",
++		"/" + testCastToken + "/helper.pid", "/" + testCastToken + "/../helper.pid",
++		"/" + testCastToken + "/indexx.vtt", "/" + testCastToken + "/index-1.vtt"} {
++		resp, err := http.Get(base + path)
++		if err != nil {
++			t.Fatalf("GET %q: %v", path, err)
++		}
++		resp.Body.Close()
++		if resp.StatusCode != http.StatusNotFound {
++			t.Errorf("GET %q status=%d, want 404", path, resp.StatusCode)
++		}
++	}
++	resp, err := http.Get(base + "/" + testCastToken + "/index.m3u8")
++	if err != nil {
++		t.Fatal(err)
++	}
++	resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		t.Fatalf("authorized playlist status=%d, want 200", resp.StatusCode)
++	}
++
++	if !allowedCastArtifact("index0.vtt") || !allowedCastArtifact("seg_0000.vtt") {
++		t.Fatal("expected FFmpeg subtitle segment names to be allowed")
++	}
++}
+diff --git a/helper/token.go b/helper/token.go
+new file mode 100644
+index 0000000..a6c4d56
+--- /dev/null
++++ b/helper/token.go
+@@ -0,0 +1,16 @@
++package main
++
++import (
++	"crypto/rand"
++	"encoding/hex"
++)
++
++// NewCastToken returns a random 128-bit path capability. It is held only in
++// process memory and shared only with the selected AirPlay receiver URL.
++func NewCastToken() (string, error) {
++	var value [16]byte
++	if _, err := rand.Read(value[:]); err != nil {
++		return "", err
++	}
++	return hex.EncodeToString(value[:]), nil
++}
+diff --git a/helper/token_test.go b/helper/token_test.go
+new file mode 100644
+index 0000000..b0d4c23
+--- /dev/null
++++ b/helper/token_test.go
+@@ -0,0 +1,23 @@
++package main
++
++import (
++	"regexp"
++	"testing"
++)
++
++func TestNewCastTokenIsUnpredictableAndURLSafe(t *testing.T) {
++	first, err := NewCastToken()
++	if err != nil {
++		t.Fatal(err)
++	}
++	second, err := NewCastToken()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(first) {
++		t.Fatalf("token is not a 128-bit lowercase hex path segment: %q", first)
++	}
++	if first == second {
++		t.Fatal("two independently generated cast tokens were identical")
++	}
++}

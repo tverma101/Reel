@@ -26,7 +26,7 @@ printUsageHelp() {
   echo -e "    ${GREEN}$0 [--arch] <ARCH>:${NC}       Architecture to download dylibs for: universal | arm64 | x86_64"
   echo -e "    ${GREEN}$0 [--yt-dlp-src] <SRC>:${NC}  Source to download youtube-dl from: github | iina"
   echo -e "    ${GREEN}$0 [--parallel] <N>:${NC}      Number of parallel downloads (default: 5)"
-  echo -e "    ${GREEN}$0 [--skip-plugins]:${NC}      Skip downloading official plugins"
+  echo -e "    ${GREEN}$0 [--skip-plugins]:${NC}      Skip optional upstream plugins (Reel AirPlay is still bundled)"
   echo
 }
 
@@ -206,8 +206,6 @@ mkdir -p "$PLUGIN_PATH"
 
 if [[ "$SKIP_PLUGINS" == true ]]; then
   echo -e "${YELLOW}Skipping official plugin downloads.${NC}"
-  echo -e "${GREEN}All downloads completed.${NC}"
-  exit 0
 fi
 
 fetch_latest_plugin_asset() {
@@ -312,8 +310,12 @@ download_plugin() {
   echo -e "${GREEN}Downloaded ${asset_name}${NC}"
 }
 
-download_plugin "iina/plugin-online-media" "iina-plugin-ytdl" || exit 1
-download_plugin "iina/plugin-userscript" "iina-plugin-userscript" || exit 1
-download_plugin "iina/plugin-opensub" "iina-plugin-opensub" || exit 1
+if [[ "$SKIP_PLUGINS" != true ]]; then
+  download_plugin "iina/plugin-online-media" "iina-plugin-ytdl" || exit 1
+  download_plugin "iina/plugin-userscript" "iina-plugin-userscript" || exit 1
+  download_plugin "iina/plugin-opensub" "iina-plugin-opensub" || exit 1
+fi
+
+bash "$ROOT_PATH/other/download_airplay_plugin.sh" || exit 1
 
 echo -e "${GREEN}All downloads completed.${NC}"

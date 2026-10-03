@@ -10,16 +10,18 @@
    subtitle** switch and also stays off unless you enable it.
 3. Turn on **Search online subtitles automatically**, then play a local video longer than the
    automatic-search threshold (20 minutes by default) with no loaded subtitle track. Reel searches
-   SubDL. One unambiguous exact title/year/episode match can load automatically; other results open
-   the ordinary chooser with the best match preselected. Results remain in provider order. The
-   release name is supplied by an uploader, so an exact-name match is useful evidence but not proof
-   that every line is correct.
+   SubDL. An unambiguous exact title/year/episode match with SubDL's confident match score (0.8+)
+   can load automatically; other results open the ordinary chooser with the best match preselected.
+   Results remain in provider order. The release name is supplied by an uploader, so an exact-name
+   match is useful evidence but not proof that every line is correct.
 
 [SubDL's current developer documentation](https://subdl.com/developers) requires a key for API
-searches and lists 2,000 searches plus 50 authenticated downloads per day on its free tier.
-[The older API documentation](https://subdl.com/api-doc) describes an anonymous limit of 300
-ordinary downloads per IP, but that does not enable anonymous API searches. Limits may change.
-Reel uses the documented raw-file download links and does not extract provider archives.
+searches and lists daily free-tier quotas of 2,000 searches and 50 downloads. Limits may change;
+check SubDL's API panel for the account's current quota. Reel uses the returned raw-file download
+link, limits search and subtitle response sizes, rejects archive payloads, and does not extract
+provider archives. Reel's SubDL path handles per-file results; it does not expand season packs or
+download subtitle files for other episodes in a pack. If the file has no per-episode match, use a
+manual provider search or load a subtitle file yourself.
 
 ## Manual selection and fallback
 
@@ -28,7 +30,8 @@ selectable even when SubDL is the automatic source. A manual OpenSubtitles searc
 result list, including a single result, without pre-downloading candidates. Selecting a result
 spends one download. The separate **Check OpenSubtitles dialogue against audio** switch is off by
 default because it can use up to three downloads per search; when enabled, it checks a short audio
-sample locally and may allow an exact dialogue match to load automatically.
+sample locally. VAD may identify timing alignment but cannot auto-select on timing alone; only a
+same-language dialogue match can permit automatic selection.
 
 Podnapisi and YIFY were suggested as additional sources, but this checkout does not run browser
 scrapers for them. Downloaded files from those sites can be loaded through Subtitles → Load External
@@ -49,7 +52,9 @@ appears, playback stops, or a different file opens. On macOS 26 and later, Reel 
 installed speech-language list. If no model for that language is installed, it stops instead of
 repeatedly decoding chunks; toggle the caption setting off and on after installing one to retry. If
 the speech framework cannot provide a compatible audio format, Reel also stops after its initial
-check. Captions can lag and recognition can make mistakes.
+check. Apple's changing draft captions replace text for the overlapping audio range, including when
+the framework revokes a draft because it detects no speech there. Captions can lag and recognition
+can make mistakes.
 
 A local playback check showed the Apple-generated caption over a subtitle-free video, then showed
 a manually loaded `.srt` in its place. This verifies that path on this Mac, not every speech

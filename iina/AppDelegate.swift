@@ -284,10 +284,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
                 Logger.log("Skipped \(plugin.identifier), already installed")
                 return
               }
+              let requiresExplicitAirPlayConsent = plugin.identifier == "dev.faruk.iina-airplay"
+              if requiresExplicitAirPlayConsent {
+                plugin.enabled = false
+              }
               plugin.normalizePath()
               JavascriptPlugin.plugins.append(plugin)
-              plugin.enabled = true
-              Logger.log("Installed \(plugin.identifier)")
+              if !requiresExplicitAirPlayConsent {
+                plugin.enabled = true
+              }
+              Logger.log("Installed \(plugin.identifier)\(requiresExplicitAirPlayConsent ? " disabled pending permission approval" : "")")
             } catch let error {
               hasError = true
               Logger.log(error.localizedDescription, level: .error)
@@ -302,6 +308,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         FirstRunManager.unsetFirstRun(for: .init("installedDefaultPlugins"))
       }
     }
+
+    installBundledAirPlayPluginIfNeeded()
 
     // handle arguments
     let arguments = ProcessInfo.processInfo.arguments.dropFirst()
@@ -350,6 +358,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     shouldIgnoreOpenFile = true
     commandLineStatus.isCommandLine = true
     commandLineStatus.filenames = iinaArgFilenames
+  }
+
+  /// Reel updates do not rerun the general first-launch plugin installer. Install the bundled
+  /// AirPlay plugin once for existing users, but leave it disabled until the user approves its
+  /// filesystem permission in the Plugins settings.
+  private func installBundledAirPlayPluginIfNeeded() {
+    guard let pluginsDirectory = Bundle.main.resourceURL?.appendingPathComponent("plugins", isDirectory: true) else {
+      return
+    }
+    let packageURL = pluginsDirectory.appendingPathComponent("iina-airplay.iinaplgz", isDirectory: false)
+    guard FileManager.default.fileExists(atPath: packageURL.path) else { return }
+
+    let migrationKey = FirstRunManager.Key("installedBundledAirPlayPlugin")
+    guard FirstRunManager.isFirstRun(for: migrationKey) else { return }
+    do {
+      let plugin = try JavascriptPlugin.create(fromPackageURL: packageURL)
+      guard plugin.identifier == "dev.faruk.iina-airplay" else {
+        FirstRunManager.unsetFirstRun(for: migrationKey)
+        Logger.log("Bundled AirPlay package has unexpected identifier \(plugin.identifier)", level: .error)
+        return
+      }
+      if JavascriptPlugin.plugins.contains(where: { $0.identifier == plugin.identifier }) {
+        Logger.log("Bundled AirPlay plugin is already installed; preserving the user's current state")
+        return
+      }
+      plugin.enabled = false
+      plugin.normalizePath()
+      JavascriptPlugin.plugins.append(plugin)
+      Logger.log("Installed bundled AirPlay plugin disabled pending permission approval")
+    } catch {
+      FirstRunManager.unsetFirstRun(for: migrationKey)
+      Logger.log("Unable to install bundled AirPlay plugin: \(error.localizedDescription)", level: .error)
+    }
   }
 
   deinit {

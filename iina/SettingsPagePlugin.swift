@@ -404,7 +404,21 @@ extension PluginListView: NSTableViewDelegate, NSTableViewDataSource {
     }
 
     @objc func enabledSwitchAction(_ sender: NSSwitch) {
-      plugin.enabled = sender.state == .on
+      let shouldEnable = sender.state == .on
+      guard shouldEnable else {
+        plugin.enabled = false
+        return
+      }
+      guard plugin.identifier == "dev.faruk.iina-airplay", !plugin.permissions.isEmpty else {
+        plugin.enabled = true
+        return
+      }
+      sender.state = .off
+      Task { @MainActor in
+        guard await pluginManager.showPermissionsSheet(forPlugin: plugin) else { return }
+        plugin.enabled = true
+        sender.state = .on
+      }
     }
 
     @objc func actionsBtnAction(_ sender: NSButton) {

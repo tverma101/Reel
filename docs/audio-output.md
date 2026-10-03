@@ -52,6 +52,10 @@ equivalent device for the new driver; if there is no equivalent, the device is
 shown as missing in the settings popup rather than silently pretending it is
 still usable.
 
+Audio-device output is separate from Reel's bundled AirPlay video-casting plugin.
+For casting the current video to an Apple TV while keeping Reel as the remote, see
+[AirPlay video casting](airplay-casting.md).
+
 ## What has and has not been verified
 
 The behavior described above is what the code does. It has not been exercised

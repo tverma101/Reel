@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A3E2D44D81584AF491EC0701 /* SubDLSearchResultParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3E2D44D81584AF491EC0702 /* SubDLSearchResultParser.swift */; };
+		D9B1767F0CB34787AF5B4B01 /* SpeechCaptionResultStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9B1767F0CB34787AF5B4B02 /* SpeechCaptionResultStore.swift */; };
 		3EB9DF44DD05478D9CBE77EF /* SubtitleAudioMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = E96DA2816B5A4253BB63AA35 /* SubtitleAudioMatcher.swift */; };
 		7E28504B65A44CBCAA1D4047 /* SubDLSubtitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E28504B65A44CBCAA1D4048 /* SubDLSubtitle.swift */; };
 		7E28504B65A44CBCAA1D4049 /* AppleLiveCaptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E28504B65A44CBCAA1D4050 /* AppleLiveCaptions.swift */; };
@@ -538,6 +540,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A3E2D44D81584AF491EC0702 /* SubDLSearchResultParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubDLSearchResultParser.swift; sourceTree = "<group>"; };
+		D9B1767F0CB34787AF5B4B02 /* SpeechCaptionResultStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechCaptionResultStore.swift; sourceTree = "<group>"; };
 		E96DA2816B5A4253BB63AA35 /* SubtitleAudioMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubtitleAudioMatcher.swift; sourceTree = "<group>"; };
 		7E28504B65A44CBCAA1D4048 /* SubDLSubtitle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubDLSubtitle.swift; sourceTree = "<group>"; };
 		7E28504B65A44CBCAA1D4050 /* AppleLiveCaptions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleLiveCaptions.swift; sourceTree = "<group>"; };
@@ -2245,6 +2249,8 @@
 		84A886E21E24F2D3008755BB /* Sub */ = {
 			isa = PBXGroup;
 			children = (
+				A3E2D44D81584AF491EC0702 /* SubDLSearchResultParser.swift */,
+				D9B1767F0CB34787AF5B4B02 /* SpeechCaptionResultStore.swift */,
 				E96DA2816B5A4253BB63AA35 /* SubtitleAudioMatcher.swift */,
 				7E28504B65A44CBCAA1D4048 /* SubDLSubtitle.swift */,
 				7E28504B65A44CBCAA1D4050 /* AppleLiveCaptions.swift */,
@@ -3062,6 +3068,8 @@
 				84ED99FF1E009C8100A5159B /* PrefAdvancedViewController.swift in Sources */,
 				51CA83E22E35AD6300A44B22 /* MPVAudioDevice.swift in Sources */,
 				840AF5841E73CE3900F4AF92 /* OpenSubSubtitle.swift in Sources */,
+				A3E2D44D81584AF491EC0701 /* SubDLSearchResultParser.swift in Sources */,
+				D9B1767F0CB34787AF5B4B01 /* SpeechCaptionResultStore.swift in Sources */,
 				3EB9DF44DD05478D9CBE77EF /* SubtitleAudioMatcher.swift in Sources */,
 				7E28504B65A44CBCAA1D4047 /* SubDLSubtitle.swift in Sources */,
 				7E28504B65A44CBCAA1D4049 /* AppleLiveCaptions.swift in Sources */,
