@@ -53,6 +53,8 @@ plugin maintainer or an online subtitle service.
 - Reel's helper hardening is the patch in
   [`other/iina-airplay-reel.patch`](../other/iina-airplay-reel.patch). The build script applies it,
   runs the upstream Go and JavaScript tests, builds a universal helper, and repackages the plugin.
+  Preparing the package requires Go 1.26.4 or newer, Node.js with the built-in test runner, and
+  Xcode command-line tools. `--skip-plugins` skips optional upstream plugins but still builds AirPlay.
 - The plugin and helper changes are MIT licensed. The complete upstream MIT notice is included as
   `LICENSE` inside the plugin archive and in Reel's in-app credits.
 - The bundled FFmpeg 9.0.1 binary is unmodified and built with LGPL components only. Its LGPL 2.1

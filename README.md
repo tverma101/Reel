@@ -78,7 +78,9 @@ Reel uses mpv for media playback. To build Reel, you can either fetch copies of 
 8. Build the project.
 
 The build script prepares Reel's pinned AirPlay plugin even when run with
-`--skip-plugins`; that option skips optional upstream plugin downloads.
+`--skip-plugins`; that option skips optional upstream plugin downloads. Plugin
+preparation requires Go 1.26.4 or newer, Node.js with the built-in test runner,
+and Xcode command-line tools for universal helper assembly and signing.
 
 ## Subtitle setup
 
