@@ -271,7 +271,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
     // Bound result growth: chunks arrive throughout the session, so discard text the playhead can
     // no longer reach without a seek (a seek resets the store wholesale).
     captionResults.removeCues(endingBefore: position - 20)
-    let text = captionResults.text(at: position)
+    let text = captionResults.text(at: position, playbackRate: player.info.playSpeed)
     if overlay.textField.stringValue != text { overlay.textField.stringValue = text }
     overlay.isHidden = text.isEmpty
 

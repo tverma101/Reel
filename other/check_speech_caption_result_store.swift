@@ -60,6 +60,23 @@ struct SpeechCaptionResultStoreChecks {
     displayStore.removeCues(endingBefore: 40.8)
     check(displayStore.cues.map(\.text) == ["Current"], "prunes cues before the playback window")
 
+    var lateCueStore = SpeechCaptionResultStore()
+    lateCueStore.applyProgressiveResult(chunkStart: 40, audioStart: 40, audioEnd: 42,
+                                        text: "Late chunk", receivedAt: 100)
+    check(lateCueStore.text(at: 45, now: 101) == "Late chunk",
+          "briefly shows a recently arrived cue after the playhead passed its timing range")
+    check(lateCueStore.text(at: 45, now: 103.1).isEmpty,
+          "hides a delayed cue after the arrival grace expires")
+    check(lateCueStore.text(at: 50, now: 101).isEmpty,
+          "does not show a delayed cue when media-time lag is excessive")
+    check(lateCueStore.text(at: 47, now: 101, playbackRate: 2) == "Late chunk",
+          "scales the media-time grace with playback speed")
+
+    lateCueStore.applyProgressiveResult(chunkStart: 40, audioStart: 45, audioEnd: 46,
+                                        text: "Current chunk", receivedAt: 101)
+    check(lateCueStore.text(at: 45.2, now: 101.1) == "Current chunk",
+          "active timing takes precedence over the delayed-cue grace")
+
     var timeline = SpeechCaptionPlaybackTimeline()
     check(!timeline.movedBack(to: 100), "the first playhead sample establishes a baseline")
     check(!timeline.movedBack(to: 99.5), "small playhead jitter does not reset captions")

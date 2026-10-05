@@ -54,7 +54,8 @@ repeatedly decoding chunks; toggle the caption setting off and on after installi
 the speech framework cannot provide a compatible audio format, Reel also stops after its initial
 check. Apple's changing draft captions replace text for the overlapping audio range, including when
 the framework revokes a draft because it detects no speech there. Captions can lag and recognition
-can make mistakes.
+can make mistakes. A recently returned caption may appear briefly after its media-time range has
+passed so chunk-processing delay does not leave a gap at the overlay.
 
 A local playback check showed the Apple-generated caption over a subtitle-free video, then showed
 a manually loaded `.srt` in its place. This verifies that path on this Mac, not every speech
