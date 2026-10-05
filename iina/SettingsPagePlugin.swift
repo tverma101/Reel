@@ -223,6 +223,7 @@ fileprivate class PluginListView: SettingsAccessory.Base {
 
     override func viewDidMoveToWindow() {
       super.viewDidMoveToWindow()
+      listView.reload()
       listView.checkForAllPluginUpdates()
     }
   }
@@ -233,6 +234,7 @@ fileprivate class PluginListView: SettingsAccessory.Base {
 
   let tableView: TableView
   unowned let page: SettingsPagePlugin
+  private var pluginChangedObserver: NSObjectProtocol?
 
   init(page: SettingsPagePlugin) {
     self.tableView = TableView()
@@ -250,9 +252,20 @@ fileprivate class PluginListView: SettingsAccessory.Base {
     tableView.registerForDraggedTypes([.iinaPluginID])
     tableView.gridStyleMask = .solidHorizontalGridLineMask
     tableView.translatesAutoresizingMaskIntoConstraints = false
+    pluginChangedObserver = NotificationCenter.default.addObserver(forName: .iinaPluginChanged,
+                                                                    object: nil,
+                                                                    queue: .main) { [weak self] _ in
+      self?.reload()
+    }
 
     view.addSubview(tableView)
     tableView.padding(.all(0))
+  }
+
+  deinit {
+    if let pluginChangedObserver {
+      NotificationCenter.default.removeObserver(pluginChangedObserver)
+    }
   }
 
   func reload() {
