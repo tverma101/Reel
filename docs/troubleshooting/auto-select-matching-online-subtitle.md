@@ -32,6 +32,10 @@ of audio decoded locally from the current file. A sample near the end of a short
 shorter. Audio is not uploaded. The check is a short sample, not proof that the full subtitle
 matches the whole film.
 
+If the search is canceled or the current media changes, Reel dismisses the progress display and
+does not start another provider request or candidate download. A request already in flight may
+finish; after a canceled OpenSubtitles quota response, Reel does not fetch the subtitle file.
+
 Reel runs a small Silero voice-activity model against every parseable candidate, whether or not
 OpenSubtitles reports a movie-hash match. A timing label requires at least two speech segments to
 align with dialogue cues, with at least 75% of the detected speech within 0.7 seconds of a cue. The

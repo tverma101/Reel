@@ -317,7 +317,7 @@ enum SubtitleAudioMatcher {
     guard index < candidates.count else { return .value(prepared) }
     guard !cancellation.isCancelled else { return Promise(error: MatcherError.cancelled) }
     let subtitle = candidates[index]
-    return subtitle.download().then { urls -> Promise<[DownloadedCandidate]> in
+    return subtitle.download(cancellation: cancellation).then { urls -> Promise<[DownloadedCandidate]> in
       var next = prepared
       next.append(DownloadedCandidate(subtitle: subtitle, fileURL: urls.first))
       return downloadCandidates(candidates, index: index + 1, prepared: next, cancellation: cancellation)

@@ -33,6 +33,10 @@ default because it can use up to three downloads per search; when enabled, it ch
 sample locally. VAD may identify timing alignment but cannot auto-select on timing alone; only a
 same-language dialogue match can permit automatic selection.
 
+Canceling a search closes its progress display and prevents the next provider or verification step
+from starting. A request already in flight may finish; if an OpenSubtitles quota response arrives
+after cancellation, Reel stops before fetching the candidate subtitle file.
+
 Podnapisi and YIFY were suggested as additional sources, but this checkout does not run browser
 scrapers for them. Downloaded files from those sites can be loaded through Subtitles → Load External
 Subtitle or the Subtitles sidebar. The file picker accepts `.srt` even on macOS versions that give

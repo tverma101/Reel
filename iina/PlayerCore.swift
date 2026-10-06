@@ -265,6 +265,9 @@ class PlayerCore: NSObject {
     // Clear first so the cancel action cannot run twice, and so a re-entrant call is a no-op.
     cancelOnlineSubtitleSearch = nil
     cancel()
+    // A provider can still be awaiting an uncancellable request. Its completion is ignored once
+    // the search ID is cleared, so dismiss the non-auto-hiding progress OSD here as well.
+    if hadSearch { hideOSD() }
   }
 
   /// For supporting mpv `--shuffle` arg, to shuffle playlist when launching from command line

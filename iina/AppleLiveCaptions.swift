@@ -865,6 +865,9 @@ final class AppleLiveCaptions: @unchecked Sendable {
             }
           }
         }
+        // This is an unstructured task. Always stop its result consumer when this chunk exits,
+        // including cancellation and timeout paths, so it cannot outlive the analyzer session.
+        defer { results.cancel() }
         do {
           let last = try await analyzer.analyzeSequence(stream)
           if let last { try await analyzer.finalizeAndFinish(through: last) }
