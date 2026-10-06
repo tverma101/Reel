@@ -31,7 +31,7 @@
 Reel does not ship signed releases yet; build it from source (see *Building* below) or check this repository's releases. For the original IINA application, visit the [upstream IINA release page](https://github.com/iina/iina/releases) or the [IINA official website](https://iina.io/) — that project deserves your downloads and stars, not this fork.
 
 > [!IMPORTANT]
-> Reel disables IINA's update appcast on purpose. A fork must never silently replace itself with upstream builds, so Sparkle update checks are inert here.
+> Reel does not configure an application update appcast, so Sparkle automatic checks and its first-launch permission prompt are disabled. Community plugin updates remain available in Settings → Plugins.
 
 ## Building
 

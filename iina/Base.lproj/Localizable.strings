@@ -803,7 +803,7 @@
 "settings.opensub.manual_help" = "OpenSubtitles remains available for manual search. Results open a chooser so you can select a subtitle before downloading. Optional audio checking uses your download quota.";
 "settings.$LiveCaptions" = "Apple Live Captions";
 "settings.appleLiveCaptionsFallback.label" = "Caption video when no subtitles are available";
-"settings.appleLiveCaptionsFallback.desc" = "Caption local video with no subtitle track using Apple's on-device speech engine. macOS 26 and later uses SpeechTranscriber; older systems ask for Speech Recognition permission. Captions follow playback and stop when a subtitle track appears.";
+"settings.appleLiveCaptionsFallback.desc" = "Caption local video with no subtitle track using Apple's on-device speech engine. macOS 26 and later uses SpeechTranscriber; older systems ask for Speech Recognition permission. Captions follow playback and stop when a subtitle track appears. Their appearance follows Subtitle Text and Position settings, including font, size, color, border, shadow, alignment, margins, and window scaling.";
 "settings.appleLiveCaptionsLanguage.label" = "Speech language";
 "settings.appleLiveCaptionsLanguage.desc" = "Leave empty to use the Mac's current language, or enter a language tag such as en-US. On-device recognition must be available for that language.";
 "live_captions.accessibility" = "Apple live captions";

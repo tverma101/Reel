@@ -2002,26 +2002,38 @@ class PlayerCore: NSObject {
 
   func setSubTextColor(_ colorString: String) {
     mpv.setString("options/" + MPVOption.Subtitles.subColor, colorString)
+    info.subtitleStyleOverrides.textColor = colorString
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextSize(_ size: Double) {
     mpv.setDouble("options/" + MPVOption.Subtitles.subFontSize, size)
+    info.subtitleStyleOverrides.size = size
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBold(_ bold: Bool) {
     mpv.setFlag("options/" + MPVOption.Subtitles.subBold, bold)
+    info.subtitleStyleOverrides.bold = bold
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBorderColor(_ colorString: String) {
     mpv.setString("options/" + MPVOption.Subtitles.subOutlineColor, colorString)
+    info.subtitleStyleOverrides.borderColor = colorString
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBorderSize(_ size: Double) {
     mpv.setDouble("options/" + MPVOption.Subtitles.subOutlineSize, size)
+    info.subtitleStyleOverrides.borderSize = size
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBgColor(_ colorString: String) {
     mpv.setString("options/" + MPVOption.Subtitles.subBackColor, colorString)
+    info.subtitleStyleOverrides.backgroundColor = colorString
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubEncoding(_ encoding: String) {
@@ -2031,6 +2043,8 @@ class PlayerCore: NSObject {
 
   func setSubFont(_ font: String) {
     mpv.setString(MPVOption.Subtitles.subFont, font)
+    info.subtitleStyleOverrides.font = font
+    postNotification(.iinaSubStyleChanged)
   }
 
   func savePlaybackPosition() {

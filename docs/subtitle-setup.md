@@ -57,6 +57,18 @@ the framework revokes a draft because it detects no speech there. Captions can l
 can make mistakes. A recently returned caption may appear briefly after its media-time range has
 passed so chunk-processing delay does not leave a gap at the overlay.
 
+Caption appearance follows the existing Settings → Subtitles → Text and Position controls. Font,
+size, bold/italic, color, outline or box style, shadow, character spacing, alignment, margins,
+vertical position, and scaling with the window update while captions are active. The player’s
+Subtitles sidebar also applies its live scale, position, font, size, color, and border controls to
+generated captions. Long captions wrap
+inside the available video width, with extra inset for the glyph outline and shadow. If a long
+caption cannot fit vertically at the selected size, Reel reduces that caption's font size until
+the full text fits; later captions return to the selected size. Position stays inside the video and
+updates when the text or window size changes. The default uses the configured text with its outline
+and shadow instead of a permanent caption card. These controls style the generated words; they do
+not edit the speech recognizer's transcript.
+
 A local playback check showed the Apple-generated caption over a subtitle-free video, then showed
 a manually loaded `.srt` in its place. This verifies that path on this Mac, not every speech
 language or media format.

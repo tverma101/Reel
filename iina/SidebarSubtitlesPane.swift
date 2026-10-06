@@ -490,6 +490,9 @@ fileprivate class SubStyleView: NSView {
     player.observe(.iinaSubScaleChanged) { [unowned self] _ in
       updateScale()
     }
+    player.observe(.iinaSubStyleChanged) { [unowned self] _ in
+      updateTextStyle()
+    }
   }
 
   private func createColorWell(_ keyPath: ReferenceWritableKeyPath<SubStyleView, NSColorWell?>, tag: Int) -> NSColorWell {
@@ -513,7 +516,7 @@ fileprivate class SubStyleView: NSView {
   }
 
   private func updateScale() {
-    let subFont = Preference.string(for: .subTextFont) ??
+    let subFont = player.info.subtitleStyleOverrides.font ?? Preference.string(for: .subTextFont) ??
       NSLocalizedString("sidebar.font", comment: "");
     fontChooser.title = subFont
 
@@ -523,10 +526,14 @@ fileprivate class SubStyleView: NSView {
   }
 
   private func updateTextStyle() {
-    let fontSize = Int(Preference.float(for: .subTextSize))
+    let subFont = player.info.subtitleStyleOverrides.font ?? Preference.string(for: .subTextFont) ??
+      NSLocalizedString("sidebar.font", comment: "")
+    fontChooser.title = subFont
+
+    let fontSize = Int(player.info.subtitleStyleOverrides.size ?? Double(Preference.float(for: .subTextSize)))
     fontSizePicker.selectItem(withTitle: fontSize.description)
 
-    let borderWidth = Double(Preference.float(for: .subBorderSize))
+    let borderWidth = player.info.subtitleStyleOverrides.borderSize ?? Double(Preference.float(for: .subBorderSize))
     borderSizePicker.selectItem(at: -1)
     borderSizePicker.itemArray.forEach { item in
       if borderWidth == Double(item.title) {
@@ -539,7 +546,13 @@ fileprivate class SubStyleView: NSView {
       (Preference.Key.subBorderColorString, borderColorWell),
       (Preference.Key.subShadowColorString, backgroundColorWell),
     ] {
-      if let colorString = Preference.string(for: key), let color = NSColor(mpvColorString: colorString) {
+      let runtimeColor: String? = switch key {
+      case .subTextColorString: player.info.subtitleStyleOverrides.textColor
+      case .subBorderColorString: player.info.subtitleStyleOverrides.borderColor
+      case .subShadowColorString: player.info.subtitleStyleOverrides.backgroundColor
+      default: nil
+      }
+      if let colorString = runtimeColor ?? Preference.string(for: key), let color = NSColor(mpvColorString: colorString) {
         colorWell?.color = color
       }
     }

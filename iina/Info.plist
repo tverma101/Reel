@@ -1381,6 +1381,8 @@
 	</array>
 	<key>com.colliderli.iina.build.branch</key>
 	<string>IINA_BUILD_BRANCH</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
 	<key>com.colliderli.iina.build.commit</key>
 	<string>IINA_BUILD_COMMIT</string>
 	<key>com.colliderli.iina.build.configuration</key>
