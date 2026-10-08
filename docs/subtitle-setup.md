@@ -56,10 +56,13 @@ appears, playback stops, or a different file opens. On macOS 26 and later, Reel 
 installed speech-language list. If no model for that language is installed, it stops instead of
 repeatedly decoding chunks; toggle the caption setting off and on after installing one to retry. If
 the speech framework cannot provide a compatible audio format, Reel also stops after its initial
-check. Apple's changing draft captions replace text for the overlapping audio range, including when
-the framework revokes a draft because it detects no speech there. Captions can lag and recognition
-can make mistakes. A recently returned caption may appear briefly after its media-time range has
-passed so chunk-processing delay does not leave a gap at the overlay.
+check. Reel asks the recognizer for final results only, with word timings, so on-screen text does
+not rewrite itself as drafts change. The words are grouped into short lines (about 42 characters
+or 4 seconds, broken at pauses and sentence ends). Each line appears when its first word is spoken
+and stays about a second after its last word, and only one line is shown at a time. Timing follows
+the audio clock (`audio-pts`), so a per-file **Audio Delay** shifts captions together with the
+sound rather than the picture. Recognition can make mistakes. A recently returned caption may still
+appear briefly after its time has passed, so chunk-processing delay does not leave a gap.
 
 Caption appearance follows the existing Settings → Subtitles → Text and Position controls. Font,
 size, bold/italic, color, outline or box style, shadow, character spacing, alignment, margins,
@@ -70,7 +73,8 @@ inside the available video width, with extra inset for the glyph outline and sha
 caption cannot fit vertically at the selected size, Reel reduces that caption's font size until
 the full text fits; later captions return to the selected size. Position stays inside the video and
 updates when the text or window size changes. The default uses the configured text with its outline
-and shadow instead of a permanent caption card. These controls style the generated words; they do
+and shadow instead of a permanent caption card. The default font is the system font, and the outline
+is drawn behind the letters so it does not thin them. These controls style the generated words; they do
 not edit the speech recognizer's transcript.
 
 A local playback check showed the Apple-generated caption over a subtitle-free video, then showed

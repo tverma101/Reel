@@ -66,7 +66,9 @@ project; Reel ships under its own name, bundle identifier, and icon.
   It also captions `http`/`https` streams, reading only the audio track over
   one kept-open connection (`FFmpegAudioChunkReader` in
   `iina/FFmpegController.m`), and can be switched from the Subtitles menu and
-  the Subtitles sidebar as well as Settings.
+  the Subtitles sidebar as well as Settings. Captions use final, word-timed
+  results shown one line at a time, follow the audio clock (so audio delay
+  moves them with the sound), and draw the outline behind the letters.
 
 ### AirPlay video casting
 

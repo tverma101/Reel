@@ -22,8 +22,53 @@ struct SpeechCaptionResultStore {
     }
   }
 
+  /// A recognized word (or a run of words sharing one timestamp) with its media-time range. The text
+  /// keeps the recognizer's own spacing and punctuation.
+  struct TimedWord: Equatable {
+    let text: String
+    let start: Double
+    let end: Double
+  }
+
   private static let lateCueArrivalGrace: TimeInterval = 3
   private static let maximumLateCueMediaLag: Double = 10
+  /// How long a line stays up after its last word when nothing follows, so short pauses do not
+  /// make the caption blink.
+  private static let lineHold: Double = 1
+  /// A caption may appear this much before its first word.
+  private static let leadIn: Double = 0.15
+
+  /// Groups words into subtitle-sized lines: at most `maxCharacters`, at most `maxDuration` seconds,
+  /// and broken at sentence ends and at pauses, so each line is on screen while it is being said.
+  static func captionLines(from words: [TimedWord], maxCharacters: Int = 42, maxDuration: Double = 4,
+                           pauseBreak: Double = 0.8) -> [TimedWord] {
+    var lines: [TimedWord] = []
+    var text = ""
+    var start = 0.0
+    var end = 0.0
+    func flush() {
+      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !trimmed.isEmpty { lines.append(TimedWord(text: trimmed, start: start, end: end)) }
+      text = ""
+    }
+    for word in words where word.start.isFinite && word.end.isFinite && word.end >= word.start {
+      let pending = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !pending.isEmpty {
+        let combined = (text + word.text).trimmingCharacters(in: .whitespacesAndNewlines)
+        if combined.count > maxCharacters || word.end - start > maxDuration || word.start - end > pauseBreak {
+          flush()
+        }
+      }
+      if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { start = word.start }
+      text += word.text
+      end = max(end, word.end)
+      if let last = word.text.trimmingCharacters(in: .whitespacesAndNewlines).last, ".?!".contains(last) {
+        flush()
+      }
+    }
+    flush()
+    return lines
+  }
 
   private(set) var cues: [Cue] = []
 
@@ -41,6 +86,23 @@ struct SpeechCaptionResultStore {
     cues.append(Cue(chunkStart: chunkStart, start: audioStart,
                     end: max(audioStart + 0.7, audioEnd), audioEnd: audioEnd,
                     text: text, receivedAt: receivedAt))
+    sortCues()
+  }
+
+  /// Stores a final result as caption lines built from its word timings.
+  mutating func applyFinalResult(chunkStart: Double, words: [TimedWord],
+                                 receivedAt: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+    let lines = Self.captionLines(from: words)
+    guard chunkStart.isFinite, chunkStart >= 0, let first = lines.first, let last = lines.last,
+          last.end > first.start else { return }
+    cues.removeAll {
+      $0.chunkStart == chunkStart && $0.start < last.end && first.start < $0.audioEnd
+    }
+    for line in lines where line.start >= 0 {
+      let audioEnd = max(line.end, line.start + 0.001)
+      cues.append(Cue(chunkStart: chunkStart, start: line.start, end: max(line.start + 0.7, audioEnd),
+                      audioEnd: audioEnd, text: line.text, receivedAt: receivedAt))
+    }
     sortCues()
   }
 
@@ -69,13 +131,11 @@ struct SpeechCaptionResultStore {
   func text(at position: Double, now: TimeInterval = ProcessInfo.processInfo.systemUptime,
             playbackRate: Double = 1) -> String {
     guard position.isFinite, now.isFinite else { return "" }
-    var activeCues: [Cue] = []
-    for cue in cues.reversed() where position >= cue.start - 0.15 && position <= cue.end + 0.6 {
-      activeCues.append(cue)
-      if activeCues.count == 2 { break }
-    }
-    if !activeCues.isEmpty {
-      return activeCues.reversed().map(\.text).joined(separator: " ")
+    // One line at a time: the latest line that has started replaces the one before it, and stays
+    // up briefly after its last word.
+    if let current = cues.last(where: { position >= $0.start - Self.leadIn }),
+       position <= current.end + Self.lineHold {
+      return current.text
     }
 
     // Recognition runs on a decoded chunk and may finish after the playhead has passed a cue.

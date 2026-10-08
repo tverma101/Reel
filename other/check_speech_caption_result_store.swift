@@ -51,8 +51,8 @@ struct SpeechCaptionResultStoreChecks {
       SpeechCaptionResultStore.Cue(chunkStart: 40, start: 40.2, end: 45.1, audioEnd: 44.1, text: "Two"),
       SpeechCaptionResultStore.Cue(chunkStart: 40, start: 40.4, end: 45.2, audioEnd: 44.2, text: "Three"),
     ])
-    check(displayStore.text(at: 41) == "Two Three",
-          "renders only the latest two active cues at the requested media position")
+    check(displayStore.text(at: 41) == "Three",
+          "renders only the latest line that has started at the requested media position")
     displayStore.replaceChunk(40, with: [
       SpeechCaptionResultStore.Cue(chunkStart: 40, start: 40, end: 40.7, audioEnd: 40.2, text: "Expired"),
       SpeechCaptionResultStore.Cue(chunkStart: 40, start: 41, end: 42, audioEnd: 41.5, text: "Current"),
@@ -76,6 +76,39 @@ struct SpeechCaptionResultStoreChecks {
                                         text: "Current chunk", receivedAt: 101)
     check(lateCueStore.text(at: 45.2, now: 101.1) == "Current chunk",
           "active timing takes precedence over the delayed-cue grace")
+
+    typealias Word = SpeechCaptionResultStore.TimedWord
+    let words = [
+      Word(text: "Did", start: 1.0, end: 1.2), Word(text: " he", start: 1.2, end: 1.3),
+      Word(text: " do", start: 1.3, end: 1.5), Word(text: " that", start: 1.5, end: 1.7),
+      Word(text: " to", start: 1.7, end: 1.8), Word(text: " save", start: 1.8, end: 2.0),
+      Word(text: " me?", start: 2.0, end: 2.3), Word(text: " Maybe", start: 2.5, end: 2.8),
+      Word(text: " later", start: 4.0, end: 4.3),
+    ]
+    let lines = SpeechCaptionResultStore.captionLines(from: words)
+    check(lines.map(\.text) == ["Did he do that to save me?", "Maybe", "later"],
+          "lines break at sentence ends and at pauses")
+    check(lines.first?.start == 1.0 && lines.first?.end == 2.3, "a line spans its first and last word")
+    let long = (0..<20).map { Word(text: " word\($0)", start: Double($0) * 0.2, end: Double($0) * 0.2 + 0.15) }
+    check(SpeechCaptionResultStore.captionLines(from: long).allSatisfy { $0.text.count <= 42 },
+          "long speech is split into lines of at most 42 characters")
+    let slow = (0..<6).map { Word(text: " w\($0)", start: Double($0) * 0.75, end: Double($0) * 0.75 + 0.5) }
+    check(SpeechCaptionResultStore.captionLines(from: slow).allSatisfy { $0.end - $0.start <= 4 },
+          "a line covers at most four seconds of speech")
+
+    var finalStore = SpeechCaptionResultStore()
+    finalStore.applyFinalResult(chunkStart: 0, words: words)
+    check(finalStore.cues.map(\.text) == ["Did he do that to save me?", "Maybe", "later"],
+          "a final result becomes one cue per line")
+    check(finalStore.text(at: 0.8).isEmpty, "a line does not appear well before it is spoken")
+    check(finalStore.text(at: 1.6) == "Did he do that to save me?", "the spoken line is shown")
+    check(finalStore.text(at: 2.6) == "Maybe", "the next line replaces the previous one")
+    check(finalStore.text(at: 3.5) == "Maybe", "a line stays up through a short pause")
+    check(finalStore.text(at: 3.9) == "later", "the following line appears just before it is spoken")
+    check(finalStore.text(at: 5.8, now: 1_000_000).isEmpty, "a line clears after its hold when nothing follows")
+    finalStore.applyFinalResult(chunkStart: 0, words: [Word(text: "Replaced", start: 1.0, end: 2.0)])
+    check(finalStore.cues.map(\.text) == ["Replaced", "Maybe", "later"],
+          "a later result for the same audio replaces the overlapping line")
 
     var timeline = SpeechCaptionPlaybackTimeline()
     check(!timeline.movedBack(to: 100), "the first playhead sample establishes a baseline")

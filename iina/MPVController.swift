@@ -881,6 +881,13 @@ class MPVController: NSObject {
     return data
   }
 
+  /// Like `getDouble`, but `nil` when mpv cannot provide the property right now.
+  func getDoubleIfAvailable(_ name: String) -> Double? {
+    var data = Double()
+    guard mpv_get_property(mpv, name, MPV_FORMAT_DOUBLE, &data) >= 0, data.isFinite else { return nil }
+    return data
+  }
+
   func getFlag(_ name: String) -> Bool {
     var data = Int32()
     mpv_get_property(mpv, name, MPV_FORMAT_FLAG, &data)

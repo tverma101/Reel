@@ -27,21 +27,34 @@ private struct LiveCaptionAppearance {
   let cornerRadius: CGFloat
   let characterSpacing: CGFloat
 
-  var textAttributes: [NSAttributedString.Key: Any] {
-    var attributes: [NSAttributedString.Key: Any] = [
-      .font: font,
-      .foregroundColor: textColor,
-      .paragraphStyle: paragraphStyle,
-    ]
-    if let strokeColor, let strokeWidth {
-      attributes[.strokeColor] = strokeColor
-      attributes[.strokeWidth] = strokeWidth
-    }
-    if let shadow {
-      attributes[.shadow] = shadow
-    }
+  private var baseAttributes: [NSAttributedString.Key: Any] {
+    var attributes: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraphStyle]
     if characterSpacing != 0 {
       attributes[.kern] = characterSpacing
+    }
+    return attributes
+  }
+
+  /// The letters themselves. They carry the shadow only when there is no outline layer to cast it.
+  var textAttributes: [NSAttributedString.Key: Any] {
+    var attributes = baseAttributes
+    attributes[.foregroundColor] = textColor
+    if outlineAttributes == nil, let shadow {
+      attributes[.shadow] = shadow
+    }
+    return attributes
+  }
+
+  /// The outline, drawn as a filled and stroked copy behind the letters. A stroke drawn on the
+  /// letters themselves would cover half of every glyph and make the text look thin and grey.
+  var outlineAttributes: [NSAttributedString.Key: Any]? {
+    guard let strokeColor, let strokeWidth else { return nil }
+    var attributes = baseAttributes
+    attributes[.foregroundColor] = strokeColor
+    attributes[.strokeColor] = strokeColor
+    attributes[.strokeWidth] = strokeWidth
+    if let shadow {
+      attributes[.shadow] = shadow
     }
     return attributes
   }
@@ -76,6 +89,7 @@ private struct LiveCaptionAppearance {
 
 private final class LiveCaptionOverlay: NSView {
   let textField = NSTextField(labelWithString: "")
+  private let outlineField = NSTextField(labelWithString: "")
   private var displayedText = ""
   private var captionAppearance: LiveCaptionAppearance?
   private var textLeadingConstraint: NSLayoutConstraint!
@@ -87,16 +101,20 @@ private final class LiveCaptionOverlay: NSView {
     super.init(frame: frameRect)
     translatesAutoresizingMaskIntoConstraints = false
     wantsLayer = true
-    textField.translatesAutoresizingMaskIntoConstraints = false
-    textField.isBordered = false
-    textField.isEditable = false
-    textField.isSelectable = false
-    textField.drawsBackground = false
-    textField.focusRingType = .none
-    textField.lineBreakMode = .byWordWrapping
-    textField.usesSingleLineMode = false
-    textField.maximumNumberOfLines = 0
-    textField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    for field in [outlineField, textField] {
+      field.translatesAutoresizingMaskIntoConstraints = false
+      field.isBordered = false
+      field.isEditable = false
+      field.isSelectable = false
+      field.drawsBackground = false
+      field.focusRingType = .none
+      field.lineBreakMode = .byWordWrapping
+      field.usesSingleLineMode = false
+      field.maximumNumberOfLines = 0
+      field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    }
+    outlineField.setAccessibilityElement(false)
+    addSubview(outlineField)
     addSubview(textField)
     textLeadingConstraint = textField.leadingAnchor.constraint(equalTo: leadingAnchor)
     textTrailingConstraint = textField.trailingAnchor.constraint(equalTo: trailingAnchor)
@@ -107,6 +125,10 @@ private final class LiveCaptionOverlay: NSView {
       textTrailingConstraint,
       textTopConstraint,
       textBottomConstraint,
+      outlineField.leadingAnchor.constraint(equalTo: textField.leadingAnchor),
+      outlineField.trailingAnchor.constraint(equalTo: textField.trailingAnchor),
+      outlineField.topAnchor.constraint(equalTo: textField.topAnchor),
+      outlineField.bottomAnchor.constraint(equalTo: textField.bottomAnchor),
     ])
     isHidden = true
     setAccessibilityLabel(NSLocalizedString("live_captions.accessibility", comment: ""))
@@ -129,6 +151,7 @@ private final class LiveCaptionOverlay: NSView {
     textField.alignment = appearance.alignment
     textField.maximumNumberOfLines = 0
     textField.preferredMaxLayoutWidth = appearance.maximumTextWidth
+    outlineField.preferredMaxLayoutWidth = appearance.maximumTextWidth
     textLeadingConstraint.constant = appearance.horizontalPadding
     textTrailingConstraint.constant = -appearance.horizontalPadding
     textTopConstraint.constant = appearance.verticalPadding
@@ -141,10 +164,18 @@ private final class LiveCaptionOverlay: NSView {
   private func renderText() {
     guard let captionAppearance else {
       textField.stringValue = displayedText
+      outlineField.stringValue = ""
       return
     }
     textField.attributedStringValue = NSAttributedString(string: displayedText,
                                                           attributes: captionAppearance.textAttributes)
+    if let outlineAttributes = captionAppearance.outlineAttributes {
+      outlineField.attributedStringValue = NSAttributedString(string: displayedText, attributes: outlineAttributes)
+      outlineField.isHidden = false
+    } else {
+      outlineField.stringValue = ""
+      outlineField.isHidden = true
+    }
   }
 
   func measuredCaptionHeight() -> CGFloat {
@@ -230,6 +261,10 @@ final class AppleLiveCaptions: @unchecked Sendable {
   /// Confined to `decodeQueue`.
   private var chunkReader: FFmpegAudioChunkReader?
   private var chunkReaderSource: String?
+  /// How far the audio being heard is ahead of the picture (audio delay plus output latency), as
+  /// last measured. Kept between measurements so the caption clock never jumps when mpv briefly
+  /// cannot report the audio position.
+  private var audioOffset: Double?
 
   init(player: PlayerCore) { self.player = player }
 
@@ -349,8 +384,10 @@ final class AppleLiveCaptions: @unchecked Sendable {
     paragraphStyle.alignment = textAlignment
     paragraphStyle.lineBreakMode = .byWordWrapping
 
+    // The stroke is centred on the glyph edge and the letters cover its inner half, so it is drawn
+    // at twice the outline size.
     let strokeWidth: CGFloat? = borderStyle == .outlineAndShadow && borderSize > 0 ?
-      -min(50, borderSize / fontSize * 100) : nil
+      -min(100, 2 * borderSize / fontSize * 100) : nil
     let shadow: NSShadow? = shadowSize > 0 && shadowColor.alphaComponent > 0 ? {
       let value = NSShadow()
       value.shadowColor = shadowColor
@@ -617,6 +654,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
     requestedStart = nil
     exhaustedAtPosition = nil
     activeURL = nil
+    audioOffset = nil
     playbackTimeline.reset()
     inFlight = false
     recognitionStartedAt = nil
@@ -630,7 +668,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
   }
 
   private func startTimer() {
-    timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+    timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
       self?.tick()
     }
   }
@@ -664,18 +702,22 @@ final class AppleLiveCaptions: @unchecked Sendable {
       playbackTimeline.reset()
       streamDecodeFailures = 0
       abandonedURL = nil
+      audioOffset = nil
       activeURL = url
     }
     // The UI timer stops after the OSC hides. Keep the cached position current so the chunk
     // scheduler continues through a normal playback session with no visible controls.
     player.syncPositionIfNeeded()
-    guard let position = player.info.videoPosition?.second, position.isFinite, position >= 0 else {
+    guard let videoPosition = player.info.videoPosition?.second, videoPosition.isFinite, videoPosition >= 0 else {
       stop()
       return
     }
+    let position = captionClock(videoPosition: videoPosition)
     if playbackTimeline.movedBack(to: position) {
       // The playhead can move backward without crossing the current recognition chunk boundary.
       // Invalidate that work and clear text from the previous pass through this time range.
+      Logger.log("Apple live captions reset: playhead moved back to \(position)s",
+                 level: .debug, subsystem: Logger.Sub.onlinesub)
       generation += 1
       cancelDecode()
       task?.cancel()
@@ -701,6 +743,8 @@ final class AppleLiveCaptions: @unchecked Sendable {
     guard player.info.state == .playing, abandonedURL != url else { return }
     if inFlight, let recognitionStartedAt,
        Date().timeIntervalSince(recognitionStartedAt) > 15 {
+      Logger.log("Apple live captions: chunk \(requestedStart ?? -1)s timed out",
+                 level: .debug, subsystem: Logger.Sub.onlinesub)
       generation += 1
       cancelDecode()
       task?.cancel()
@@ -710,9 +754,13 @@ final class AppleLiveCaptions: @unchecked Sendable {
       inFlight = false
       self.recognitionStartedAt = nil
     }
+    // The next chunk is requested before the playhead reaches it, so the playhead is normally inside
+    // the chunk before `requestedStart`. Anything outside that and the requested chunk is a seek.
     if let requestedStart,
-       position < requestedStart - 1 || position >= requestedStart + chunkDuration * 2 {
+       position < requestedStart - chunkDuration - 1 || position >= requestedStart + chunkDuration * 2 {
       // A seek invalidates both a pending recognition result and the displayed cues.
+      Logger.log("Apple live captions reset: \(position)s is outside chunk \(requestedStart)s",
+                 level: .debug, subsystem: Logger.Sub.onlinesub)
       generation += 1
       cancelDecode()
       task?.cancel()
@@ -734,12 +782,33 @@ final class AppleLiveCaptions: @unchecked Sendable {
         return
       }
     }
-    // A stream has to reconnect and probe before each chunk, so it starts the next one earlier.
-    let lookahead: Double = url.isFileURL ? 2 : 6
+    // Captions wait for final text, so the next chunk starts well before it is needed; a stream
+    // starts earlier still in case its connection has to be reopened.
+    let lookahead: Double = url.isFileURL ? 4 : 6
     if !inFlight && (requestedStart == nil || position >= requestedStart! + chunkDuration - lookahead) {
       let start = requestedStart.map { $0 + chunkDuration } ?? floor(position / chunkDuration) * chunkDuration
       transcribe(url: url, start: start)
     }
+  }
+
+  /// Captions follow the sound, not the picture. mpv's audio position is the media time of the
+  /// audio being heard, so it already includes the audio delay setting and the output device's
+  /// latency (an AirPlay speaker, for example). The video position is used when there is no audio.
+  private func captionClock(videoPosition: Double) -> Double {
+    guard let player, let aid = player.info.aid, aid > 0 else { return videoPosition }
+    if let audioPosition = player.mpv.getDoubleIfAvailable(MPVProperty.audioPts), audioPosition >= 0 {
+      let measured = audioPosition - videoPosition
+      if abs(measured) < 30 {
+        // Smooth small jitter between the two positions; follow a real change (such as a new audio
+        // delay) straight away.
+        if let audioOffset, abs(measured - audioOffset) < 0.3 {
+          self.audioOffset = audioOffset * 0.9 + measured * 0.1
+        } else {
+          audioOffset = measured
+        }
+      }
+    }
+    return max(0, videoPosition + (audioOffset ?? 0))
   }
 
   /// Runs on `decodeQueue`. Reuses the open reader for the same media; replaces it after an error.
@@ -772,6 +841,8 @@ final class AppleLiveCaptions: @unchecked Sendable {
       duration = chunkDuration
     }
     requestedStart = start
+    Logger.log("Apple live captions: transcribing \(start)s for \(duration)s",
+               level: .debug, subsystem: Logger.Sub.onlinesub)
     guard duration >= 1 else {
       exhaustedAtPosition = mediaDuration
       inFlight = false
@@ -826,22 +897,21 @@ final class AppleLiveCaptions: @unchecked Sendable {
         }
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.requiresOnDeviceRecognition = true
-        request.shouldReportPartialResults = true
+        // Chunks are transcribed ahead of playback, so there is time to wait for the final text.
+        // Partial results would be shown and then rewritten while they are on screen.
+        request.shouldReportPartialResults = false
         request.taskHint = .dictation
         self.task = recognizer.recognitionTask(with: request) { [weak self] result, error in
           DispatchQueue.main.async {
             guard let self, self.generation == token, self.player?.info.currentURL == url else { return }
             if let result {
-              let replacements = result.bestTranscription.segments.compactMap { segment -> SpeechCaptionResultStore.Cue? in
-                let text = segment.substring.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { return nil }
-                let begin = start + segment.timestamp
-                let audioEnd = begin + max(segment.duration, 0.001)
-                return SpeechCaptionResultStore.Cue(chunkStart: start, start: begin,
-                                                     end: begin + max(segment.duration, 0.7),
-                                                     audioEnd: audioEnd, text: text)
+              let words = result.bestTranscription.segments.map { segment in
+                SpeechCaptionResultStore.TimedWord(text: " " + segment.substring,
+                                                   start: start + segment.timestamp,
+                                                   end: start + segment.timestamp + max(segment.duration, 0.001))
               }
-              self.captionResults.replaceChunk(start, with: replacements)
+              self.captionResults.replaceChunk(start, with: [])
+              self.captionResults.applyFinalResult(chunkStart: start, words: words)
               self.captionResults.removeCues(endingBefore: (self.player?.info.videoPosition?.second ?? 0) - 20)
             }
             if result?.isFinal == true || error != nil {
@@ -868,7 +938,10 @@ final class AppleLiveCaptions: @unchecked Sendable {
     analyzerTask = Task { [weak self] in
       guard let captions = self else { return }
       do {
-        let transcriber = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
+        // Final results only: chunks are transcribed ahead of playback, so the text does not need to
+        // be shown as a draft and rewritten on screen. Word timings place each caption line.
+        let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [],
+                                            attributeOptions: [.audioTimeRange])
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
           Logger.log("Apple live captions have no installed on-device model for \(locale.identifier)",
                      level: .warning, subsystem: Logger.Sub.onlinesub)
@@ -908,13 +981,26 @@ final class AppleLiveCaptions: @unchecked Sendable {
         let results = Task {
           for try await result in transcriber.results {
             guard !Task.isCancelled else { break }
-            let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
-            let begin = start + result.range.start.seconds
-            let end = start + result.range.end.seconds
+            guard result.isFinal else { continue }
+            var words: [SpeechCaptionResultStore.TimedWord] = []
+            for run in result.text.runs {
+              let text = String(result.text[run.range].characters)
+              if let range = run[AttributeScopes.SpeechAttributes.TimeRangeAttribute.self] {
+                words.append(.init(text: text, start: start + range.start.seconds, end: start + range.end.seconds))
+              } else if let last = words.popLast() {
+                // Punctuation can arrive as its own run without a time range.
+                words.append(.init(text: last.text + text, start: last.start, end: last.end))
+              }
+            }
+            if words.isEmpty {
+              let text = String(result.text.characters)
+              words = [.init(text: text, start: start + result.range.start.seconds, end: start + result.range.end.seconds)]
+            }
             await MainActor.run {
               guard captions.generation == token, captions.player?.info.currentURL == url else { return }
-              captions.captionResults.applyProgressiveResult(chunkStart: start, audioStart: begin,
-                                                              audioEnd: end, text: text)
+              captions.captionResults.applyFinalResult(chunkStart: start, words: words)
+              Logger.log("Apple live captions: \(words.count) words at \(words.first?.start ?? -1)s for chunk \(start)s",
+                         level: .debug, subsystem: Logger.Sub.onlinesub)
             }
           }
         }
