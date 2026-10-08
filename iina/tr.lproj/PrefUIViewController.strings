@@ -32,7 +32,7 @@
 "92n-Uq-o4G.title" = "alt";
 
 /* Class = "NSTextFieldCell"; title = "When the macOS Reduce Motion accessibility setting is enabled IINA will reduce user interface animations that are known to cause problems for those with vestibular disorders. Should that be insufficient, this setting can be used to reduce motion further by eliminating user interface animations."; ObjectID = "9IR-Sf-wMq"; */
-"9IR-Sf-wMq.title" = "macOS’in Hareketi Azalt erişilebilirlik ayarı etkinleştirildiğinde IINA, vestibüler bozukluğu olanlar için sorunlara neden olduğu bilinen kullanıcı arayüzü animasyonlarını azaltacaktır. Bunun yetersiz olması durumunda, bu ayar kullanıcı arayüzü animasyonlarını ortadan kaldırarak hareketi daha da azaltmak için kullanılabilir.";
+"9IR-Sf-wMq.title" = "macOS’in Hareketi Azalt erişilebilirlik ayarı etkinleştirildiğinde Reel, vestibüler bozukluğu olanlar için sorunlara neden olduğu bilinen kullanıcı arayüzü animasyonlarını azaltacaktır. Bunun yetersiz olması durumunda, bu ayar kullanıcı arayüzü animasyonlarını ortadan kaldırarak hareketi daha da azaltmak için kullanılabilir.";
 
 /* Class = "NSMenuItem"; title = "% of screen"; ObjectID = "AE4-BD-wZi"; */
 "AE4-BD-wZi.title" = "Ekran yüzdesi";

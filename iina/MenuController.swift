@@ -195,6 +195,7 @@ class MenuController: NSObject, NSMenuDelegate {
   @IBOutlet weak var findOnlineSub: NSMenuItem!
   @IBOutlet weak var onlineSubSourceMenu: NSMenu!
   @IBOutlet weak var saveDownloadedSub: NSMenuItem!
+  private var appleLiveCaptionsItem: NSMenuItem?
   // Plugin
   @IBOutlet weak var pluginMenu: NSMenu!
   @IBOutlet weak var pluginMenuItem: NSMenuItem!
@@ -392,6 +393,11 @@ class MenuController: NSObject, NSMenuDelegate {
 
     findOnlineSub.action = #selector(MainMenuActionHandler.menuFindOnlineSub(_:))
     saveDownloadedSub.action = #selector(MainMenuActionHandler.saveDownloadedSub(_:))
+    let liveCaptionsItem = NSMenuItem(title: NSLocalizedString("menu.apple_live_captions", comment: "Apple Live Captions"),
+                                      action: #selector(toggleAppleLiveCaptions(_:)), keyEquivalent: "")
+    liveCaptionsItem.target = self
+    subMenu.insertItem(liveCaptionsItem, at: subMenu.index(of: saveDownloadedSub) + 1)
+    appleLiveCaptionsItem = liveCaptionsItem
 
     onlineSubSourceMenu.delegate = self
 
@@ -596,6 +602,11 @@ class MenuController: NSObject, NSMenuDelegate {
     let providerID = Preference.string(for: .onlineSubProvider) ?? OnlineSubtitle.Providers.openSub.id
     let providerName = OnlineSubtitle.Providers.nameForID(providerID)
     findOnlineSub.title = String(format: Constants.String.findOnlineSubtitles, providerName)
+    appleLiveCaptionsItem?.state = Preference.bool(for: .appleLiveCaptionsFallback) ? .on : .off
+  }
+
+  @objc private func toggleAppleLiveCaptions(_ sender: NSMenuItem) {
+    AppleLiveCaptions.setEnabled(!Preference.bool(for: .appleLiveCaptionsFallback), osdPlayer: PlayerCore.active)
   }
 
   private func updateOnlineSubSourceMenu() {

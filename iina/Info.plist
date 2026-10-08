@@ -553,7 +553,7 @@
 			<key>CFBundleTypeIconSystemGenerated</key>
 			<integer>0</integer>
 			<key>CFBundleTypeName</key>
-			<string>IINA Plugin</string>
+			<string>Reel Plugin</string>
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>LSHandlerRank</key>
@@ -575,7 +575,7 @@
 			<key>CFBundleTypeIconSystemGenerated</key>
 			<integer>0</integer>
 			<key>CFBundleTypeName</key>
-			<string>IINA Plugin Package</string>
+			<string>Reel Plugin Package</string>
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>LSHandlerRank</key>
@@ -594,7 +594,7 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>IINA wrapper</string>
+			<string>Reel URL handler</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>iina</string>
@@ -604,7 +604,7 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>IINA uses on-device speech recognition from Apple to caption local video when no subtitles are available.</string>
+	<string>Reel uses on-device speech recognition from Apple to caption local video when no subtitles are available.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoadsInWebContent</key>
@@ -622,13 +622,15 @@
 	</dict>
 	<key>NSPrefersDisplaySafeAreaCompatibilityMode</key>
 	<false/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Reel uses your local network to stream video to the AirPlay device you choose.</string>
 	<key>NSServices</key>
 	<array>
 		<dict>
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
-				<string>IINA: Open URL</string>
+				<string>Reel: Open URL</string>
 			</dict>
 			<key>NSMessage</key>
 			<string>droppedText</string>
@@ -646,7 +648,7 @@
 				<string>com.pkware.zip-archive</string>
 			</array>
 			<key>UTTypeDescription</key>
-			<string>IINA Plugin Package</string>
+			<string>Reel Plugin Package</string>
 			<key>UTTypeIconFile</key>
 			<string>doc_plugin</string>
 			<key>UTTypeIcons</key>
@@ -668,7 +670,7 @@
 				<string>com.apple.package</string>
 			</array>
 			<key>UTTypeDescription</key>
-			<string>IINA Plugin</string>
+			<string>Reel Plugin</string>
 			<key>UTTypeIconFile</key>
 			<string>doc_plugin</string>
 			<key>UTTypeIcons</key>
@@ -1379,6 +1381,8 @@
 	</array>
 	<key>com.colliderli.iina.build.branch</key>
 	<string>IINA_BUILD_BRANCH</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
 	<key>com.colliderli.iina.build.commit</key>
 	<string>IINA_BUILD_COMMIT</string>
 	<key>com.colliderli.iina.build.configuration</key>

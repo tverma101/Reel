@@ -3,6 +3,11 @@ import Foundation
 import PromiseKit
 import whisper
 
+private func subtitleMatcherWhisperAbortCallback(_ userData: UnsafeMutableRawPointer?) -> Bool {
+  guard let userData else { return false }
+  return Unmanaged<SubtitleAudioMatcher.Cancellation>.fromOpaque(userData).takeUnretainedValue().isCancelled
+}
+
 enum SubtitleAudioMatchStatus: Equatable {
   case pending
   case timingMatch
@@ -76,19 +81,35 @@ enum SubtitleAudioMatcher {
     let start: Double
     let end: Double
     let text: String
+    let dialogueWordCount: Int
 
-    var isDialogue: Bool {
+    init(start: Double, end: Double, text: String) {
+      self.start = start
+      self.end = end
+      self.text = text
       let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !trimmed.isEmpty,
             !trimmed.hasPrefix("["), !trimmed.hasPrefix("("),
-            !trimmed.hasPrefix("♪"), !trimmed.hasPrefix("♫") else { return false }
-      return Self.tokens(in: trimmed).count >= 2
+            !trimmed.hasPrefix("♪"), !trimmed.hasPrefix("♫") else {
+        dialogueWordCount = 0
+        return
+      }
+      dialogueWordCount = Self.wordCount(in: trimmed)
     }
 
-    private static func tokens(in text: String) -> [String] {
-      text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-        .components(separatedBy: CharacterSet.alphanumerics.inverted)
-        .filter { !$0.isEmpty }
+    var isDialogue: Bool { dialogueWordCount >= 2 }
+
+    private static func wordCount(in text: String) -> Int {
+      var count = 0
+      var insideWord = false
+      for scalar in text.unicodeScalars {
+        let category = scalar.properties.generalCategory
+        let isWord = CharacterSet.alphanumerics.contains(scalar) ||
+          category == .nonspacingMark || category == .spacingMark || category == .enclosingMark
+        if isWord && !insideWord { count += 1 }
+        insideWord = isWord
+      }
+      return count
     }
   }
 
@@ -99,7 +120,7 @@ enum SubtitleAudioMatcher {
 
   private struct SamplePlan {
     let start: Double
-    let duration: Double = 12
+    let duration: Double
     var end: Double { start + duration }
   }
 
@@ -132,9 +153,9 @@ enum SubtitleAudioMatcher {
 
     init(cues: [Cue]) {
       let dialogue = cues.filter(\.isDialogue)
-      let sortedStarts = dialogue.map { CueMetric(time: $0.start, words: normalizedTokens($0.text).count) }
+      let sortedStarts = dialogue.map { CueMetric(time: $0.start, words: $0.dialogueWordCount) }
         .sorted { $0.time < $1.time }
-      let sortedEnds = dialogue.map { CueMetric(time: $0.end, words: normalizedTokens($0.text).count) }
+      let sortedEnds = dialogue.map { CueMetric(time: $0.end, words: $0.dialogueWordCount) }
         .sorted { $0.time < $1.time }
       starts = sortedStarts
       ends = sortedEnds
@@ -214,7 +235,10 @@ enum SubtitleAudioMatcher {
     let sha256: String
   }
 
-  static func verify(mediaURL: URL, candidates: [OpenSub.Subtitle], cancellation: Cancellation) -> Promise<Void> {
+  static func verify(mediaURL: URL,
+                     mediaDuration: Double?,
+                     candidates: [OpenSub.Subtitle],
+                     cancellation: Cancellation) -> Promise<Void> {
     downloadCandidates(candidates, index: 0, prepared: [], cancellation: cancellation).then { prepared -> Promise<Void> in
       guard !cancellation.isCancelled else { throw MatcherError.cancelled }
       let parsed = prepared.compactMap { item -> Candidate? in
@@ -224,7 +248,8 @@ enum SubtitleAudioMatcher {
         }
         return Candidate(subtitle: item.subtitle, cues: cues)
       }
-      guard mediaURL.isFileURL, let plan = samplePlan(for: parsed), !parsed.isEmpty else {
+      guard mediaURL.isFileURL,
+            let plan = samplePlan(for: parsed, mediaDuration: mediaDuration), !parsed.isEmpty else {
         prepared.forEach { $0.subtitle.audioMatchStatus = .unverified }
         return .value(())
       }
@@ -233,7 +258,9 @@ enum SubtitleAudioMatcher {
         guard !cancellation.isCancelled,
               let data = FFmpegController.readMonoAudio(fromFile: mediaURL.path,
                                                        startTime: plan.start,
-                                                       duration: plan.duration),
+                                                       duration: plan.duration,
+                                                       cancellationCheck: { cancellation.isCancelled }),
+              !cancellation.isCancelled,
               data.count >= MemoryLayout<Float>.size * sampleRate * 2 else {
           throw cancellation.isCancelled ? MatcherError.cancelled : MatcherError.noUsableAudio
         }
@@ -243,33 +270,25 @@ enum SubtitleAudioMatcher {
         return (parsed, plan, samples)
       }.then { parsed, plan, samples -> Promise<Void> in
         guard !cancellation.isCancelled else { throw MatcherError.cancelled }
-        let hashCandidates = parsed.filter { $0.subtitle.movieHashMatch == true }
         let assessmentPromise: Promise<VADAssessment>
-        if hashCandidates.isEmpty {
-          // Avoid downloading/loading the VAD model when the provider supplied no hash signal.
-          assessmentPromise = .value(VADAssessment(timingMatches: []))
-        } else {
-          assessmentPromise = ensureModel(vadModel, cancellation: cancellation).then { vadURL in
-            onWorker { assessTiming(candidates: hashCandidates, plan: plan, samples: samples, vadModelURL: vadURL) }
-          }.recover { error -> Promise<VADAssessment> in
-            if cancellation.isCancelled { throw MatcherError.cancelled }
-            Logger.log("Local voice-activity check unavailable: \(error.localizedDescription)",
-                       level: .warning, subsystem: Logger.Sub.opensub)
-            return .value(VADAssessment(timingMatches: []))
-          }
+        assessmentPromise = ensureModel(vadModel, cancellation: cancellation).then { vadURL in
+          onWorker { assessTiming(candidates: parsed, plan: plan, samples: samples, vadModelURL: vadURL) }
+        }.recover { error -> Promise<VADAssessment> in
+          if cancellation.isCancelled { throw MatcherError.cancelled }
+          Logger.log("Local voice-activity check unavailable: \(error.localizedDescription)",
+                     level: .warning, subsystem: Logger.Sub.opensub)
+          return .value(VADAssessment(timingMatches: []))
         }
         return assessmentPromise.then { assessment -> Promise<Void> in
           guard !cancellation.isCancelled else { throw MatcherError.cancelled }
           for candidate in parsed where assessment.timingMatches.contains(ObjectIdentifier(candidate.subtitle)) {
             candidate.subtitle.audioMatchStatus = .timingMatch
           }
-          if assessment.timingMatches.count == parsed.count, !parsed.isEmpty {
-            return .value(())
-          }
           return ensureModel(whisperModel, cancellation: cancellation).then { modelURL -> Promise<Void> in
             onWorker {
               guard !cancellation.isCancelled else { throw MatcherError.cancelled }
-              let transcript = try transcribe(samples: samples, modelURL: modelURL, vadModelURL: nil)
+              let transcript = try transcribe(samples: samples, modelURL: modelURL, vadModelURL: nil,
+                                              cancellation: cancellation)
               applyTranscript(transcript, candidates: parsed, plan: plan, timingMatches: assessment.timingMatches)
             }
           }.recover { error -> Promise<Void> in
@@ -298,7 +317,7 @@ enum SubtitleAudioMatcher {
     guard index < candidates.count else { return .value(prepared) }
     guard !cancellation.isCancelled else { return Promise(error: MatcherError.cancelled) }
     let subtitle = candidates[index]
-    return subtitle.download().then { urls -> Promise<[DownloadedCandidate]> in
+    return subtitle.download(cancellation: cancellation).then { urls -> Promise<[DownloadedCandidate]> in
       var next = prepared
       next.append(DownloadedCandidate(subtitle: subtitle, fileURL: urls.first))
       return downloadCandidates(candidates, index: index + 1, prepared: next, cancellation: cancellation)
@@ -311,16 +330,23 @@ enum SubtitleAudioMatcher {
     }
   }
 
-  private static func samplePlan(for candidates: [Candidate]) -> SamplePlan? {
+  private static func samplePlan(for candidates: [Candidate], mediaDuration: Double?) -> SamplePlan? {
+    let mediaDuration = mediaDuration.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
     let starts = Set(candidates.flatMap { candidate in
-      candidate.cues.filter(\.isDialogue).map { floor($0.start / 6) * 6 }
+      candidate.cues.filter { cue in
+        guard cue.isDialogue else { return false }
+        guard let mediaDuration else { return true }
+        return cue.start < mediaDuration
+      }.map { floor($0.start / 6) * 6 }
     }).sorted()
     guard !starts.isEmpty else { return nil }
 
     let indexes = candidates.map { CueWindowIndex(cues: $0.cues) }
     var best: (plan: SamplePlan, score: Int)?
     for start in starts {
-      let plan = SamplePlan(start: start)
+      let duration = mediaDuration.map { min(12, $0 - start) } ?? 12
+      guard duration >= 2 else { continue }
+      let plan = SamplePlan(start: start, duration: duration)
       var candidatesWithDialogue = 0
       var cueCount = 0
       var wordCount = 0
@@ -346,7 +372,7 @@ enum SubtitleAudioMatcher {
       return VADAssessment(timingMatches: [])
     }
     var matches = Set<ObjectIdentifier>()
-    for candidate in candidates where candidate.subtitle.movieHashMatch == true {
+    for candidate in candidates {
       let aligned = speech.filter { segment in
         candidate.cues.contains { cue in
           cue.isDialogue && cue.start <= plan.start + segment.end + 0.7 &&
@@ -387,12 +413,16 @@ enum SubtitleAudioMatcher {
     }
   }
 
-  private static func transcribe(samples: [Float], modelURL: URL, vadModelURL: URL?) throws -> Transcript {
+  private static func transcribe(samples: [Float],
+                                 modelURL: URL,
+                                 vadModelURL: URL?,
+                                 cancellation: Cancellation) throws -> Transcript {
     var contextParams = whisper_context_default_params()
     contextParams.use_gpu = true
     let context = modelURL.path.withCString { whisper_init_from_file_with_params($0, contextParams) }
     guard let context else { throw MatcherError.modelLoadFailed }
     defer { whisper_free(context) }
+    guard !cancellation.isCancelled else { throw MatcherError.cancelled }
 
     var params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
     params.n_threads = Int32(max(1, min(4, ProcessInfo.processInfo.activeProcessorCount)))
@@ -404,6 +434,8 @@ enum SubtitleAudioMatcher {
     params.print_special = false
     params.suppress_blank = true
     params.suppress_nst = true
+    params.abort_callback = subtitleMatcherWhisperAbortCallback
+    params.abort_callback_user_data = Unmanaged.passUnretained(cancellation).toOpaque()
 
     let result: (String, String?) = "auto".withCString { language in
       params.language = language
@@ -417,6 +449,7 @@ enum SubtitleAudioMatcher {
       }
       return runTranscription(context: context, params: params, samples: samples)
     }
+    guard !cancellation.isCancelled else { throw MatcherError.cancelled }
     guard !result.0.isEmpty else { throw MatcherError.transcriptionFailed }
     return Transcript(text: result.0, language: result.1)
   }
@@ -493,9 +526,62 @@ enum SubtitleAudioMatcher {
   }
 
   private static func normalizedTokens(_ text: String) -> [String] {
-    text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-      .components(separatedBy: CharacterSet.alphanumerics.inverted)
-      .filter { !$0.isEmpty }
+    let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive],
+                              locale: Locale(identifier: "en_US_POSIX"))
+    var tokens: [String] = []
+    var word = ""
+    var unspacedRun: [Character] = []
+
+    func flushWord() {
+      if !word.isEmpty { tokens.append(word); word.removeAll(keepingCapacity: true) }
+    }
+    func flushUnspacedRun() {
+      guard !unspacedRun.isEmpty else { return }
+      if unspacedRun.count == 1 {
+        tokens.append(String(unspacedRun[0]))
+      } else {
+        for index in 0..<(unspacedRun.count - 1) {
+          tokens.append(String(unspacedRun[index...index + 1]))
+        }
+      }
+      unspacedRun.removeAll(keepingCapacity: true)
+    }
+
+    for character in folded {
+      if isUnspacedScriptCharacter(character) {
+        flushWord()
+        unspacedRun.append(character)
+      } else if character.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }) {
+        flushUnspacedRun()
+        word.append(character)
+      } else {
+        flushWord()
+        flushUnspacedRun()
+      }
+    }
+    flushWord()
+    flushUnspacedRun()
+    return tokens
+  }
+
+  private static func isUnspacedScriptCharacter(_ character: Character) -> Bool {
+    guard let base = character.unicodeScalars.first else { return false }
+    let value = base.value
+    let isScriptScalar = (0x3400...0x4DBF).contains(value) ||
+      (0x4E00...0x9FFF).contains(value) || (0xF900...0xFAFF).contains(value) ||
+      (0x20000...0x3134F).contains(value) ||
+      (0x3040...0x30FF).contains(value) || (0x31F0...0x31FF).contains(value) ||
+      (0xFF66...0xFF9D).contains(value) ||
+      (0x1100...0x11FF).contains(value) || (0x3130...0x318F).contains(value) ||
+      (0xA960...0xA97F).contains(value) || (0xAC00...0xD7AF).contains(value) ||
+      (0xD7B0...0xD7FF).contains(value) ||
+      (0x0E00...0x0E7F).contains(value) || (0x0E80...0x0EFF).contains(value) ||
+      (0x1000...0x109F).contains(value) || (0x1780...0x17FF).contains(value)
+    guard isScriptScalar else { return false }
+    return character.unicodeScalars.dropFirst().allSatisfy {
+      let category = $0.properties.generalCategory
+      return category == .nonspacingMark || category == .spacingMark || category == .enclosingMark
+    }
   }
 
   private static func tokenF1(_ first: [String], _ second: [String]) -> Double {
@@ -616,7 +702,7 @@ enum SubtitleAudioMatcher {
     static func parse(fileURL: URL) -> [Cue]? {
       guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
             let size = attributes[.size] as? NSNumber,
-            size.intValue > 0, size.intValue <= SubtitleAudioMatcher.maxSubtitleBytes,
+            size.int64Value > 0, size.int64Value <= Int64(SubtitleAudioMatcher.maxSubtitleBytes),
             let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else { return nil }
       let text = String(data: data, encoding: .utf8)
         ?? String(data: data, encoding: .utf16)
@@ -630,36 +716,101 @@ enum SubtitleAudioMatcher {
 
     private static func parseASS(_ text: String) -> [Cue] {
       var cues: [Cue] = []
-      for line in text.components(separatedBy: .newlines) where line.hasPrefix("Dialogue:") {
+      text.enumerateLines { line, stop in
+        guard line.utf16.count <= 4_096, line.hasPrefix("Dialogue:") else { return }
         let fields = line.split(maxSplits: 9, omittingEmptySubsequences: false) { $0 == "," }
         guard fields.count == 10,
               let start = parseTime(String(fields[1])),
-              let end = parseTime(String(fields[2])), end > start else { continue }
+              let end = parseTime(String(fields[2])), end > start else { return }
         let body = cleanText(String(fields[9]).replacingOccurrences(of: #"\\[Nn]"#, with: " ", options: .regularExpression))
         if !body.isEmpty { cues.append(Cue(start: start, end: end, text: body)) }
-        if cues.count >= 50_000 { break }
+        if cues.count >= 50_000 { stop = true }
       }
       return cues
     }
 
     private static func parseTimedText(_ text: String) -> [Cue] {
+      let text = text.hasPrefix("\u{feff}") ? String(text.dropFirst()) : text
+      if let firstLine = text.split(whereSeparator: \.isNewline).first {
+        let header = String(firstLine).trimmingCharacters(in: .whitespaces)
+        if header == "WEBVTT" || header.hasPrefix("WEBVTT ") || header.hasPrefix("WEBVTT\t") {
+          return parseWebVTT(text)
+        }
+      }
+
       let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
-      let matches = timingRegex.matches(in: text, range: fullRange)
+      var matches: [NSTextCheckingResult] = []
+      timingRegex.enumerateMatches(in: text, range: fullRange) { match, _, stop in
+        guard let match else { return }
+        if matches.count >= 50_000 {
+          // The cue-body limit below bounds the final cue even without a lookahead timestamp.
+          stop.pointee = true
+          return
+        }
+        matches.append(match)
+      }
       guard !matches.isEmpty else { return [] }
       var cues: [Cue] = []
-      for (index, match) in matches.enumerated() {
+      for (index, match) in matches.prefix(50_000).enumerated() {
         guard let startRange = Range(match.range(at: 1), in: text),
               let endRange = Range(match.range(at: 2), in: text),
               let start = parseTime(String(text[startRange])),
               let end = parseTime(String(text[endRange])), end > start else { continue }
         let contentStart = match.range.location + match.range.length
         let nextStart = index + 1 < matches.count ? matches[index + 1].range.location : fullRange.length
-        guard nextStart >= contentStart,
-              let contentRange = Range(NSRange(location: contentStart, length: nextStart - contentStart), in: text) else { continue }
-        let body = cleanText(String(text[contentRange]))
+        guard nextStart >= contentStart else { continue }
+        let bodyLength = min(nextStart - contentStart, 4_096)
+        let rawBody = (text as NSString).substring(with: NSRange(location: contentStart, length: bodyLength))
+        let body = cleanText(rawBody)
         if !body.isEmpty { cues.append(Cue(start: start, end: end, text: body)) }
         if cues.count >= 50_000 { break }
       }
+      return cues
+    }
+
+    private static func parseWebVTT(_ text: String) -> [Cue] {
+      let normalizedText = text.replacingOccurrences(of: "\r\n", with: "\n")
+        .replacingOccurrences(of: "\r", with: "\n")
+      let lines = normalizedText.components(separatedBy: "\n")
+      var cues: [Cue] = []
+      var block: [String] = []
+
+      func appendCue(from block: [String]) {
+        guard cues.count < 50_000,
+              let firstLine = block.first?.trimmingCharacters(in: .whitespaces),
+              !firstLine.isEmpty,
+              let timingIndex = block.firstIndex(where: { $0.contains("-->") }),
+              timingIndex <= 1 else { return }
+        if timingIndex == 0 {
+          let isHeaderOrMetadata = firstLine == "WEBVTT" || firstLine.hasPrefix("WEBVTT ") ||
+            firstLine.hasPrefix("WEBVTT\t") || firstLine == "NOTE" || firstLine.hasPrefix("NOTE ") ||
+            firstLine == "STYLE" || firstLine == "REGION"
+          if isHeaderOrMetadata { return }
+        }
+        let timingLine = block[timingIndex]
+        let timingRange = NSRange(timingLine.startIndex..<timingLine.endIndex, in: timingLine)
+        guard let match = timingRegex.firstMatch(in: timingLine, range: timingRange),
+              let startRange = Range(match.range(at: 1), in: timingLine),
+              let endRange = Range(match.range(at: 2), in: timingLine),
+              let start = parseTime(String(timingLine[startRange])),
+              let end = parseTime(String(timingLine[endRange])), end > start else { return }
+        let rawBody = block.dropFirst(timingIndex + 1).joined(separator: " ")
+        let bodyLength = min(rawBody.utf16.count, 4_096)
+        let boundedBody = (rawBody as NSString).substring(to: bodyLength)
+        let body = cleanText(boundedBody)
+        if !body.isEmpty { cues.append(Cue(start: start, end: end, text: body)) }
+      }
+
+      for line in lines {
+        if cues.count >= 50_000 { break }
+        if line.trimmingCharacters(in: .whitespaces).isEmpty {
+          appendCue(from: block)
+          block.removeAll(keepingCapacity: true)
+        } else {
+          block.append(line)
+        }
+      }
+      appendCue(from: block)
       return cues
     }
 

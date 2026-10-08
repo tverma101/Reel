@@ -30,11 +30,11 @@
 "guide.faq" = "שאלות נפוצות";
 
 // Initial Window
-"initial.announcement" = "אתה משתמש בגרסת %@ של IINA";
-"initial.beta.desc" = "אם ברצונך לחזור לגרסה הרגילה, הסר את הסימון \"קבל עדכוני בטא\" בהגדרות > כללי, והתקן את הגרסה הרגילה מ<a href=\"https://iina.io\">האתר הרשמי</a> שלנו.";
-"initial.nightly.desc" = "בניה לילית לא מומלצת לשימוש יומיומי. כרגע, בנייה לילית לא תומכת בעדכון אוטומטי. אנא הורד באופן ידני בניה עדכנית מ<a href=\"https://nightly.iina.io\">האתר</a> שלנו.";
+"initial.announcement" = "אתה משתמש בגרסת %@ של Reel";
+"initial.beta.desc" = "אם ברצונך לחזור לגרסה הרגילה, הסר את הסימון \"קבל עדכוני בטא\" בהגדרות > כללי, והתקן את הגרסה הרגילה מ<a href=\"https://github.com/tverma101/Reel\">האתר הרשמי</a> שלנו.";
+"initial.nightly.desc" = "בניה לילית לא מומלצת לשימוש יומיומי. כרגע, בנייה לילית לא תומכת בעדכון אוטומטי. אנא הורד באופן ידני בניה עדכנית מ<a href=\"https://github.com/tverma101/Reel/actions\">האתר</a> שלנו.";
 "initial.debug.desc" = "בניית ניפוי באגים בדרך כלל אינה מותאמת לטובת ביצועים, ולכן אינה מומלצת לשימוש יומיומי. בניית ניפוי באגים לא תומכת בעדכון אוטומטי.";
-"initial.bug_report" = "דווח באמצעות <a href=\"https://github.com/iina/iina/issues\">בעיות GitHub</a>.";
+"initial.bug_report" = "דווח באמצעות <a href=\"https://github.com/tverma101/Reel/issues\">בעיות GitHub</a>.";
 
 // Inspector Window
 "inspector.error" = "שגיאה";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "מסנן חדש";
 "alert.add_filter.message" = "אנא הזן מחרוזת מסנן בפורמט פקודת vf או af של mpv.";
 
-"alert.keybinding_config.error" = "שגיאה בניתוח קובץ תצורת קיצורי מקשים \"%@\"! חוזר לקיצורי מקשים ברירת המחדל של IINA. אנא בדוק את התצורה שלך.";
+"alert.keybinding_config.error" = "שגיאה בניתוח קובץ תצורת קיצורי מקשים \"%@\"! חוזר לקיצורי מקשים ברירת המחדל של Reel. אנא בדוק את התצורה שלך.";
 "alert.delete_keybindingset.title" = "Delete Key Binding Set";
 "alert.delete_keybindingset.message" = "Are you sure to delete this key binding set?";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "ההתחברות נכשלה. אנא בדוק את שם המשתמש, הסיסמה ומצב הרשת שלך.\n\n%@";
 "alert.sub.save_downloaded.title" = "שמור כתוביות שהורדו";
 
-"alert.set_default.title" = "הגדרת IINA כאפליקציית ברירת המחדל";
-"alert.set_default.message" = "IINA תוגדר כאפליקציית ברירת המחדל עבור כל סוגי הקבצים שבהם היא תומכת.";
+"alert.set_default.title" = "הגדרת Reel כאפליקציית ברירת המחדל";
+"alert.set_default.message" = "Reel תוגדר כאפליקציית ברירת המחדל עבור כל סוגי הקבצים שבהם היא תומכת.";
 "alert.set_default.success" = "הסתיים עם %d שהצליחו ו-%d שנכשלו.";
 
 "alert.add_watch.title" = "הוסף מאפיין צפייה";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "קובץ החבילה לא נמצא.";
 "plugin.install_error.cannot_download" = "שגיאה בהורדת התוסף.\n\nפלט: %@\n";
 "plugin.install_error.cannot_unpackage" = "שגיאה בחילוץ התוסף.\n\nפלט: %@\n";
-"plugin.install_error.cannot_load" = "IINA לא יכול לטעון את התוסף הזה. ייתכן שהוא בפורמט שגוי.";
+"plugin.install_error.cannot_load" = "Reel לא יכול לטעון את התוסף הזה. ייתכן שהוא בפורמט שגוי.";
 "plugin.check_for_updates" = "חפש עדכונים";
 "plugin.updating" = "מוריד את העדכון…";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "השהה";
 "settings.pauseresumeWhen" = "השהה/המשך כאשר";
 "settings.playWhenEnteringFullScreen.label" = "הפעל בעת כניסה למסך מלא";
-"settings.playlistAutoAdd.desc" = "נדרשת הפעלה מחדש של IINA כדי ששינוי ההגדרה ישפיע.";
+"settings.playlistAutoAdd.desc" = "נדרשת הפעלה מחדש של Reel כדי ששינוי ההגדרה ישפיע.";
 "settings.playlistAutoAdd.label" = "הוסף אוטומטית קבצים שבאותה תיקיה";
 "settings.playlistAutoPlayNext.label" = "נגן את השיר הבא אוטומטית";
 "settings.playlistShowMetadata.label" = "הצג אמן ושם רצועה עבור קובצי אודיו (כאשר זמינים)";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "בהירות מרבית";
 "settings.videoThreads.desc" = "ברירת מחדל: 0 (אוטומטי)";
 "settings.videoThreads.label" = "מספר ה-Threads";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "נדרשת הפעלה מחדש של IINA כדי ששינוי ההגדרה ישפיע.";
+"settings.httpProxy.desc" = "נדרשת הפעלה מחדש של Reel כדי ששינוי ההגדרה ישפיע.";
 "settings.httpProxy.label" = "פרוקסי HTTP";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "כמות שניות לאחזור מראש";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Enable mpv's youtube-dl script";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "אפשרויות גולמיות";
-"settings.ytdlSearchPath.desc" = "‏IINA תחפש את youtube-dl בתקייה הזאת. נדרשת הפעלה מחדש של האפליקציה.";
+"settings.ytdlSearchPath.desc" = "‏Reel תחפש את youtube-dl בתקייה הזאת. נדרשת הפעלה מחדש של האפליקציה.";
 "settings.ytdlSearchPath.label" = "נתיב לyoutube-dl מותאם אישית";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "If enabled, IINA will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
+"settings.autoSearchOnlineSub.desc" = "If enabled, Reel will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
 "settings.autoSearchOnlineSub.label" = "חפש כתוביות מקוונות אוטומטית";
 "settings.displayInLetterBox.label" = "במסך מלא, הצג כתוביות בתוך תיבה ממוסגרת";
 "settings.subAlignX.items.0" = "שמאל";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "בתחתית";
 "settings.subAutoLoadIINA.items.0" = "מושבתת";
 "settings.subAutoLoadIINA.items.1" = "כתוביות שמכילות את שם קובץ המדיה";
-"settings.subAutoLoadIINA.items.2" = "זיהוי חכם על ידי IINA";
+"settings.subAutoLoadIINA.items.2" = "זיהוי חכם על ידי Reel";
 "settings.subAutoLoadIINA.label" = "טעינה אוטומטית";
 "settings.subAutoLoadPriorityString.desc" = "אנא הזן רשימה של מחרוזות מופרדות בפסיקים.";
 "settings.subAutoLoadPriorityString.label" = "לכתוביות יש עדיפות כאשר שם הקובץ מכיל";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "השתמש במקשי ימינה/שמאלה כדי";
 "settings.controlBarAutoHideTimeout.label" = "Auto hide after";
 "settings.controlBarStickToCenter.label" = "הצמד למרכז בעת גרירה";
-"settings.disableAnimations.desc" = "כאשר הגדרת הנגישות של macOS \"הפחתת תנועות\" מופעלת, IINA תפחית אנימציות של ממשק משתמש שידוע כי הן גורמות לבעיות עבור אנשים עם הפרעה במערכת שיווי המשקל. אם זה לא מספיק, ניתן להשתמש בהגדרה זו כדי לצמצם תנועות על ידי ביטול הנפשות נוספות של ממשק המשתמש.";
+"settings.disableAnimations.desc" = "כאשר הגדרת הנגישות של macOS \"הפחתת תנועות\" מופעלת, Reel תפחית אנימציות של ממשק משתמש שידוע כי הן גורמות לבעיות עבור אנשים עם הפרעה במערכת שיווי המשקל. אם זה לא מספיק, ניתן להשתמש בהגדרה זו כדי לצמצם תנועות על ידי ביטול הנפשות נוספות של ממשק המשתמש.";
 "settings.disableAnimations.label" = "השבת אנימציות";
 "settings.disableOSDFileStartMsg.label" = "התחלת קובץ";
 "settings.disableOSDPauseResumeMsgs.label" = "להשהות/לחדש";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "חלון";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "שינוי של ההגדרות הבאות דורש הפעלה מחדש של IINA כדי להיכנס לתוקף.";
+"settings.enableAdvancedSettings.desc" = "שינוי של ההגדרות הבאות דורש הפעלה מחדש של Reel כדי להיכנס לתוקף.";
 "settings.enableAdvancedSettings.label" = "אפשר הגדרות מתקדמות";
 "settings.enableLogging.label" = "הפעל רישום";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "טעינת הדף נכשלה.";
 "settings.$Firefox" = "פיירפוקס";
 "settings.$Font" = "גופן";
-"settings.$GetBrowserExtensionsForIINA" = "קבל הרחבות דפדפן עבור IINA";
+"settings.$GetBrowserExtensionsForIINA" = "קבל הרחבות דפדפן עבור Reel";
 "settings.$GetPlugins" = "Get Plugins…";
 "settings.$Hardware" = "Hardware";
 "settings.$Height" = "גובה";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "פקדים על המסך";
 "settings.$OnScreenDisplay" = "תצוגה על המסך (OSD)";
 "settings.$OnlineSubtitles" = "כתוביות מקוונות";
-"settings.$OpenLinksOrCurrentWebpage" = "פתח קישורים או דף אינטרנט נוכחי ב-IINA בלחיצה אחת. האתר חייב להיות נתמך על ידי youtube-dl.";
+"settings.$OpenLinksOrCurrentWebpage" = "פתח קישורים או דף אינטרנט נוכחי ב-Reel בלחיצה אחת. האתר חייב להיות נתמך על ידי youtube-dl.";
 "settings.$OpenLogDirectory" = "פתח את תיקיית הלוגים";
 "settings.$OpenLogWindow" = "Open the log viewer";
 "settings.$OrSelectFrom" = "Or select from available plugins";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "תמונה בתוך תמונה";
 "settings.$Playlist" = "רשימת השמעה";
-"settings.$PleaseSelectTheMediaTypes" = "אנא בחר את סוגי המדיה שברצונך להפוך את IINA ליישום ברירת המחדל עבורם.";
+"settings.$PleaseSelectTheMediaTypes" = "אנא בחר את סוגי המדיה שברצונך להפוך את Reel ליישום ברירת המחדל עבורם.";
 "settings.$Position" = "מיקום";
 "settings.$PreferredLanguage" = "שפה מועדפת";
 "settings.$RestoreAlerts" = "שחזור התראות";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "צילומי מסך";
-"settings.$SetIINAAsTheDefault" = "Set IINA as the Default Application";
+"settings.$SetIINAAsTheDefault" = "Set Reel as the Default Application";
 "settings.$Settings" = "הגדרות";
 "settings.$Shadow" = "צל";
 "settings.$ShowInFinder" = "הצג ב-Finder";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "המסך";
 "settings.$toThe" = "אל ה";
 "settings.$top" = "ראש החלון";
-"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";

@@ -26,7 +26,7 @@ class OpenSub {
     private let subtitle: OpenSubClient.Subtitle
     private let downloadLock = NSLock()
     private var cachedDownloadURL: URL?
-    var audioMatchStatus: SubtitleAudioMatchStatus = .pending
+    @Atomic var audioMatchStatus: SubtitleAudioMatchStatus = .pending
 
     override var canAutomaticallySelect: Bool {
       audioMatchStatus == .dialogueMatch
@@ -89,6 +89,13 @@ class OpenSub {
     /// - Returns: A [URL](https://developer.apple.com/documentation/foundation/url) to the file containing
     ///            the downloaded subtitle.
     override func download() -> Promise<[URL]> {
+      download(cancellation: nil)
+    }
+
+    func download(cancellation: SubtitleAudioMatcher.Cancellation?) -> Promise<[URL]> {
+      guard cancellation?.isCancelled != true else {
+        return Promise(error: OnlineSubtitle.CommonError.dismissed)
+      }
       downloadLock.lock()
       let cachedURL = cachedDownloadURL
       downloadLock.unlock()
@@ -97,9 +104,18 @@ class OpenSub {
       }
 
       let fileId = subtitle.attributes.files[0].fileId
-      return OpenSubClient.shared.download(fileId: fileId).then { downloadResponse in
-        OpenSubClient.shared.downloadFileContents(downloadResponse.link).then { data in
+      return OpenSubClient.shared.download(fileId: fileId).then { downloadResponse -> Promise<[URL]> in
+        // The API charges download quota at this endpoint. If a user abandons verification while
+        // that request is in flight, do not start the separate subtitle-file transfer afterward.
+        guard cancellation?.isCancelled != true else {
+          throw OnlineSubtitle.CommonError.dismissed
+        }
+        return OpenSubClient.shared.downloadFileContents(downloadResponse.link).then { data in
           Promise { resolver in
+            guard cancellation?.isCancelled != true else {
+              resolver.reject(OnlineSubtitle.CommonError.dismissed)
+              return
+            }
             // This check was added after Open Subtitles returned a subtitle file of zero length.
             // Better to catch this error early to make it obvious what the problem is rather than
             // creating a zero length file that triggers a failure during loading.
@@ -215,24 +231,29 @@ class OpenSub {
     func fetch(from url: URL, withProviderID id: String, playerCore player: PlayerCore) -> Promise<[Subtitle]> {
       // Keep the string the search is based on so the results can be matched back against it.
       let mediaName = url.isFileURL ? url.deletingPathExtension().lastPathComponent : player.getMediaTitle()
+      let mediaDuration = player.info.videoDuration?.second
       let cancellation = SubtitleAudioMatcher.Cancellation()
       let searchID = player.onlineSubtitleSearchID
       // Property access is serialized on the main queue: this chain can complete on a URLSession
       // queue, while `stop()` and `fileStarted()` read and clear the same property on main.
       DispatchQueue.main.async {
+        guard player.onlineSubtitleSearchID == searchID else { return }
         player.cancelOnlineSubtitleSearch = {
           cancellation.cancel()
-          player.cancelOnlineSubtitleSearch = nil
         }
       }
-      return login().then { _ in
-        self.obtainLanguageCodes()
-        }.then {
-          self.filterLanguageCodes()
-        }.then {
-          self.hash(url)
-        }.then { hash in
-          self.searchForSubtitles(url, hash, mediaName)
+      return login().then { _ -> Promise<Void> in
+        guard !cancellation.isCancelled else { throw OnlineSubtitle.CommonError.dismissed }
+        return self.obtainLanguageCodes()
+        }.then { _ -> Promise<Void> in
+          guard !cancellation.isCancelled else { throw OnlineSubtitle.CommonError.dismissed }
+          return self.filterLanguageCodes()
+        }.then { _ -> Promise<String?> in
+          guard !cancellation.isCancelled else { throw OnlineSubtitle.CommonError.dismissed }
+          return self.hash(url)
+        }.then { hash -> Promise<[Subtitle]> in
+          guard !cancellation.isCancelled else { throw OnlineSubtitle.CommonError.dismissed }
+          return self.searchForSubtitles(url, hash, mediaName)
         }.then { subs in
           guard !cancellation.isCancelled else { throw OnlineSubtitle.CommonError.dismissed }
           // A manual fallback must not spend several of OpenSubtitles' limited downloads merely
@@ -240,7 +261,8 @@ class OpenSub {
           subs.forEach { $0.audioMatchStatus = .unverified }
           let checkCandidates = Array(subs.prefix(3))
           let verification: Promise<Void> = Preference.bool(for: .verifyOpenSubAudio) ?
-            SubtitleAudioMatcher.verify(mediaURL: url, candidates: checkCandidates, cancellation: cancellation) :
+            SubtitleAudioMatcher.verify(mediaURL: url, mediaDuration: mediaDuration,
+                                        candidates: checkCandidates, cancellation: cancellation) :
             .value(())
           return verification
             .recover { error -> Promise<Void> in

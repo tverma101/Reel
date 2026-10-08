@@ -25,16 +25,16 @@
 "input.already_exists" = "Значение уже существует.";
 
 // Guide Window
-"guide.highlights" = "Что нового в IINA";
+"guide.highlights" = "Что нового в Reel";
 "guide.basic_settings" = "Основные параметры";
 "guide.faq" = "Часто задаваемые вопросы (FAQ)";
 
 // Initial Window
-"initial.announcement" = "Вы используете %@ версию IINA";
-"initial.beta.desc" = "Снимите флажок «Получать бета-обновления» в Настройках (вкладка «Основные») и установите стабильную версию с нашего <a href=\"https://iina.io\">официального сайта</a>.";
-"initial.nightly.desc" = "Ночные сборки не рекомендуются для ежедневного использования. На данный момент ночные сборки не поддерживают автоматическое обновление. Пожалуйста, загрузите новейшую сборку вручную с нашего <a href=\"https://nightly.iina.io\">веб-сайта ночных сборок</a>.";
+"initial.announcement" = "Вы используете %@ версию Reel";
+"initial.beta.desc" = "Снимите флажок «Получать бета-обновления» в Настройках (вкладка «Основные») и установите стабильную версию с нашего <a href=\"https://github.com/tverma101/Reel\">официального сайта</a>.";
+"initial.nightly.desc" = "Ночные сборки не рекомендуются для ежедневного использования. На данный момент ночные сборки не поддерживают автоматическое обновление. Пожалуйста, загрузите новейшую сборку вручную с нашего <a href=\"https://github.com/tverma101/Reel/actions\">веб-сайта ночных сборок</a>.";
 "initial.debug.desc" = "Отладочные сборки обычно не окончательно оптимизированы, поэтому не рекомендуются для ежедневного использования. Отладочные сборки не поддерживают автоматическое обновление.";
-"initial.bug_report" = "Сообщить через <a href=\"https://github.com/iina/iina/issues\">GitHub проблемы</a>.";
+"initial.bug_report" = "Сообщить через <a href=\"https://github.com/tverma101/Reel/issues\">GitHub проблемы</a>.";
 
 // Inspector Window
 "inspector.error" = "Ошибка";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "Новый фильтр";
 "alert.add_filter.message" = "Введите строку фильтра в формате команд «vf» или «af» из mpv.";
 
-"alert.keybinding_config.error" = "Ошибка разбора файла конфигурации клавиш «%@»! Сброс до стандартной конфигурации клавиш IINA. Проверьте свою конфигурацию.";
+"alert.keybinding_config.error" = "Ошибка разбора файла конфигурации клавиш «%@»! Сброс до стандартной конфигурации клавиш Reel. Проверьте свою конфигурацию.";
 "alert.delete_keybindingset.title" = "Удалить конфигурацию";
 "alert.delete_keybindingset.message" = "Вы уверены, что хотите удалить эту конфигурацию?";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "Не удается выполнить вход. Проверьте имя пользователя, пароль и состояние сети.\n\n%@";
 "alert.sub.save_downloaded.title" = "Сохранить загруженные субтитры";
 
-"alert.set_default.title" = "Установка IINA приложением по умолчанию";
-"alert.set_default.message" = "IINA станет приложением по умолчанию для всех поддерживаемых типов файлов.";
+"alert.set_default.title" = "Установка Reel приложением по умолчанию";
+"alert.set_default.message" = "Reel станет приложением по умолчанию для всех поддерживаемых типов файлов.";
 "alert.set_default.success" = "Завершено: %d успешно и %d неудачно.";
 
 "alert.add_watch.title" = "Добавить свойство просмотра";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "Не удалось найти пакет.";
 "plugin.install_error.cannot_download" = "Не удалось загрузить плагин.\n\nВывод установщика:%@\n";
 "plugin.install_error.cannot_unpackage" = "Не удалось распаковать плагин.\n\nВывод установщика:%@\n";
-"plugin.install_error.cannot_load" = "IINA не может загрузить этот плагин. Возможно, у него неверный формат.";
+"plugin.install_error.cannot_load" = "Reel не может загрузить этот плагин. Возможно, у него неверный формат.";
 "plugin.check_for_updates" = "Проверить обновления";
 "plugin.updating" = "Загружаю обновление…";
 
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Измеренная пиковая яркость дисплея. По умолчанию IINA автоматически определяет нужное значение. Если автоопределение не удалось, яркость будет установлена на подходящее значение, основанное на характеристиках передачи дисплея. Включите этот параметр, если хотите вручную задать яркость дисплея.";
+"settings.toneMappingTargetPeak.desc" = "Измеренная пиковая яркость дисплея. По умолчанию Reel автоматически определяет нужное значение. Если автоопределение не удалось, яркость будет установлена на подходящее значение, основанное на характеристиках передачи дисплея. Включите этот параметр, если хотите вручную задать яркость дисплея.";
 "settings.toneMappingTargetPeak.label" = "Пиковая яркость";
 "settings.videoThreads.desc" = "По умолчанию: 0 (автоматически)";
 "settings.videoThreads.label" = "Количество потоков";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "По умолчанию: 153,600";
 "settings.defaultCacheSize.label" = "Размер буфера кэша (KiB)";
 "settings.enableCache.label" = "Предварительно загружать и буферизовать данные из сети";
-"settings.httpProxy.desc" = "Эта настройка вступит в силу после перезапуска IINA.";
+"settings.httpProxy.desc" = "Эта настройка вступит в силу после перезапуска Reel.";
 "settings.httpProxy.label" = "HTTP-прокси";
 "settings.secPrefech.desc" = "По умолчанию: 36,000";
 "settings.secPrefech.label" = "Длина предзагружаемых данных, с";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Включить скрипт youtube-dl для mpv";
 "settings.ytdlRawOptions.desc" = "Формат: <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "Опции";
-"settings.ytdlSearchPath.desc" = "IINA будет искать youtube-dl в этой папке. Требуется перезапуск.";
+"settings.ytdlSearchPath.desc" = "Reel будет искать youtube-dl в этой папке. Требуется перезапуск.";
 "settings.ytdlSearchPath.label" = "Свой путь к youtube-dl";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "Если включено, IINA будет автоматически искать субтитры в интернете только для видео без загруженных субтитров и продолжительностью более 20 минут.";
+"settings.autoSearchOnlineSub.desc" = "Если включено, Reel будет автоматически искать субтитры в интернете только для видео без загруженных субтитров и продолжительностью более 20 минут.";
 "settings.autoSearchOnlineSub.label" = "Автоматически искать субтитры в интернете";
 "settings.displayInLetterBox.label" = "Показывать субтитры под видео в полноэкранном режиме";
 "settings.subAlignX.items.0" = "Слева";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "Снизу";
 "settings.subAutoLoadIINA.items.0" = "Выключена";
 "settings.subAutoLoadIINA.items.1" = "Субтитры, содержащие имя медиафайла";
-"settings.subAutoLoadIINA.items.2" = "Умное определение IINA";
+"settings.subAutoLoadIINA.items.2" = "Умное определение Reel";
 "settings.subAutoLoadIINA.label" = "Автозагрузка";
 "settings.subAutoLoadPriorityString.desc" = "Введите список строк, разделенных запятой.";
 "settings.subAutoLoadPriorityString.label" = "Предпочитать субтитры, содержащие в имени файла";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "Действие кнопок «Назад» и «Вперед»";
 "settings.controlBarAutoHideTimeout.label" = "Скрывать через";
 "settings.controlBarStickToCenter.label" = "Привязывать к центру при перетаскивании";
-"settings.disableAnimations.desc" = "Если в macOS включены настройки универсального доступа для уменьшения движения, то IINA снизит количество анимаций интерфейса, которые могут вызывать проблемы у людей с нарушениями вестибулярного аппарата. Если этого недостаточно, установите флажок «Отключить анимации», чтобы дополнительно сократить анимации интерфейса.";
+"settings.disableAnimations.desc" = "Если в macOS включены настройки универсального доступа для уменьшения движения, то Reel снизит количество анимаций интерфейса, которые могут вызывать проблемы у людей с нарушениями вестибулярного аппарата. Если этого недостаточно, установите флажок «Отключить анимации», чтобы дополнительно сократить анимации интерфейса.";
 "settings.disableAnimations.label" = "Отключить анимации";
 "settings.disableOSDFileStartMsg.label" = "Открытие файла";
 "settings.disableOSDPauseResumeMsgs.label" = "Пауза / возобновить";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "Окно";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "Эти настройки вступят в силу после перезапуска IINA.";
+"settings.enableAdvancedSettings.desc" = "Эти настройки вступят в силу после перезапуска Reel.";
 "settings.enableAdvancedSettings.label" = "Включить расширенные настройки";
 "settings.enableLogging.label" = "Включить запись журнала в виде файла";
 "settings.logLevel.desc" = "Для просмотра журналов используйте меню Окно > Журнал сообщений.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "Не удалось загрузить страницу.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "Шрифт";
-"settings.$GetBrowserExtensionsForIINA" = "Установить расширения браузера для IINA";
+"settings.$GetBrowserExtensionsForIINA" = "Установить расширения браузера для Reel";
 "settings.$GetPlugins" = "Скачать плагины…";
 "settings.$Hardware" = "Аппаратное обеспечение";
 "settings.$Height" = "Высота";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "Экранное меню";
 "settings.$OnScreenDisplay" = "Экранные сообщения";
 "settings.$OnlineSubtitles" = "Cубтитры онлайн";
-"settings.$OpenLinksOrCurrentWebpage" = "Открытие ссылок или текущей веб-страницы в IINA в одно нажатие. Веб-сайт должен поддерживаться youtube-dl.";
+"settings.$OpenLinksOrCurrentWebpage" = "Открытие ссылок или текущей веб-страницы в Reel в одно нажатие. Веб-сайт должен поддерживаться youtube-dl.";
 "settings.$OpenLogDirectory" = "Открыть папку журналов";
 "settings.$OpenLogWindow" = "Открыть просмотр журнала";
 "settings.$OrSelectFrom" = "Или выберите из доступных плагинов";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "Картинка в\nкартинке";
 "settings.$Playlist" = "Плейлист";
-"settings.$PleaseSelectTheMediaTypes" = "Типы файлов, для которых IINA будет приложением по умолчанию.";
+"settings.$PleaseSelectTheMediaTypes" = "Типы файлов, для которых Reel будет приложением по умолчанию.";
 "settings.$Position" = "Расположение";
 "settings.$PreferredLanguage" = "Предпочитаемый язык (ISO 639-2)";
 "settings.$RestoreAlerts" = "Восстановление уведомлений";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "Список кодеков, для которых должна использоваться сквозная передача аудио в сжатом виде.\n\nВнимание! Нет надобности использовать данную настройку без особой на то причины. HDMI поддерживает несжатое многоканальное PCM-аудио, а преобразование без потерь для DTS-HD поддерживается с помощью декодера DCA, используемого в FFmpeg. Если данная настройка включена и выходное устройство не поддерживает S/PDIF, то воспроизведение может не начаться.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "Снимки экрана";
-"settings.$SetIINAAsTheDefault" = "Установить IINA в качестве приложения по умолчанию";
+"settings.$SetIINAAsTheDefault" = "Установить Reel в качестве приложения по умолчанию";
 "settings.$Settings" = "Настройки";
 "settings.$Shadow" = "Тень";
 "settings.$ShowInFinder" = "Показать в Finder";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "границы экрана";
 "settings.$toThe" = "от";
 "settings.$top" = "верхней";
-"settings.$ytdlWarning" = "У плагина Online Media есть дополнительные функции, такие как смена качества и загрузка видео. IINA сможет использовать плагин, если он установлен и включен. Настройки ниже работают только в том случае, если плагин недоступен.";
+"settings.$ytdlWarning" = "У плагина Online Media есть дополнительные функции, такие как смена качества и загрузка видео. Reel сможет использовать плагин, если он установлен и включен. Настройки ниже работают только в том случае, если плагин недоступен.";

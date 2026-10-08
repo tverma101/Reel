@@ -4,7 +4,8 @@ The installed local fork lives at `/Applications/Reel.app`. Keep one runnable co
 bundle identifier (`io.github.tverma101.reel`): macOS chooses between registered copies using its
 own launch heuristics. Renaming a backup to another `.app` name does not give it a separate identity.
 
-The source checkout is `~/Projects/iina`. Local support files live at `~/Documents/IINA`:
+The paths below are one machine's local layout, not a requirement. The source
+checkout is `~/Projects/iina`, and local support files live at `~/Documents/IINA`:
 
 | Folder | Purpose |
 | --- | --- |

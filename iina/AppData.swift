@@ -51,14 +51,15 @@ struct AppData {
   static let thumbnailCacheFolder = "thumb_cache"
   static let screenshotCacheFolder = "screenshot_cache"
 
-  static let githubLink = "https://github.com/iina/iina"
-  static let contributorsLink = "https://github.com/iina/iina/graphs/contributors"
+  static let githubLink = "https://github.com/tverma101/Reel"
+  static let contributorsLink = "https://github.com/tverma101/Reel/graphs/contributors"
+  static let helpLink = "https://github.com/tverma101/Reel#building"
   static let crowdinMembersLink = "https://crowdin.com/project/iina"
+  // Retained upstream articles still document inherited key binding and mpv settings behavior.
   static let wikiLink = "https://github.com/iina/iina/wiki"
-  static let websiteLink = "https://iina.io"
+  // This fork has no separate website; use its public repository as the project home.
+  static let websiteLink = "https://github.com/tverma101/Reel"
   static let ytdlHelpLink = "https://github.com/rg3/youtube-dl/blob/master/README.md#readme"
-  static let appcastLink = "https://www.iina.io/appcast.xml"
-  static let appcastBetaLink = "https://www.iina.io/appcast-beta.xml"
   static let assrtRegisterLink = "https://secure.assrt.net/user/register.xml?redir=http%3A%2F%2Fassrt.net%2Fusercp.php"
   static let chromeExtensionLink = "https://chrome.google.com/webstore/detail/open-in-iina/pdnojahnhpgmdhjdhgphgdcecehkbhfo"
   static let firefoxExtensionLink = "https://addons.mozilla.org/addon/open-in-iina-x"
@@ -152,6 +153,7 @@ extension Notification.Name {
   static let iinaAudioDelayChanged = Notification.Name("iinaAudioDelayChanged")
   static let iinaSubScaleChanged = Notification.Name("iinaSubScaleChanged")
   static let iinaSubPositionChanged = Notification.Name("iinaSubPositionChanged")
+  static let iinaSubStyleChanged = Notification.Name("iinaSubStyleChanged")
   static let iinaSubDelayChanged = Notification.Name("iinaSubDelayChanged")
   static let iinaSubVisibilityChanged = Notification.Name("iinaSubVisibilityChanged")
 

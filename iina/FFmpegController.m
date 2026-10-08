@@ -61,7 +61,6 @@ return -1;\
 
 @end
 
-
 @implementation FFmpegController
 
 - (instancetype)init
@@ -418,129 +417,11 @@ return -1;\
 + (NSData *)readMonoAudioFromFile:(nonnull NSString *)file
                          startTime:(double)startTime
                           duration:(double)duration
+                cancellationCheck:(nullable BOOL (^)(void))cancellationCheck
 {
-  if (file.length == 0 || !isfinite(startTime) || !isfinite(duration) || startTime < 0 || duration <= 0) {
-    return nil;
-  }
-
-  AVFormatContext *formatContext = NULL;
-  AVCodecContext *decoder = NULL;
-  SwrContext *resampler = NULL;
-  AVPacket *packet = NULL;
-  AVFrame *frame = NULL;
-  NSMutableData *output = [NSMutableData data];
-  NSData *result = nil;
-  AVChannelLayout outputLayout;
-  memset(&outputLayout, 0, sizeof(outputLayout));
-  int audioStreamIndex = -1;
-  int ret = 0;
-  BOOL reachedEnd = NO;
-  double mediaOrigin = 0;
-  double sampleEnd = startTime + duration;
-
-  if (avformat_open_input(&formatContext, file.fileSystemRepresentation, NULL, NULL) < 0 ||
-      avformat_find_stream_info(formatContext, NULL) < 0) {
-    goto cleanup;
-  }
-  audioStreamIndex = av_find_best_stream(formatContext, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
-  if (audioStreamIndex < 0) {
-    goto cleanup;
-  }
-
-  AVStream *audioStream = formatContext->streams[audioStreamIndex];
-  const AVCodec *codec = avcodec_find_decoder(audioStream->codecpar->codec_id);
-  if (codec == NULL) {
-    goto cleanup;
-  }
-  decoder = avcodec_alloc_context3(codec);
-  if (decoder == NULL || avcodec_parameters_to_context(decoder, audioStream->codecpar) < 0 ||
-      avcodec_open2(decoder, codec, NULL) < 0 || decoder->sample_rate <= 0 || decoder->ch_layout.nb_channels <= 0) {
-    goto cleanup;
-  }
-
-  av_channel_layout_default(&outputLayout, 1);
-  if (swr_alloc_set_opts2(&resampler, &outputLayout, AV_SAMPLE_FMT_FLT, 16000,
-                          &decoder->ch_layout, decoder->sample_fmt, decoder->sample_rate, 0, NULL) < 0 ||
-      resampler == NULL || swr_init(resampler) < 0) {
-    goto cleanup;
-  }
-  av_channel_layout_uninit(&outputLayout);
-
-  if (formatContext->start_time != AV_NOPTS_VALUE) {
-    mediaOrigin = (double)formatContext->start_time / AV_TIME_BASE;
-  }
-  double seekTime = mediaOrigin + MAX(0, startTime - 0.5);
-  int64_t seekTimestamp = av_rescale_q((int64_t)llround(seekTime * AV_TIME_BASE),
-                                       AV_TIME_BASE_Q, audioStream->time_base);
-  if (avformat_seek_file(formatContext, audioStreamIndex, INT64_MIN, seekTimestamp,
-                         seekTimestamp, AVSEEK_FLAG_BACKWARD) < 0) {
-    goto cleanup;
-  }
-  avcodec_flush_buffers(decoder);
-
-  packet = av_packet_alloc();
-  frame = av_frame_alloc();
-  if (packet == NULL || frame == NULL) {
-    goto cleanup;
-  }
-
-  while (!reachedEnd && av_read_frame(formatContext, packet) >= 0) {
-    if (packet->stream_index == audioStreamIndex) {
-      ret = avcodec_send_packet(decoder, packet);
-      if (ret >= 0) {
-        while ((ret = avcodec_receive_frame(decoder, frame)) >= 0) {
-          if (frame->best_effort_timestamp == AV_NOPTS_VALUE) {
-            av_frame_unref(frame);
-            continue;
-          }
-          double frameStart = frame->best_effort_timestamp * av_q2d(audioStream->time_base) - mediaOrigin;
-          double frameEnd = frameStart + (double)frame->nb_samples / decoder->sample_rate;
-          if (frameStart > sampleEnd + 1.0) {
-            reachedEnd = YES;
-            av_frame_unref(frame);
-            break;
-          }
-          if (frameEnd >= startTime - 0.1 && frameStart <= sampleEnd + 0.1) {
-            int outputCapacity = (int)av_rescale_rnd(swr_get_delay(resampler, decoder->sample_rate) + frame->nb_samples,
-                                                     16000, decoder->sample_rate, AV_ROUND_UP);
-            if (outputCapacity > 0) {
-              float *samples = av_malloc_array(outputCapacity, sizeof(float));
-              if (samples == NULL) {
-                av_frame_unref(frame);
-                goto cleanup;
-              }
-              uint8_t *outputPlanes[] = {(uint8_t *)samples};
-              int outputSamples = swr_convert(resampler, outputPlanes, outputCapacity,
-                                              (const uint8_t **)frame->extended_data, frame->nb_samples);
-              if (outputSamples > 0) {
-                int first = MAX(0, (int)floor((startTime - frameStart) * 16000));
-                int last = MIN(outputSamples, (int)ceil((sampleEnd - frameStart) * 16000));
-                if (last > first) {
-                  [output appendBytes:samples + first length:(NSUInteger)(last - first) * sizeof(float)];
-                }
-              }
-              av_free(samples);
-            }
-          }
-          av_frame_unref(frame);
-        }
-      }
-    }
-    av_packet_unref(packet);
-  }
-
-  if (output.length >= sizeof(float) * 16000) {
-    result = [output copy];
-  }
-
-cleanup:
-  av_channel_layout_uninit(&outputLayout);
-  if (frame != NULL) av_frame_free(&frame);
-  if (packet != NULL) av_packet_free(&packet);
-  if (resampler != NULL) swr_free(&resampler);
-  if (decoder != NULL) avcodec_free_context(&decoder);
-  if (formatContext != NULL) avformat_close_input(&formatContext);
-  return result;
+  FFmpegAudioChunkReader *reader = [[FFmpegAudioChunkReader alloc] initWithSource:file
+                                                                 cancellationCheck:cancellationCheck];
+  return [reader readMonoAudioFrom:startTime duration:duration cancellationCheck:cancellationCheck];
 }
 
 // MARK: - Decoding Image
@@ -926,5 +807,208 @@ cleanup:
   LOG_DEBUG(@"Height: %d", pFrame->height);
 }
 #endif
+
+@end
+
+// MARK: - FFmpegAudioChunkReader
+
+static int FFmpegAudioChunkReaderInterrupt(void *opaque);
+
+@interface FFmpegAudioChunkReader () {
+  AVFormatContext *formatContext;
+  AVCodecContext *decoder;
+  SwrContext *resampler;
+  int audioStreamIndex;
+  double mediaOrigin;
+}
+@property (nonatomic, copy, nullable) BOOL (^cancellationCheck)(void);
+@property (nonatomic, readwrite) BOOL failed;
+@end
+
+static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
+  FFmpegAudioChunkReader *reader = (__bridge FFmpegAudioChunkReader *)opaque;
+  BOOL (^check)(void) = reader.cancellationCheck;
+  return check != nil && check() ? 1 : 0;
+}
+
+@implementation FFmpegAudioChunkReader
+
+- (nullable instancetype)initWithSource:(nonnull NSString *)source
+                      cancellationCheck:(nullable BOOL (^)(void))cancellationCheck
+{
+  self = [super init];
+  if (self == nil || source.length == 0) {
+    return nil;
+  }
+  audioStreamIndex = -1;
+  _cancellationCheck = [cancellationCheck copy];
+
+  // Network streams are opened by URL with bounded I/O timeouts; anything else is a local path.
+  NSString *scheme = [NSURL URLWithString:source].scheme.lowercaseString;
+  BOOL isNetworkStream = [scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"];
+  AVDictionary *openOptions = NULL;
+  if (isNetworkStream) {
+    av_dict_set(&openOptions, "rw_timeout", "10000000", 0);
+    av_dict_set(&openOptions, "reconnect", "1", 0);
+    av_dict_set(&openOptions, "protocol_whitelist", "http,https,tcp,tls", 0);
+  }
+
+  formatContext = avformat_alloc_context();
+  if (formatContext == NULL) {
+    av_dict_free(&openOptions);
+    return nil;
+  }
+  formatContext->interrupt_callback.callback = FFmpegAudioChunkReaderInterrupt;
+  formatContext->interrupt_callback.opaque = (__bridge void *)self;
+  int ret = avformat_open_input(&formatContext,
+                                isNetworkStream ? source.UTF8String : source.fileSystemRepresentation,
+                                NULL, &openOptions);
+  av_dict_free(&openOptions);
+  if (ret < 0) {
+    return nil;  // avformat_open_input frees the context on failure.
+  }
+
+  audioStreamIndex = av_find_best_stream(formatContext, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
+  AVCodecParameters *params = audioStreamIndex >= 0 ? formatContext->streams[audioStreamIndex]->codecpar : NULL;
+  // Containers such as MP4 describe the audio fully in their header. Probing packets would also
+  // download video data, which for a network stream costs seconds, so only probe when needed.
+  BOOL needsProbe = params == NULL || params->sample_rate <= 0 || params->ch_layout.nb_channels <= 0;
+  if (needsProbe) {
+    if (avformat_find_stream_info(formatContext, NULL) < 0) {
+      return nil;
+    }
+    audioStreamIndex = av_find_best_stream(formatContext, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
+    if (audioStreamIndex < 0) {
+      return nil;
+    }
+  }
+  for (unsigned int index = 0; index < formatContext->nb_streams; index++) {
+    if ((int)index != audioStreamIndex) {
+      formatContext->streams[index]->discard = AVDISCARD_ALL;
+    }
+  }
+
+  AVStream *audioStream = formatContext->streams[audioStreamIndex];
+  const AVCodec *codec = avcodec_find_decoder(audioStream->codecpar->codec_id);
+  if (codec == NULL) {
+    return nil;
+  }
+  decoder = avcodec_alloc_context3(codec);
+  if (decoder == NULL || avcodec_parameters_to_context(decoder, audioStream->codecpar) < 0 ||
+      avcodec_open2(decoder, codec, NULL) < 0 || decoder->sample_rate <= 0 || decoder->ch_layout.nb_channels <= 0) {
+    return nil;
+  }
+
+  AVChannelLayout outputLayout;
+  memset(&outputLayout, 0, sizeof(outputLayout));
+  av_channel_layout_default(&outputLayout, 1);
+  ret = swr_alloc_set_opts2(&resampler, &outputLayout, AV_SAMPLE_FMT_FLT, 16000,
+                            &decoder->ch_layout, decoder->sample_fmt, decoder->sample_rate, 0, NULL);
+  av_channel_layout_uninit(&outputLayout);
+  if (ret < 0 || resampler == NULL || swr_init(resampler) < 0) {
+    return nil;
+  }
+
+  if (formatContext->start_time != AV_NOPTS_VALUE) {
+    mediaOrigin = (double)formatContext->start_time / AV_TIME_BASE;
+  }
+  _cancellationCheck = nil;
+  return self;
+}
+
+- (void)dealloc
+{
+  if (resampler != NULL) swr_free(&resampler);
+  if (decoder != NULL) avcodec_free_context(&decoder);
+  if (formatContext != NULL) avformat_close_input(&formatContext);
+}
+
+- (nullable NSData *)readMonoAudioFrom:(double)startTime
+                              duration:(double)duration
+                     cancellationCheck:(nullable BOOL (^)(void))cancellationCheck
+{
+  if (_failed || !isfinite(startTime) || !isfinite(duration) || startTime < 0 || duration <= 0) {
+    return nil;
+  }
+  self.cancellationCheck = cancellationCheck;
+  NSMutableData *output = [NSMutableData data];
+  AVPacket *packet = av_packet_alloc();
+  AVFrame *frame = av_frame_alloc();
+  BOOL reachedEnd = NO;
+  int readResult = 0;
+  double sampleEnd = startTime + duration;
+  AVStream *audioStream = formatContext->streams[audioStreamIndex];
+
+  double seekTime = mediaOrigin + MAX(0, startTime - 0.5);
+  int64_t seekTimestamp = av_rescale_q((int64_t)llround(seekTime * AV_TIME_BASE),
+                                       AV_TIME_BASE_Q, audioStream->time_base);
+  if (packet == NULL || frame == NULL ||
+      avformat_seek_file(formatContext, audioStreamIndex, INT64_MIN, seekTimestamp,
+                         seekTimestamp, AVSEEK_FLAG_BACKWARD) < 0) {
+    _failed = YES;
+    goto cleanup;
+  }
+  avcodec_flush_buffers(decoder);
+  // Drop samples buffered from the previous chunk; this chunk starts at a new position.
+  swr_close(resampler);
+  if (swr_init(resampler) < 0) {
+    _failed = YES;
+    goto cleanup;
+  }
+
+  while (!reachedEnd && !(cancellationCheck && cancellationCheck()) &&
+         (readResult = av_read_frame(formatContext, packet)) >= 0) {
+    if (packet->stream_index == audioStreamIndex && avcodec_send_packet(decoder, packet) >= 0) {
+      while (!(cancellationCheck && cancellationCheck()) && avcodec_receive_frame(decoder, frame) >= 0) {
+        if (frame->best_effort_timestamp == AV_NOPTS_VALUE) {
+          av_frame_unref(frame);
+          continue;
+        }
+        double frameStart = frame->best_effort_timestamp * av_q2d(audioStream->time_base) - mediaOrigin;
+        double frameEnd = frameStart + (double)frame->nb_samples / decoder->sample_rate;
+        if (frameStart > sampleEnd + 1.0) {
+          reachedEnd = YES;
+          av_frame_unref(frame);
+          break;
+        }
+        if (frameEnd >= startTime - 0.1 && frameStart <= sampleEnd + 0.1) {
+          int outputCapacity = (int)av_rescale_rnd(swr_get_delay(resampler, decoder->sample_rate) + frame->nb_samples,
+                                                   16000, decoder->sample_rate, AV_ROUND_UP);
+          if (outputCapacity > 0) {
+            float *samples = av_malloc_array(outputCapacity, sizeof(float));
+            if (samples == NULL) {
+              av_frame_unref(frame);
+              goto cleanup;
+            }
+            uint8_t *outputPlanes[] = {(uint8_t *)samples};
+            int outputSamples = swr_convert(resampler, outputPlanes, outputCapacity,
+                                            (const uint8_t **)frame->extended_data, frame->nb_samples);
+            if (outputSamples > 0) {
+              int first = MAX(0, (int)floor((startTime - frameStart) * 16000));
+              int last = MIN(outputSamples, (int)ceil((sampleEnd - frameStart) * 16000));
+              if (last > first) {
+                [output appendBytes:samples + first length:(NSUInteger)(last - first) * sizeof(float)];
+              }
+            }
+            av_free(samples);
+          }
+        }
+        av_frame_unref(frame);
+      }
+    }
+    av_packet_unref(packet);
+  }
+  // A read error other than the end of the media (for example a dropped connection) leaves the
+  // demuxer in an unknown state; the owner should open a new reader.
+  if (readResult < 0 && readResult != AVERROR_EOF && !(cancellationCheck && cancellationCheck())) {
+    _failed = YES;
+  }
+
+cleanup:
+  if (frame != NULL) av_frame_free(&frame);
+  if (packet != NULL) av_packet_free(&packet);
+  self.cancellationCheck = nil;
+  return output.length >= sizeof(float) * 16000 ? [output copy] : nil;
+}
 
 @end

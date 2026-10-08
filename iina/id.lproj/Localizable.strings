@@ -30,11 +30,11 @@
 "guide.faq" = "Pertanyaan Umum";
 
 // Initial Window
-"initial.announcement" = "Kamu memakai IINA versi %@";
-"initial.beta.desc" = "Jika anda ingin mengembalikan ke versi rilis, hilangkan \"terima pembaruan beta\" dari Pengaturan > Umum, dan instal versi stabil dari <a href=\"https://iina.io\">situs resmi</a>.";
-"initial.nightly.desc" = "Versi nightly tidak disarankan untuk digunakan sehari-hari. Versi nightly saat ini tidak mendukung pembaruan otomatis. Unduh versi baru secara manual dari <a href=\"https://nightly.iina.io\">situs nightly</a> kami.";
+"initial.announcement" = "Kamu memakai Reel versi %@";
+"initial.beta.desc" = "Jika anda ingin mengembalikan ke versi rilis, hilangkan \"terima pembaruan beta\" dari Pengaturan > Umum, dan instal versi stabil dari <a href=\"https://github.com/tverma101/Reel\">situs resmi</a>.";
+"initial.nightly.desc" = "Versi nightly tidak disarankan untuk digunakan sehari-hari. Versi nightly saat ini tidak mendukung pembaruan otomatis. Unduh versi baru secara manual dari <a href=\"https://github.com/tverma101/Reel/actions\">situs nightly</a> kami.";
 "initial.debug.desc" = "Bangunan debug biasanya tidak dioptimalkan performanya, sehingga tidak disarankan untuk digunakan sebagai drive harian. Bangunan debug tidak mendukung pembaruan otomatis.";
-"initial.bug_report" = "Laporkan melalui <a href=\"https://github.com/iina/iina/issues\">Masalah GitHub</a>.";
+"initial.bug_report" = "Laporkan melalui <a href=\"https://github.com/tverma101/Reel/issues\">Masalah GitHub</a>.";
 
 // Inspector Window
 "inspector.error" = "Eror";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "Filter Baru";
 "alert.add_filter.message" = "Mohon isi string filter dengan format vf dari mpv atau af.";
 
-"alert.keybinding_config.error" = "Terjadi kesalahan saat memuat file konfigurasi pemetaan tombol \"%@\"! Pemetaan tombol akan dikembalikan ke setelan bawaan IINA. Mohon periksa kembali konfigurasi Anda.";
+"alert.keybinding_config.error" = "Terjadi kesalahan saat memuat file konfigurasi pemetaan tombol \"%@\"! Pemetaan tombol akan dikembalikan ke setelan bawaan Reel. Mohon periksa kembali konfigurasi Anda.";
 "alert.delete_keybindingset.title" = "Delete Key Binding Set";
 "alert.delete_keybindingset.message" = "Are you sure to delete this key binding set?";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "Tidak bisa masuk. Harap periksa nama pengguna, kata sandi, dan status jaringan Anda.\n\n%@";
 "alert.sub.save_downloaded.title" = "Simpan Terjemahan Terunduh";
 
-"alert.set_default.title" = "Tetapkan IINA sebagai Aplikasi Utama";
-"alert.set_default.message" = "IINA akan ditetapkan sebagai aplikasi utama untuk semua tipe file yang didukung.";
+"alert.set_default.title" = "Tetapkan Reel sebagai Aplikasi Utama";
+"alert.set_default.message" = "Reel akan ditetapkan sebagai aplikasi utama untuk semua tipe file yang didukung.";
 "alert.set_default.success" = "Tuntas dengan kesuksesan %d dan kegagalan %d.";
 
 "alert.add_watch.title" = "Tambahkan Properti mpv";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "Tidak dapat menemukan package file.";
 "plugin.install_error.cannot_download" = "Gagal mengunduh plugin.\n\nHasil:%@\n";
 "plugin.install_error.cannot_unpackage" = "Gagal membongkar plugin.\n\nHasil:%@\n";
-"plugin.install_error.cannot_load" = "IINA tidak dapat memproses plugin ini. Kemungkinan terdapat kesalahan format.";
+"plugin.install_error.cannot_load" = "Reel tidak dapat memproses plugin ini. Kemungkinan terdapat kesalahan format.";
 "plugin.check_for_updates" = "Periksa Pembaruan";
 "plugin.updating" = "Mengunduh pembaruan…";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "Jeda";
 "settings.pauseresumeWhen" = "Jeda/lanjut saat";
 "settings.playWhenEnteringFullScreen.label" = "Putar saat memasuki layar penuh";
-"settings.playlistAutoAdd.desc" = "Perlu menjalankan ulang IINA untuk dapat berpengaruh.";
+"settings.playlistAutoAdd.desc" = "Perlu menjalankan ulang Reel untuk dapat berpengaruh.";
 "settings.playlistAutoAdd.label" = "Tambahkan file dalam folder yang sama secara otomatis";
 "settings.playlistAutoPlayNext.label" = "Putar item berikutnya secara otomatis";
 "settings.playlistShowMetadata.label" = "Tampilkan nama artis dan trek untuk file audio jika memungkinkan";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "Puncak target";
 "settings.videoThreads.desc" = "Bawaan: 0 (Otomatis)";
 "settings.videoThreads.label" = "Jumlah rangkaian";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "Perlu menjalankan ulang IINA agar dapat berpengaruh.";
+"settings.httpProxy.desc" = "Perlu menjalankan ulang Reel agar dapat berpengaruh.";
 "settings.httpProxy.label" = "Proksi HTTP";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "Detik untuk memuat";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Enable mpv's youtube-dl script";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "Opsi murni";
-"settings.ytdlSearchPath.desc" = "IINA akan mencari youtube-dl dalam folder ini. Diperlukan untuk menjalankan ulang aplikasi.";
+"settings.ytdlSearchPath.desc" = "Reel akan mencari youtube-dl dalam folder ini. Diperlukan untuk menjalankan ulang aplikasi.";
 "settings.ytdlSearchPath.label" = "Jalur kustom youtube-dl";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "If enabled, IINA will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
+"settings.autoSearchOnlineSub.desc" = "If enabled, Reel will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
 "settings.autoSearchOnlineSub.label" = "Cari terjemahan online secara otomatis";
 "settings.displayInLetterBox.label" = "Tampilkan terjemahan pada kotak tulisan saat mode layar penuh";
 "settings.subAlignX.items.0" = "Kiri";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "Bawah";
 "settings.subAutoLoadIINA.items.0" = "Non-aktif";
 "settings.subAutoLoadIINA.items.1" = "Nama terjemahan yang mengandung nama file media";
-"settings.subAutoLoadIINA.items.2" = "Deteksi otomatis oleh IINA";
+"settings.subAutoLoadIINA.items.2" = "Deteksi otomatis oleh Reel";
 "settings.subAutoLoadIINA.label" = "Auto load";
 "settings.subAutoLoadPriorityString.desc" = "Mohon masukkan daftar string menggunakan tanda koma sebagai pemisah.";
 "settings.subAutoLoadPriorityString.label" = "Prioritas terjemahan dengan nama file";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "Gunakan tombol kiri/kanan untuk";
 "settings.controlBarAutoHideTimeout.label" = "Auto hide after";
 "settings.controlBarStickToCenter.label" = "Posisikan di tengah saat menggeser";
-"settings.disableAnimations.desc" = "Saat pengaturan aksesibilitas macOS Kurangi Gerakan diaktifkan, IINA akan mengurangi animasi antarmuka pengguna yang umumnya menyebabkan masalah bagi mereka yang memiliki gangguan vestibular. Jika tidak cukup, pengaturan ini dapat juga digunakan untuk mengurangi gerakan dengan menghilangkan animasi antarmuka pengguna.";
+"settings.disableAnimations.desc" = "Saat pengaturan aksesibilitas macOS Kurangi Gerakan diaktifkan, Reel akan mengurangi animasi antarmuka pengguna yang umumnya menyebabkan masalah bagi mereka yang memiliki gangguan vestibular. Jika tidak cukup, pengaturan ini dapat juga digunakan untuk mengurangi gerakan dengan menghilangkan animasi antarmuka pengguna.";
 "settings.disableAnimations.label" = "Nonaktifkan animasi";
 "settings.disableOSDFileStartMsg.label" = "Awal file";
 "settings.disableOSDPauseResumeMsgs.label" = "Jeda / Lanjut";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "Jendela";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "Pengaturan berikut akan efektif setelah IINA dimulai-ulang.";
+"settings.enableAdvancedSettings.desc" = "Pengaturan berikut akan efektif setelah Reel dimulai-ulang.";
 "settings.enableAdvancedSettings.label" = "Aktifkan pengaturan lanjutan";
 "settings.enableLogging.label" = "Aktifkan logging ke file";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "Gagal memuat halaman.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "Font";
-"settings.$GetBrowserExtensionsForIINA" = "Dapatkan ekstensi browser untuk IINA";
+"settings.$GetBrowserExtensionsForIINA" = "Dapatkan ekstensi browser untuk Reel";
 "settings.$GetPlugins" = "Get Plugins…";
 "settings.$Hardware" = "Hardware";
 "settings.$Height" = "Tinggi";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "Pengontrol pada Layar";
 "settings.$OnScreenDisplay" = "On-screen Display";
 "settings.$OnlineSubtitles" = "Terjemahan Online";
-"settings.$OpenLinksOrCurrentWebpage" = "Buka tautan atau situs yang sedang diakses di IINA dengan satu pencetan. Situs harus terdukung oleh youtube-dl.";
+"settings.$OpenLinksOrCurrentWebpage" = "Buka tautan atau situs yang sedang diakses di Reel dengan satu pencetan. Situs harus terdukung oleh youtube-dl.";
 "settings.$OpenLogDirectory" = "Buka Direktori Log";
 "settings.$OpenLogWindow" = "Open the log viewer";
 "settings.$OrSelectFrom" = "Or select from available plugins";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "Picture-in-Picture";
 "settings.$Playlist" = "Daftar Putar";
-"settings.$PleaseSelectTheMediaTypes" = "Pilih jenis media yang Anda ingin menetapkan IINA sebagai aplikasi utamanya.";
+"settings.$PleaseSelectTheMediaTypes" = "Pilih jenis media yang Anda ingin menetapkan Reel sebagai aplikasi utamanya.";
 "settings.$Position" = "Posisi";
 "settings.$PreferredLanguage" = "Pilihan bahasa";
 "settings.$RestoreAlerts" = "Pulihkan Peringatan";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "Tangkapan layar";
-"settings.$SetIINAAsTheDefault" = "Set IINA as the Default Application";
+"settings.$SetIINAAsTheDefault" = "Set Reel as the Default Application";
 "settings.$Settings" = "Pengaturan";
 "settings.$Shadow" = "Bayangan";
 "settings.$ShowInFinder" = "Tampilkan dalam Finder";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "bagian pinggir layar";
 "settings.$toThe" = "ke";
 "settings.$top" = "atas";
-"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";

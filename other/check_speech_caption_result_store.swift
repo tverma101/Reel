@@ -1,0 +1,123 @@
+import Foundation
+
+@main
+struct SpeechCaptionResultStoreChecks {
+  static var checks = 0
+
+  static func check(_ condition: @autoclosure () -> Bool, _ message: String) {
+    checks += 1
+    guard condition() else {
+      fputs("FAIL: \(message)\n", stderr)
+      exit(1)
+    }
+  }
+
+  static func main() {
+    var store = SpeechCaptionResultStore()
+    store.applyProgressiveResult(chunkStart: 10, audioStart: 10, audioEnd: 12, text: "First wording")
+    store.applyProgressiveResult(chunkStart: 10, audioStart: 10.04, audioEnd: 12.1, text: "Revised wording")
+    check(store.cues.count == 1 && store.cues[0].text == "Revised wording",
+          "replaces a revision with a slightly shifted start and expanded range")
+
+    store.applyProgressiveResult(chunkStart: 10, audioStart: 12.2, audioEnd: 13.4, text: "Adjacent phrase")
+    store.applyProgressiveResult(chunkStart: 10, audioStart: 11.8, audioEnd: 12.5, text: "Combined phrase")
+    check(store.cues.map(\.text) == ["Combined phrase"],
+          "a revised range removes every overlapping prior phrase")
+
+    store.applyProgressiveResult(chunkStart: 10, audioStart: 11.8, audioEnd: 12.5, text: "   ")
+    check(store.cues.isEmpty, "empty text revokes the previous result for that range")
+
+    store.applyProgressiveResult(chunkStart: 10, audioStart: 10, audioEnd: 11, text: "Before")
+    store.applyProgressiveResult(chunkStart: 10, audioStart: 11, audioEnd: 12, text: "After")
+    store.applyProgressiveResult(chunkStart: 20, audioStart: 10.2, audioEnd: 10.8, text: "Other chunk")
+    check(store.cues.map(\.text) == ["Before", "Other chunk", "After"],
+          "preserves endpoint-adjacent ranges and same-time results from another chunk")
+
+    store.applyProgressiveResult(chunkStart: 10, audioStart: .nan, audioEnd: 12, text: "Invalid")
+    store.applyProgressiveResult(chunkStart: 10, audioStart: 12, audioEnd: 12, text: "Zero range")
+    check(store.cues.count == 3, "ignores non-finite and zero-length result ranges")
+
+    let legacyCues = [
+      SpeechCaptionResultStore.Cue(chunkStart: 30, start: 30, end: 30.7, audioEnd: 30.2, text: "Legacy one"),
+      SpeechCaptionResultStore.Cue(chunkStart: 30, start: 30.3, end: 31, audioEnd: 30.6, text: "Legacy two"),
+    ]
+    store.replaceChunk(30, with: legacyCues)
+    store.replaceChunk(30, with: [legacyCues[0]])
+    check(store.cues.filter { $0.chunkStart == 30 }.count == 1,
+          "legacy partial transcription replaces its chunk rather than duplicating segments")
+    var displayStore = SpeechCaptionResultStore()
+    displayStore.replaceChunk(40, with: [
+      SpeechCaptionResultStore.Cue(chunkStart: 40, start: 40, end: 45, audioEnd: 44, text: "One"),
+      SpeechCaptionResultStore.Cue(chunkStart: 40, start: 40.2, end: 45.1, audioEnd: 44.1, text: "Two"),
+      SpeechCaptionResultStore.Cue(chunkStart: 40, start: 40.4, end: 45.2, audioEnd: 44.2, text: "Three"),
+    ])
+    check(displayStore.text(at: 41) == "Three",
+          "renders only the latest line that has started at the requested media position")
+    displayStore.replaceChunk(40, with: [
+      SpeechCaptionResultStore.Cue(chunkStart: 40, start: 40, end: 40.7, audioEnd: 40.2, text: "Expired"),
+      SpeechCaptionResultStore.Cue(chunkStart: 40, start: 41, end: 42, audioEnd: 41.5, text: "Current"),
+    ])
+    displayStore.removeCues(endingBefore: 40.8)
+    check(displayStore.cues.map(\.text) == ["Current"], "prunes cues before the playback window")
+
+    var lateCueStore = SpeechCaptionResultStore()
+    lateCueStore.applyProgressiveResult(chunkStart: 40, audioStart: 40, audioEnd: 42,
+                                        text: "Late chunk", receivedAt: 100)
+    check(lateCueStore.text(at: 45, now: 101) == "Late chunk",
+          "briefly shows a recently arrived cue after the playhead passed its timing range")
+    check(lateCueStore.text(at: 45, now: 103.1).isEmpty,
+          "hides a delayed cue after the arrival grace expires")
+    check(lateCueStore.text(at: 50, now: 101).isEmpty,
+          "does not show a delayed cue when media-time lag is excessive")
+    check(lateCueStore.text(at: 47, now: 101, playbackRate: 2) == "Late chunk",
+          "scales the media-time grace with playback speed")
+
+    lateCueStore.applyProgressiveResult(chunkStart: 40, audioStart: 45, audioEnd: 46,
+                                        text: "Current chunk", receivedAt: 101)
+    check(lateCueStore.text(at: 45.2, now: 101.1) == "Current chunk",
+          "active timing takes precedence over the delayed-cue grace")
+
+    typealias Word = SpeechCaptionResultStore.TimedWord
+    let words = [
+      Word(text: "Did", start: 1.0, end: 1.2), Word(text: " he", start: 1.2, end: 1.3),
+      Word(text: " do", start: 1.3, end: 1.5), Word(text: " that", start: 1.5, end: 1.7),
+      Word(text: " to", start: 1.7, end: 1.8), Word(text: " save", start: 1.8, end: 2.0),
+      Word(text: " me?", start: 2.0, end: 2.3), Word(text: " Maybe", start: 2.5, end: 2.8),
+      Word(text: " later", start: 4.0, end: 4.3),
+    ]
+    let lines = SpeechCaptionResultStore.captionLines(from: words)
+    check(lines.map(\.text) == ["Did he do that to save me?", "Maybe", "later"],
+          "lines break at sentence ends and at pauses")
+    check(lines.first?.start == 1.0 && lines.first?.end == 2.3, "a line spans its first and last word")
+    let long = (0..<20).map { Word(text: " word\($0)", start: Double($0) * 0.2, end: Double($0) * 0.2 + 0.15) }
+    check(SpeechCaptionResultStore.captionLines(from: long).allSatisfy { $0.text.count <= 42 },
+          "long speech is split into lines of at most 42 characters")
+    let slow = (0..<6).map { Word(text: " w\($0)", start: Double($0) * 0.75, end: Double($0) * 0.75 + 0.5) }
+    check(SpeechCaptionResultStore.captionLines(from: slow).allSatisfy { $0.end - $0.start <= 4 },
+          "a line covers at most four seconds of speech")
+
+    var finalStore = SpeechCaptionResultStore()
+    finalStore.applyFinalResult(chunkStart: 0, words: words)
+    check(finalStore.cues.map(\.text) == ["Did he do that to save me?", "Maybe", "later"],
+          "a final result becomes one cue per line")
+    check(finalStore.text(at: 0.8).isEmpty, "a line does not appear well before it is spoken")
+    check(finalStore.text(at: 1.6) == "Did he do that to save me?", "the spoken line is shown")
+    check(finalStore.text(at: 2.6) == "Maybe", "the next line replaces the previous one")
+    check(finalStore.text(at: 3.5) == "Maybe", "a line stays up through a short pause")
+    check(finalStore.text(at: 3.9) == "later", "the following line appears just before it is spoken")
+    check(finalStore.text(at: 5.8, now: 1_000_000).isEmpty, "a line clears after its hold when nothing follows")
+    finalStore.applyFinalResult(chunkStart: 0, words: [Word(text: "Replaced", start: 1.0, end: 2.0)])
+    check(finalStore.cues.map(\.text) == ["Replaced", "Maybe", "later"],
+          "a later result for the same audio replaces the overlapping line")
+
+    var timeline = SpeechCaptionPlaybackTimeline()
+    check(!timeline.movedBack(to: 100), "the first playhead sample establishes a baseline")
+    check(!timeline.movedBack(to: 99.5), "small playhead jitter does not reset captions")
+    check(timeline.movedBack(to: 90), "a backward seek is detected within the cue-retention window")
+    check(!timeline.movedBack(to: 90.2), "playback after a seek establishes a new baseline")
+    timeline.reset()
+    check(!timeline.movedBack(to: 10), "resetting the media timeline drops its old baseline")
+
+    print("\(checks) speech caption result store checks passed")
+  }
+}

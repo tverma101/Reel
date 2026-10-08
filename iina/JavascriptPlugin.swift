@@ -204,19 +204,31 @@ class JavascriptPlugin: NSObject {
       try? FileManager.default.removeItem(at: pluginsRoot.appendingPathComponent(tempFolder))
     }
 
-    let cmd = [
-      "cp '\(url.path)' '\(tempZipFile)'",
-      "mkdir '\(tempFolder)' '\(tempDecompressDir)'",
-      "unzip '\(tempZipFile)' -d '\(tempDecompressDir)'",
-      "mv '\(tempDecompressDir)'/* '\(tempFolder)'/"
-    ].joined(separator: " && ")
-    let (process, stdout, stderr) = Process.run(["/bin/sh", "-c", cmd], at: pluginsRoot)
+    let commands = [
+      ["/bin/cp", url.path, tempZipFile],
+      ["/bin/mkdir", tempFolder, tempDecompressDir],
+      ["/usr/bin/unzip", tempZipFile, "-d", tempDecompressDir],
+    ]
+    for command in commands {
+      let (process, stdout, stderr) = Process.run(command, at: pluginsRoot)
+      guard process.terminationStatus == 0 else {
+        let outText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "None"
+        let errText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "None"
+        removeTempPluginFolder()
+        throw PluginError.cannotUnpackage(outText, errText)
+      }
+    }
 
-    guard process.terminationStatus == 0 else {
-      let outText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "None"
-      let errText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "None"
+    do {
+      let extractedURL = pluginsRoot.appendingPathComponent(tempDecompressDir, isDirectory: true)
+      let pluginURL = pluginsRoot.appendingPathComponent(tempFolder, isDirectory: true)
+      for item in try FileManager.default.contentsOfDirectory(atPath: extractedURL.path) {
+        try FileManager.default.moveItem(at: extractedURL.appendingPathComponent(item),
+                                         to: pluginURL.appendingPathComponent(item))
+      }
+    } catch {
       removeTempPluginFolder()
-      throw PluginError.cannotUnpackage(outText, errText)
+      throw PluginError.cannotUnpackage("", error.localizedDescription)
     }
 
     guard let plugin = JavascriptPlugin(filename: tempFolder) else {

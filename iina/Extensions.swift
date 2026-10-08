@@ -526,11 +526,17 @@ extension Data {
   }
   
   func saveToFolder(_ url: URL, filename: String) -> URL? {
-    let fileUrl = url.appendingPathComponent(filename)
+    // Provider filenames are remote input. Keep the caller's unique prefix while making sure a
+    // path separator cannot turn this temporary-file write into a write elsewhere on disk.
+    let safeFilename = filename
+      .replacingOccurrences(of: "/", with: "_")
+      .replacingOccurrences(of: "\\", with: "_")
+      .replacingOccurrences(of: "\0", with: "_")
+    let fileUrl = url.appendingPathComponent(safeFilename, isDirectory: false)
     do {
       try self.write(to: fileUrl)
     } catch {
-      Utility.showAlert("error_saving_file", arguments: ["data", filename])
+      Utility.showAlert("error_saving_file", arguments: ["data", safeFilename])
       return nil
     }
     return fileUrl

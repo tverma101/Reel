@@ -30,11 +30,11 @@
 "guide.faq" = "よくある質問";
 
 // Initial Window
-"initial.announcement" = "IINAバージョン%@を使用しています";
-"initial.beta.desc" = "リリースバージョンにロールバックする場合は、設定 > 一般 の \"ベータ版のアップデート通知を受け取る\" のチェックを外し、<a href=\"https://iina.io\">公式Webサイト</a> から安定版リリースをインストールしてください。";
-"initial.nightly.desc" = "Nightlyを常用することは推奨されません。Nightlyビルドは、現在自動アップデートに対応していません。新しいビルドは<a href=\"https://nightly.iina.io\">Nightly Webサイト</a>から手動でダウンロードしてください。";
+"initial.announcement" = "Reelバージョン%@を使用しています";
+"initial.beta.desc" = "リリースバージョンにロールバックする場合は、設定 > 一般 の \"ベータ版のアップデート通知を受け取る\" のチェックを外し、<a href=\"https://github.com/tverma101/Reel\">公式Webサイト</a> から安定版リリースをインストールしてください。";
+"initial.nightly.desc" = "Nightlyを常用することは推奨されません。Nightlyビルドは、現在自動アップデートに対応していません。新しいビルドは<a href=\"https://github.com/tverma101/Reel/actions\">Nightly Webサイト</a>から手動でダウンロードしてください。";
 "initial.debug.desc" = "デバッグビルドは通常パフォーマンスが最適化されていないので、常用することは推奨されません。デバッグビルドは自動アップデートに対応していません。";
-"initial.bug_report" = "<a href=\"https://github.com/iina/iina/issues\">GitHub issues</a> で報告してください。";
+"initial.bug_report" = "<a href=\"https://github.com/tverma101/Reel/issues\">GitHub issues</a> で報告してください。";
 
 // Inspector Window
 "inspector.error" = "エラー";
@@ -303,8 +303,8 @@
 "alert.sub.cannot_login" = "ログインできません。ユーザ名とパスワード、ネットワークの状況を確認してください。\n\n%@";
 "alert.sub.save_downloaded.title" = "ダウンロードした字幕を保存";
 
-"alert.set_default.title" = "IINAをデフォルトのアプリに設定";
-"alert.set_default.message" = "対応するすべてのファイル形式に、IINAをデフォルトのアプリとして設定します。";
+"alert.set_default.title" = "Reelをデフォルトのアプリに設定";
+"alert.set_default.message" = "対応するすべてのファイル形式に、Reelをデフォルトのアプリとして設定します。";
 "alert.set_default.success" = "完了しました（成功: %d件、失敗: %d件）。";
 
 "alert.add_watch.title" = "視聴プロパティを追加";
@@ -493,7 +493,7 @@
 "plugin.install_error.file_not_found" = "パッケージファイルが見つかりません。";
 "plugin.install_error.cannot_download" = "プラグインをダウンロードできませんでした。\n\n出力:%@\n";
 "plugin.install_error.cannot_unpackage" = "プラグインパッケージを展開できませんでした。\n\n出力:%@\n";
-"plugin.install_error.cannot_load" = "IINAはこのプラグインを読み込めません。フォーマットが正しくない可能性があります。";
+"plugin.install_error.cannot_load" = "Reelはこのプラグインを読み込めません。フォーマットが正しくない可能性があります。";
 "plugin.check_for_updates" = "アップデートを確認";
 "plugin.updating" = "アップデートをダウンロード中…";
 
@@ -627,7 +627,7 @@
 "settings.pauseWhenOpen.label" = "一時停止";
 "settings.pauseresumeWhen" = "次のとき再生を一時停止/再開";
 "settings.playWhenEnteringFullScreen.label" = "フルスクリーンにしたとき再生";
-"settings.playlistAutoAdd.desc" = "変更を有効にするにはIINAの再起動が必要です。";
+"settings.playlistAutoAdd.desc" = "変更を有効にするにはReelの再起動が必要です。";
 "settings.playlistAutoAdd.label" = "同じフォルダに自動的にファイルを追加";
 "settings.playlistAutoPlayNext.label" = "次の項目を自動的に再生";
 "settings.playlistShowMetadata.label" = "利用可能なときはオーディオファイルのアーティスト名とトラック名を表示";
@@ -670,7 +670,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "ディスプレイの測定済み最大輝度。IINAはデフォルトでこの値を検出します。検出できない場合には、ディスプレイの伝達特性に基づき、目標とする最大輝度を適切な値に設定します。ディスプレイ輝度を手動で指定するには、この設定を有効にしてください。";
+"settings.toneMappingTargetPeak.desc" = "ディスプレイの測定済み最大輝度。Reelはデフォルトでこの値を検出します。検出できない場合には、ディスプレイの伝達特性に基づき、目標とする最大輝度を適切な値に設定します。ディスプレイ輝度を手動で指定するには、この設定を有効にしてください。";
 "settings.toneMappingTargetPeak.label" = "ターゲットピーク値";
 "settings.videoThreads.desc" = "デフォルト: 0 （自動）";
 "settings.videoThreads.label" = "スレッド数";
@@ -773,7 +773,7 @@
 "settings.defaultCacheSize.desc" = "デフォルト: 153,600";
 "settings.defaultCacheSize.label" = "キャッシュバッファのサイズ（KiB）";
 "settings.enableCache.label" = "ネットワークデータのプリフェッチとバッファリング";
-"settings.httpProxy.desc" = "有効にするにはIINAを再起動する必要があります。";
+"settings.httpProxy.desc" = "有効にするにはReelを再起動する必要があります。";
 "settings.httpProxy.label" = "HTTPプロキシ";
 "settings.secPrefech.desc" = "デフォルト: 36,000";
 "settings.secPrefech.label" = "プリフェッチ秒数";
@@ -800,7 +800,7 @@
 "settings.subAlignY.items.2" = "下";
 "settings.subAutoLoadIINA.items.0" = "無効";
 "settings.subAutoLoadIINA.items.1" = "メディアのファイル名を含む字幕";
-"settings.subAutoLoadIINA.items.2" = "IINAによりインテリジェントに検出";
+"settings.subAutoLoadIINA.items.2" = "Reelによりインテリジェントに検出";
 "settings.subAutoLoadIINA.label" = "自動読み込み";
 "settings.subAutoLoadPriorityString.desc" = "文字列リストをカンマ区切りで入力してください。";
 "settings.subAutoLoadPriorityString.label" = "次の文字列をファイル名に含む字幕を優先";
@@ -883,7 +883,7 @@
 "settings.windowBehaviorWhenPip.label" = "ウインドウ";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "以下の設定を有効にするには、IINAを再起動する必要があります。";
+"settings.enableAdvancedSettings.desc" = "以下の設定を有効にするには、Reelを再起動する必要があります。";
 "settings.enableAdvancedSettings.label" = "詳細設定を有効にする";
 "settings.enableLogging.label" = "ファイルへのログ記録を有効にする";
 "settings.logLevel.desc" = "メニューから ウインドウ > ログビューア を選択してログを表示します。";
@@ -897,7 +897,7 @@
 
 // Settings - Inline labels
 "settings.$ASSSubtitles" = "ASS字幕";
-"settings.$About" = "IINAについて";
+"settings.$About" = "Reelについて";
 "settings.$Accessibility" = "アクセシビリティ";
 "settings.$AdditionalMpvOptions" = "mpvの追加オプション";
 "settings.$AdditionalMpvOptions.desc" = "key=valueフォーマットのオプションをペーストすると、両方のフィールドに自動的に入力されます。";
@@ -939,7 +939,7 @@
 "settings.$FailedToLoadThePage" = "ページを読み込みできませんでした。";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "フォント";
-"settings.$GetBrowserExtensionsForIINA" = "IINAのブラウザ拡張機能を使う";
+"settings.$GetBrowserExtensionsForIINA" = "Reelのブラウザ拡張機能を使う";
 "settings.$GetPlugins" = "プラグインを取得…";
 "settings.$Hardware" = "ハードウェア";
 "settings.$Height" = "高さ";
@@ -974,7 +974,7 @@
 "settings.$OnScreenController" = "オンスクリーンコントローラ";
 "settings.$OnScreenDisplay" = "オンスクリーンディスプレイ（OSD）";
 "settings.$OnlineSubtitles" = "オンライン字幕";
-"settings.$OpenLinksOrCurrentWebpage" = "ワンクリックで、リンク先や今開いているWebページをIINAで開くことができます。youtube-dlに対応したWebサイトでのみ動作します。";
+"settings.$OpenLinksOrCurrentWebpage" = "ワンクリックで、リンク先や今開いているWebページをReelで開くことができます。youtube-dlに対応したWebサイトでのみ動作します。";
 "settings.$OpenLogDirectory" = "ログディレクトリを開く";
 "settings.$OpenLogWindow" = "ログビューアを開く";
 "settings.$OrSelectFrom" = "または利用可能なプラグインから選択";
@@ -984,7 +984,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "ピクチャインピクチャ";
 "settings.$Playlist" = "プレイリスト";
-"settings.$PleaseSelectTheMediaTypes" = "IINAをデフォルトの再生アプリケーションに設定したいメディアの種類を選択してください。";
+"settings.$PleaseSelectTheMediaTypes" = "Reelをデフォルトの再生アプリケーションに設定したいメディアの種類を選択してください。";
 "settings.$Position" = "配置";
 "settings.$PreferredLanguage" = "優先言語";
 "settings.$RestoreAlerts" = "通知を復元";
@@ -996,7 +996,7 @@
 警告: この設定を使用する理由はあまりありません。HDMIは非圧縮マルチチャンネルPCMに対応しており、またロスレスDTS-HDもFFmpegのDCAデコーダでデコードすることができます。出力デバイスがS/PDIFに未対応の場合、この設定を有効にしていると、再生が始まらない可能性があります。";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "スクリーンショット";
-"settings.$SetIINAAsTheDefault" = "IINAをデフォルトのアプリケーションに設定";
+"settings.$SetIINAAsTheDefault" = "Reelをデフォルトのアプリケーションに設定";
 "settings.$Settings" = "設定";
 "settings.$Shadow" = "シャドウ";
 "settings.$ShowInFinder" = "Finderに表示";

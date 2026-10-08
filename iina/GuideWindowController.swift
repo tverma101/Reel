@@ -9,7 +9,7 @@
 import Cocoa
 @preconcurrency import WebKit
 
-fileprivate let highlightsLink = "https://iina.io/highlights"
+fileprivate let highlightsLink = "https://github.com/tverma101/Reel/releases"
 
 class GuideWindowController: NSWindowController {
   override var windowNibName: NSNib.Name {
@@ -46,8 +46,7 @@ class GuideWindowController: NSWindowController {
     highlightsContainerView.addSubview(webView, positioned: .below, relativeTo: nil)
     Utility.quickConstraints(["H:|-0-[v]-0-|", "V:|-0-[v]-0-|"], ["v": webView])
 
-    let (version, _) = InfoDictionary.shared.version
-    webView.load(URLRequest(url: URL(string: "\(highlightsLink)/\(version.split(separator: "-").first!)/")!))
+    webView.load(URLRequest(url: URL(string: highlightsLink)!))
     highlightsLoadingIndicator.startAnimation(nil)
   }
 
@@ -63,7 +62,9 @@ class GuideWindowController: NSWindowController {
 extension GuideWindowController: WKNavigationDelegate {
   func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
     if let url = navigationAction.request.url {
-      if url.absoluteString.starts(with: "https://iina.io/highlights/") {
+      let isReelReleasesPage = url.scheme == "https" && url.host == "github.com" && url.port == nil &&
+        (url.path == "/tverma101/Reel/releases" || url.path.hasPrefix("/tverma101/Reel/releases/"))
+      if isReelReleasesPage {
         decisionHandler(.allow)
         return
       } else {

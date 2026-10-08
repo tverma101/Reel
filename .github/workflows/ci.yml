@@ -5,20 +5,33 @@ permissions:
 
 on:
   push:
-      branches: [develop]
+      branches: [main]
   pull_request:
-      branches: [develop]
+      branches: [main]
+  workflow_dispatch:
 
 jobs:
   build:
     strategy:
       matrix:
         include:
-          - xcode: "26.5"
+          - xcode: "27.0"
             deployment_target: ""
-    runs-on:  macos-26
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v7
+
+      - name: Run focused regression checks
+        run: |
+          bash other/check_speech_caption_result_store.sh
+          bash other/check_subtitle_audio_parser.sh
+          bash other/check_subtitle_matcher.sh
+          bash other/check_subdl_search_parser.sh
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.4'
 
       - name: Install dependencies
         run: ./other/download_libs.sh $DOWNLOAD_LIBS_ARGS
@@ -32,11 +45,11 @@ jobs:
           DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer
 
       - name: Create DMG
-        run: hdiutil create -volname "IINA Nightly" -srcfolder Build/Products/Nightly/IINA.app -ov -format UDZO IINA.dmg
+        run: hdiutil create -volname "Reel Nightly" -srcfolder Build/Products/Nightly/Reel.app -ov -format UDZO Reel.dmg
 
       - name: Save artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: IINA
-          path: IINA.dmg
+          name: Reel
+          path: Reel.dmg
           archive: false

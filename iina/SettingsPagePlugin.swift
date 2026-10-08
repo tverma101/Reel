@@ -223,6 +223,7 @@ fileprivate class PluginListView: SettingsAccessory.Base {
 
     override func viewDidMoveToWindow() {
       super.viewDidMoveToWindow()
+      listView.reload()
       listView.checkForAllPluginUpdates()
     }
   }
@@ -233,6 +234,7 @@ fileprivate class PluginListView: SettingsAccessory.Base {
 
   let tableView: TableView
   unowned let page: SettingsPagePlugin
+  private var pluginChangedObserver: NSObjectProtocol?
 
   init(page: SettingsPagePlugin) {
     self.tableView = TableView()
@@ -250,9 +252,20 @@ fileprivate class PluginListView: SettingsAccessory.Base {
     tableView.registerForDraggedTypes([.iinaPluginID])
     tableView.gridStyleMask = .solidHorizontalGridLineMask
     tableView.translatesAutoresizingMaskIntoConstraints = false
+    pluginChangedObserver = NotificationCenter.default.addObserver(forName: .iinaPluginChanged,
+                                                                    object: nil,
+                                                                    queue: .main) { [weak self] _ in
+      self?.reload()
+    }
 
     view.addSubview(tableView)
     tableView.padding(.all(0))
+  }
+
+  deinit {
+    if let pluginChangedObserver {
+      NotificationCenter.default.removeObserver(pluginChangedObserver)
+    }
   }
 
   func reload() {
@@ -404,7 +417,21 @@ extension PluginListView: NSTableViewDelegate, NSTableViewDataSource {
     }
 
     @objc func enabledSwitchAction(_ sender: NSSwitch) {
-      plugin.enabled = sender.state == .on
+      let shouldEnable = sender.state == .on
+      guard shouldEnable else {
+        plugin.enabled = false
+        return
+      }
+      guard plugin.identifier == "dev.faruk.iina-airplay", !plugin.permissions.isEmpty else {
+        plugin.enabled = true
+        return
+      }
+      sender.state = .off
+      Task { @MainActor in
+        guard await pluginManager.showPermissionsSheet(forPlugin: plugin) else { return }
+        plugin.enabled = true
+        sender.state = .on
+      }
     }
 
     @objc func actionsBtnAction(_ sender: NSButton) {

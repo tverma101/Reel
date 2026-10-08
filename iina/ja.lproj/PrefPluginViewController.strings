@@ -14,7 +14,7 @@
 "KTN-5r-mMm.ibShadowedLabels[1]" = "アクセス許可";
 
 /* Class = "NSSegmentedCell"; KTN-5r-mMm.ibShadowedLabels[0] = "About"; ObjectID = "KTN-5r-mMm"; */
-"KTN-5r-mMm.ibShadowedLabels[0]" = "IINAについて";
+"KTN-5r-mMm.ibShadowedLabels[0]" = "Reelについて";
 
 /* Class = "NSSegmentedCell"; KTN-5r-mMm.ibShadowedLabels[2] = "Settings"; ObjectID = "KTN-5r-mMm"; */
 "KTN-5r-mMm.ibShadowedLabels[2]" = "設定";

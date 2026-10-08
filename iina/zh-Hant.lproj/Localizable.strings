@@ -30,11 +30,11 @@
 "guide.faq" = "常見問題";
 
 // Initial Window
-"initial.announcement" = "您正在使用IINA的%@版本";
-"initial.beta.desc" = "如果您希望回到正式版，請進入「設定 > 一般」，將「接收 Beta 更新」取消勾選，然後從 <a href=\"https://iina.io\">官方網站</a>下載正式版進行安裝。";
-"initial.nightly.desc" = "不推薦您使用「每日構建版 Nightly Build」做為日常使用首選。每日構建版不支援自動更新，請至 <a href=\"https://nightly.iina.io\">每日構建版網站頁面</a> 自行下載更新。";
+"initial.announcement" = "您正在使用Reel的%@版本";
+"initial.beta.desc" = "如果您希望回到正式版，請進入「設定 > 一般」，將「接收 Beta 更新」取消勾選，然後從 <a href=\"https://github.com/tverma101/Reel\">官方網站</a>下載正式版進行安裝。";
+"initial.nightly.desc" = "不推薦您使用「每日構建版 Nightly Build」做為日常使用首選。每日構建版不支援自動更新，請至 <a href=\"https://github.com/tverma101/Reel/actions\">每日構建版網站頁面</a> 自行下載更新。";
 "initial.debug.desc" = "「除錯版本 Debug Build」通常沒有針對性能進行最佳化。因此不推薦作為日常使用首選，且此版本不支援自動更新。";
-"initial.bug_report" = "通過<a href=\"https://github.com/iina/iina/issues\">GitHub issues</a>發送報告.";
+"initial.bug_report" = "通過<a href=\"https://github.com/tverma101/Reel/issues\">GitHub issues</a>發送報告.";
 
 // Inspector Window
 "inspector.error" = "錯誤";
@@ -251,7 +251,7 @@
 "alert.title_warning" = "警告";
 "alert.title_info" = "資訊";
 
-"alert.fatal_error" = "ㄧ嚴重錯誤：%@ \n，IINA 即將關閉。";
+"alert.fatal_error" = "ㄧ嚴重錯誤：%@ \n，Reel 即將關閉。";
 "alert.mpv_error" = "發生內部錯誤 %@（%@）（設定 %@ 時）";
 
 "alert.unsupported_audio" = "不支援載入此音訊檔";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "新增濾鏡";
 "alert.add_filter.message" = "請輸入符合 mpv 的 vf 或 af 格式的濾鏡指令";
 
-"alert.keybinding_config.error" = "剖析快速鍵設定檔「%@」時發生錯誤，即將使用 IINA 預設快速鍵設定檔替代。請檢查您的設定檔。";
+"alert.keybinding_config.error" = "剖析快速鍵設定檔「%@」時發生錯誤，即將使用 Reel 預設快速鍵設定檔替代。請檢查您的設定檔。";
 "alert.delete_keybindingset.title" = "刪除快速鍵設定";
 "alert.delete_keybindingset.message" = "確認刪除此快速鍵設定？";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "登入失敗，請檢查您的使用者帳戶、密碼、網路連線。\n\n%@";
 "alert.sub.save_downloaded.title" = "儲存已下載的字幕";
 
-"alert.set_default.title" = "將 IINA 設為預設應用程式";
-"alert.set_default.message" = "即將把 IINA 設為所有受支援檔案格式的預設應用程式";
+"alert.set_default.title" = "將 Reel 設為預設應用程式";
+"alert.set_default.message" = "即將把 Reel 設為所有受支援檔案格式的預設應用程式";
 "alert.set_default.success" = "已成功 %d 個，失敗 %d 個";
 
 "alert.add_watch.title" = "加入監視屬性";
@@ -493,7 +493,7 @@
 "plugin.install_error.file_not_found" = "無法找到套件檔案。";
 "plugin.install_error.cannot_download" = "無法下載外掛程式。\n\n詳細內容:%@\n";
 "plugin.install_error.cannot_unpackage" = "無法打開外掛程式。\n\n詳細內容：%@\n";
-"plugin.install_error.cannot_load" = "IINA 無法載入此外掛程式，可能使用了錯誤的格式。";
+"plugin.install_error.cannot_load" = "Reel 無法載入此外掛程式，可能使用了錯誤的格式。";
 "plugin.check_for_updates" = "檢查更新";
 "plugin.updating" = "正在下載更新…";
 
@@ -627,7 +627,7 @@
 "settings.pauseWhenOpen.label" = "暫停";
 "settings.pauseresumeWhen" = "自動暫停/繼續播放";
 "settings.playWhenEnteringFullScreen.label" = "進入全螢幕時播放";
-"settings.playlistAutoAdd.desc" = "必須重新啟動 IINA 來讓設定生效";
+"settings.playlistAutoAdd.desc" = "必須重新啟動 Reel 來讓設定生效";
 "settings.playlistAutoAdd.label" = "自動加入同一檔案夾內的其他檔案";
 "settings.playlistAutoPlayNext.label" = "自動播放下一個項目";
 "settings.playlistShowMetadata.label" = "顯示音訊檔案的曲目和藝術家資訊";
@@ -670,7 +670,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "目標峰值";
 "settings.videoThreads.desc" = "預設：0 (自動)";
 "settings.videoThreads.label" = "執行緒數";
@@ -774,7 +774,7 @@
 "settings.defaultCacheSize.desc" = "預設：153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "必須重新啟動 IINA 來讓設定生效";
+"settings.httpProxy.desc" = "必須重新啟動 Reel 來讓設定生效";
 "settings.httpProxy.label" = "HTTP 代理";
 "settings.secPrefech.desc" = "預設：36,000";
 "settings.secPrefech.label" = "預先擷取秒數";
@@ -786,11 +786,11 @@
 "settings.ytdlEnabled.label" = "啟用 mpv 的 youtube-dl 腳本";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "額外參數";
-"settings.ytdlSearchPath.desc" = "IINA 將在此檔案夾內搜尋 youtube-dl，需要重新啟動";
+"settings.ytdlSearchPath.desc" = "Reel 將在此檔案夾內搜尋 youtube-dl，需要重新啟動";
 "settings.ytdlSearchPath.label" = "自定 youtube-dl 路徑";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "此功能會讓 IINA 自動幫尚無載入字幕且片長超過 20 分鐘的影片在網路上搜尋字幕。";
+"settings.autoSearchOnlineSub.desc" = "此功能會讓 Reel 自動幫尚無載入字幕且片長超過 20 分鐘的影片在網路上搜尋字幕。";
 "settings.autoSearchOnlineSub.label" = "自動搜尋線上字幕";
 "settings.displayInLetterBox.label" = "全螢幕時在黑邊顯示字幕";
 "settings.subAlignX.items.0" = "齊左";
@@ -801,7 +801,7 @@
 "settings.subAlignY.items.2" = "底部";
 "settings.subAutoLoadIINA.items.0" = "停用";
 "settings.subAutoLoadIINA.items.1" = "包含媒體檔名的字幕";
-"settings.subAutoLoadIINA.items.2" = "由 IINA 自動偵測";
+"settings.subAutoLoadIINA.items.2" = "由 Reel 自動偵測";
 "settings.subAutoLoadIINA.label" = "自動載入";
 "settings.subAutoLoadPriorityString.desc" = "請輸入由逗號分隔的字串列表。";
 "settings.subAutoLoadPriorityString.label" = "優先載入檔名包含下列字串的字幕";
@@ -840,7 +840,7 @@
 "settings.arrowBtnAction.label" = "左/右箭頭按鈕的功能";
 "settings.controlBarAutoHideTimeout.label" = "Auto hide after";
 "settings.controlBarStickToCenter.label" = "拖移時吸附到視窗中心";
-"settings.disableAnimations.desc" = "當 macOS 的『減少動態效果』輔助功能設定開啟時，IINA 會減少可能對視覺變化敏感的使用者造成不適的動態效果。如果需要進一步減少動態效果，可以透過此設定來完全消除這些效果。";
+"settings.disableAnimations.desc" = "當 macOS 的『減少動態效果』輔助功能設定開啟時，Reel 會減少可能對視覺變化敏感的使用者造成不適的動態效果。如果需要進一步減少動態效果，可以透過此設定來完全消除這些效果。";
 "settings.disableAnimations.label" = "禁用視窗動態效果";
 "settings.disableOSDFileStartMsg.label" = "開始檔案";
 "settings.disableOSDPauseResumeMsgs.label" = "暫停 / 繼續";
@@ -884,7 +884,7 @@
 "settings.windowBehaviorWhenPip.label" = "視窗";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "您必須重新啟動 IINA 來讓以下所有設定生效。";
+"settings.enableAdvancedSettings.desc" = "您必須重新啟動 Reel 來讓以下所有設定生效。";
 "settings.enableAdvancedSettings.label" = "啟用進階設定";
 "settings.enableLogging.label" = "記錄日誌";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -940,7 +940,7 @@
 "settings.$FailedToLoadThePage" = "頁面讀取失敗";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "字體";
-"settings.$GetBrowserExtensionsForIINA" = "取得 IINA 的瀏覽器擴充功能";
+"settings.$GetBrowserExtensionsForIINA" = "取得 Reel 的瀏覽器擴充功能";
 "settings.$GetPlugins" = "Get Plugins…";
 "settings.$Hardware" = "Hardware";
 "settings.$Height" = "高";
@@ -975,7 +975,7 @@
 "settings.$OnScreenController" = "播放控制器";
 "settings.$OnScreenDisplay" = "狀態改變資訊";
 "settings.$OnlineSubtitles" = "線上字幕";
-"settings.$OpenLinksOrCurrentWebpage" = "在 IINA 中打開連結或目前的網站。網站需要 youtube-dl 的支援。";
+"settings.$OpenLinksOrCurrentWebpage" = "在 Reel 中打開連結或目前的網站。網站需要 youtube-dl 的支援。";
 "settings.$OpenLogDirectory" = "開啟日誌檔案夾";
 "settings.$OpenLogWindow" = "Open the log viewer";
 "settings.$OrSelectFrom" = "Or select from available plugins";
@@ -985,7 +985,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "子母畫面";
 "settings.$Playlist" = "播放列表";
-"settings.$PleaseSelectTheMediaTypes" = "請選擇您要將 IINA 設為預設應用程式的媒體類型。";
+"settings.$PleaseSelectTheMediaTypes" = "請選擇您要將 Reel 設為預設應用程式的媒體類型。";
 "settings.$Position" = "位置";
 "settings.$PreferredLanguage" = "偏好的語言";
 "settings.$RestoreAlerts" = "復原警告";
@@ -995,7 +995,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "螢幕快照";
-"settings.$SetIINAAsTheDefault" = "Set IINA as the Default Application";
+"settings.$SetIINAAsTheDefault" = "Set Reel as the Default Application";
 "settings.$Settings" = "設定";
 "settings.$Shadow" = "陰影";
 "settings.$ShowInFinder" = "顯示於 Finder";
@@ -1038,4 +1038,4 @@
 "settings.$sideOfTheScreen" = "側";
 "settings.$toThe" = "距離螢幕";
 "settings.$top" = "頂";
-"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";

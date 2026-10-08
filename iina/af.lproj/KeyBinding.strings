@@ -26,8 +26,8 @@
 "cmd.playlist-shuffle" = "Skommel";
 "cmd.write-watch-later-config" = "Onthou afspeelgeskiedenis";
 "cmd.stop" = "Stop";
-"cmd.quit" = "Stop IINA";
-"cmd.quit-watch-later" = "Stop IINA (bewaar vordering)";
+"cmd.quit" = "Stop Reel";
+"cmd.quit-watch-later" = "Stop Reel (bewaar vordering)";
 "cmd.screenshot" = "Skermkiekie";
 "cmd.screenshot-to-file" = "Skermkiekie na lêer";
 "cmd.loadfile" = "Laai lêer";

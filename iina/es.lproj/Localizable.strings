@@ -30,11 +30,11 @@
 "guide.faq" = "Preguntas frecuentes";
 
 // Initial Window
-"initial.announcement" = "Estás usando una versión %@ de IINA";
-"initial.beta.desc" = "Si desea volver a una versión estable, desmarque \"recibir actualizaciones beta\" desde Ajustes > Generales, e instale una versión estable de nuestro <a href=\"https://iina.io\">sitio web oficial</a>.";
-"initial.nightly.desc" = "No se recomienda usar versiones nocturnas para el uso diario. Actualmente las versiones nocturnas no soportan la actualización automática. Por favor, descargue manualmente nuevas versiones de nuestro <a href=\"https://nightly.iina.io\">sitio web nocturno</a>.";
+"initial.announcement" = "Estás usando una versión %@ de Reel";
+"initial.beta.desc" = "Si desea volver a una versión estable, desmarque \"recibir actualizaciones beta\" desde Ajustes > Generales, e instale una versión estable de nuestro <a href=\"https://github.com/tverma101/Reel\">sitio web oficial</a>.";
+"initial.nightly.desc" = "No se recomienda usar versiones nocturnas para el uso diario. Actualmente las versiones nocturnas no soportan la actualización automática. Por favor, descargue manualmente nuevas versiones de nuestro <a href=\"https://github.com/tverma101/Reel/actions\">sitio web nocturno</a>.";
 "initial.debug.desc" = "Las compilaciones de depuración normalmente no están optimizadas para el rendimiento, por lo que no se recomienda que se utilicen de manera habitual. Las compilaciones de depuración no soportan la actualización automática.";
-"initial.bug_report" = "Notifique a través de <a href=\"https://github.com/iina/iina/issues\">GitHub issues</a>.";
+"initial.bug_report" = "Notifique a través de <a href=\"https://github.com/tverma101/Reel/issues\">GitHub issues</a>.";
 
 // Inspector Window
 "inspector.error" = "Error";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "Nuevo filtro";
 "alert.add_filter.message" = "Por favor ingrese el filtro usando el formato de comando vf o af de mpv.";
 
-"alert.keybinding_config.error" = "¡Error al analizar el archivo de configuración de atajos de teclado \"%@\"! Se ha regresado a la configuración por defecto de los atajos de teclado de IINA. Por favor, compruebe su configuración.";
+"alert.keybinding_config.error" = "¡Error al analizar el archivo de configuración de atajos de teclado \"%@\"! Se ha regresado a la configuración por defecto de los atajos de teclado de Reel. Por favor, compruebe su configuración.";
 "alert.delete_keybindingset.title" = "Eliminar asignación de teclas";
 "alert.delete_keybindingset.message" = "¿Seguro que desea eliminar esta asignación de teclas?";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "No se puede iniciar sesión. Compruebe su nombre de usuario, contraseña, y el estado de la red.\n\n%@";
 "alert.sub.save_downloaded.title" = "Guardar los subtítulos descargados";
 
-"alert.set_default.title" = "Establecer IINA como aplicación predeterminada";
-"alert.set_default.message" = "IINA se establecerá como la aplicación predeterminada para todos los tipos de archivo que soporta.";
+"alert.set_default.title" = "Establecer Reel como aplicación predeterminada";
+"alert.set_default.message" = "Reel se establecerá como la aplicación predeterminada para todos los tipos de archivo que soporta.";
 "alert.set_default.success" = "Se terminó con %d éxito y %d fallo.";
 
 "alert.add_watch.title" = "Añadir propiedad de monitoreo";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "No se pudo encontrar el archivo de paquete.";
 "plugin.install_error.cannot_download" = "Error al descargar el plugin.\n\nSalida:%@\n";
 "plugin.install_error.cannot_unpackage" = "Error al desempaquetar el plugin.\n\nSalida:%@\n";
-"plugin.install_error.cannot_load" = "IINA no puede cargar este plugin. Puede estar en el formato incorrecto.";
+"plugin.install_error.cannot_load" = "Reel no puede cargar este plugin. Puede estar en el formato incorrecto.";
 "plugin.check_for_updates" = "Buscar actualizaciones";
 "plugin.updating" = "Descargando actualización…";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "Pausar";
 "settings.pauseresumeWhen" = "Pausar/reanudar cuando";
 "settings.playWhenEnteringFullScreen.label" = "Reproducir al ingresar a pantalla completa";
-"settings.playlistAutoAdd.desc" = "Es necesario reiniciar IINA para que los cambios sean aplicados.";
+"settings.playlistAutoAdd.desc" = "Es necesario reiniciar Reel para que los cambios sean aplicados.";
 "settings.playlistAutoAdd.label" = "Añadir archivos de la misma carpeta automáticamente";
 "settings.playlistAutoPlayNext.label" = "Reproducir automáticamente el siguiente archivo";
 "settings.playlistShowMetadata.label" = "Mostrar el nombre del artista y pista en los archivos de audio cuando estén disponibles";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "Pico objetivo";
 "settings.videoThreads.desc" = "Predeterminado: 0 (Auto)";
 "settings.videoThreads.label" = "Número de subprocesos";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "Requiere reiniciar IINA para que surta efecto.";
+"settings.httpProxy.desc" = "Requiere reiniciar Reel para que surta efecto.";
 "settings.httpProxy.label" = "Proxy HTTP";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "Segundos para precargar";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Enable mpv's youtube-dl script";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "Opciones sin procesar";
-"settings.ytdlSearchPath.desc" = "IINA buscará youtube-dl en esta carpeta. Reinicio necesario.";
+"settings.ytdlSearchPath.desc" = "Reel buscará youtube-dl en esta carpeta. Reinicio necesario.";
 "settings.ytdlSearchPath.label" = "Ruta personalizada de youtube-dl";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "If enabled, IINA will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
+"settings.autoSearchOnlineSub.desc" = "If enabled, Reel will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
 "settings.autoSearchOnlineSub.label" = "Buscar subtítulos en línea automáticamente";
 "settings.displayInLetterBox.label" = "Mostrar subtítulos en formato cine en pantalla completa";
 "settings.subAlignX.items.0" = "Izquierda";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "Abajo";
 "settings.subAutoLoadIINA.items.0" = "Deshabilitado";
 "settings.subAutoLoadIINA.items.1" = "Subtítulos que contienen el nombre de archivo multimedia";
-"settings.subAutoLoadIINA.items.2" = "Detección inteligente de IINA";
+"settings.subAutoLoadIINA.items.2" = "Detección inteligente de Reel";
 "settings.subAutoLoadIINA.label" = "Carga automática";
 "settings.subAutoLoadPriorityString.desc" = "Por favor introduzca una lista de cadenas separadas por comas.";
 "settings.subAutoLoadPriorityString.label" = "Los subtítulos tienen prioridad cuando el nombre de archivo contiene";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "Ventana";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "Los siguientes ajustes requerirán que reinicie IINA para que surtan efecto.";
+"settings.enableAdvancedSettings.desc" = "Los siguientes ajustes requerirán que reinicie Reel para que surtan efecto.";
 "settings.enableAdvancedSettings.label" = "Habilitar configuración avanzada";
 "settings.enableLogging.label" = "Habilitar el log";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "Error al cargar la página.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "Fuente";
-"settings.$GetBrowserExtensionsForIINA" = "Obtener extensiones de navegador para IINA";
+"settings.$GetBrowserExtensionsForIINA" = "Obtener extensiones de navegador para Reel";
 "settings.$GetPlugins" = "Get Plugins…";
 "settings.$Hardware" = "Hardware";
 "settings.$Height" = "Altura";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "Control en pantalla";
 "settings.$OnScreenDisplay" = "Visualización en pantalla";
 "settings.$OnlineSubtitles" = "Subtítulos en línea";
-"settings.$OpenLinksOrCurrentWebpage" = "Abrir enlaces o la página web actual en IINA con un solo clic. El sitio web debe ser compatible con youtube-dl.";
+"settings.$OpenLinksOrCurrentWebpage" = "Abrir enlaces o la página web actual en Reel con un solo clic. El sitio web debe ser compatible con youtube-dl.";
 "settings.$OpenLogDirectory" = "Abrir directorio de registros";
 "settings.$OpenLogWindow" = "Open the log viewer";
 "settings.$OrSelectFrom" = "O escoja entre los complementos disponibles";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "Imagen dentro de imagen";
 "settings.$Playlist" = "Lista de reproducción";
-"settings.$PleaseSelectTheMediaTypes" = "Por favor, seleccione los tipos de archivo para los cuales desea que IINA sea la aplicación predeterminada";
+"settings.$PleaseSelectTheMediaTypes" = "Por favor, seleccione los tipos de archivo para los cuales desea que Reel sea la aplicación predeterminada";
 "settings.$Position" = "Posición";
 "settings.$PreferredLanguage" = "Idioma preferido";
 "settings.$RestoreAlerts" = "Restaurar alertas";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "Capturas de pantalla";
-"settings.$SetIINAAsTheDefault" = "Establecer IINA como la aplicación predeterminada";
+"settings.$SetIINAAsTheDefault" = "Establecer Reel como la aplicación predeterminada";
 "settings.$Settings" = "Ajustes";
 "settings.$Shadow" = "Sombra";
 "settings.$ShowInFinder" = "Mostrar en el Finder";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "de la pantalla";
 "settings.$toThe" = "de la parte";
 "settings.$top" = "superior";
-"settings.$ytdlWarning" = "El complemento Multimedia en Línea tiene más opciones, tales como cambiar la calidad y descargar vídeo. IINA usará el complemento si está instalado y activado. Las preferencias de abajo solo funcionan si el complemento no está disponible.";
+"settings.$ytdlWarning" = "El complemento Multimedia en Línea tiene más opciones, tales como cambiar la calidad y descargar vídeo. Reel usará el complemento si está instalado y activado. Las preferencias de abajo solo funcionan si el complemento no está disponible.";

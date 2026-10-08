@@ -8,17 +8,19 @@
 > **Fork notice.** Reel is an independent fork of [IINA](https://github.com/iina/iina). We claim no credit for IINA: it was created by Collider Li and is built by the IINA contributors and community, and all credit for the underlying player belongs to them. Reel is not affiliated with, endorsed by, or connected to the IINA project; the IINA name and logo remain the property of the IINA project, and this fork ships under its own name and icon. Reel carries IINA's license unchanged: the [GNU General Public License, version 3](LICENSE). Every change this fork makes relative to upstream is documented in [FORK.md](FORK.md).
 
 ---
-[![Crowdin](https://badges.crowdin.net/iina/localized.svg)](https://crowdin.com/project/iina)
 ## Features
 
 * Based on [mpv](https://github.com/mpv-player/mpv), which provides the best decoding capacity on macOS
-* Designed with modern versions of macOS (11.0+) in mind
+* Designed for macOS 12.0 and later
 * All the features you need for video and music: subtitles, playlists, chapters…and much, much more!
 * Force Touch, picture-in-picture and advanced Touch Bar support
 * Customizable user interface including multiple color schemes and on screen controller (OSC) layout positioning
 * Standalone Music Mode designed for audio files
 * Video thumbnails
 * Online subtitle searching and intelligent local subtitle matching
+* AirPlay button for sending sound to AirPlay speakers
+* Optional AirPlay video casting to a TV while Reel stays the remote
+* Apple on-device live captions for local files and http(s) streams
 * Unlimited playback history
 * Convenient and interactive settings for video/audio filters
 * Fully customizable keyboard, mouse, trackpad, and gesture controls
@@ -31,11 +33,11 @@
 Reel does not ship signed releases yet; build it from source (see *Building* below) or check this repository's releases. For the original IINA application, visit the [upstream IINA release page](https://github.com/iina/iina/releases) or the [IINA official website](https://iina.io/) — that project deserves your downloads and stars, not this fork.
 
 > [!IMPORTANT]
-> Reel disables IINA's update appcast on purpose. A fork must never silently replace itself with upstream builds, so Sparkle update checks are inert here.
+> Reel does not configure an application update appcast, so Sparkle automatic checks and its first-launch permission prompt are disabled. Community plugin updates remain available in Settings → Plugins.
 
 ## Building
 
-IINA uses mpv for media playback. To build IINA, you can either fetch copies of these libraries we have already built (using the instructions below) or build them yourself by skipping to [these instructions](#building-mpv-manually).
+Reel uses mpv for media playback. To build Reel, you can either fetch copies of the libraries upstream has already built (using the instructions below) or build them yourself by skipping to [these instructions](#building-mpv-manually).
 
 ### Using the pre-compiled libraries
 
@@ -48,9 +50,9 @@ IINA uses mpv for media playback. To build IINA, you can either fetch copies of 
 > [!TIP]
 > - By default the shell script downloads universal binaries. You can download arch-specific binaries using `--arch <ARCH>` (`universal`, `arm64` or `x86_64`)
 > - Files are downloaded in parallel (5 concurrent downloads by default). You can change this using `--parallel <N>` (from 1 to...)
-> - If you want to build an older IINA version you must change `DYLIBS_DOWNLOAD_PATH` in the script to download the corresponding dylibs. For example, `https://iina.io/dylibs/1.2.0/universal/fileList.txt`.
+> - If you want to build against an older set of dylibs you must change `DYLIBS_DOWNLOAD_PATH` in the script to download the corresponding dylibs. For example, `https://iina.io/dylibs/1.2.0/universal/fileList.txt`.
 
-2. Open iina.xcodeproj in the [latest public version of Xcode](https://apps.apple.com/app/xcode/id497799835). *IINA may not build if you use any other version.*
+2. Open iina.xcodeproj in the [latest public version of Xcode](https://apps.apple.com/app/xcode/id497799835). *Reel may not build if you use any other version; this requirement is inherited from IINA.*
 
 3. Build the project.
 
@@ -67,7 +69,7 @@ IINA uses mpv for media playback. To build IINA, you can either fetch copies of 
    ln -s $(which yt-dlp) deps/executable/youtube-dl
    ```
 
-4. Open `iina.xcodeproj` in the [latest public version of Xcode](https://apps.apple.com/app/xcode/id497799835). *IINA may not build if you use any other version.*
+4. Open `iina.xcodeproj` in the [latest public version of Xcode](https://apps.apple.com/app/xcode/id497799835). *Reel may not build if you use any other version; this requirement is inherited from IINA.*
 
 5. Remove all references to `.dylib` files from the Frameworks group in the sidebar and add all the `.dylib` files in `deps/lib` to that group by clicking  "Add Files to iina..." in the context menu.
 
@@ -77,6 +79,11 @@ IINA uses mpv for media playback. To build IINA, you can either fetch copies of 
 
 8. Build the project.
 
+The build script prepares Reel's pinned AirPlay plugin even when run with
+`--skip-plugins`; that option skips optional upstream plugin downloads. Plugin
+preparation requires Go 1.26.4 or newer, Node.js with the built-in test runner,
+and Xcode command-line tools for universal helper assembly and signing.
+
 ## Subtitle setup
 
 For this checkout's SubDL automatic search, OpenSubtitles manual fallback, and Apple speech
@@ -85,25 +92,51 @@ caption setup, see [Subtitle setup](docs/subtitle-setup.md).
 For installing this local fork and preventing stale app copies in macOS launch choices,
 see [Local macOS installation](docs/local-installation.md).
 
+## Audio output
+
+Reel selects its own audio output device through mpv, so you can send playback to an AirPlay
+device without changing what the rest of the Mac does. The AirPlay button in the on-screen
+controller opens the system speaker picker instead. See
+[Audio output devices](docs/audio-output.md).
+
+For video casting to an Apple TV while Reel remains the remote, see
+[AirPlay video casting](docs/airplay-casting.md). This is separate from selecting an AirPlay
+audio output device.
+
 ## Contributing
 
-Reel is a fork; its own development happens in this repository. Upstream IINA is always looking for contributions, whether it's through bug reports, code, or new translations.
+Reel is a fork, and its own development happens in this repository. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to propose a change here.
 
-* If you find a bug in IINA, or would like to suggest a new feature or enhancement, it'd be nice if you could [search your problem first](https://github.com/iina/iina/issues); while we don't mind duplicates, keeping issues unique helps us save time and consolidates effort. If you can't find your issue, feel free to [file a new one](https://github.com/iina/iina/issues/new/choose).
+* If you find a bug in **IINA** itself, report it to
+  [upstream](https://github.com/iina/iina/issues). General playback, decoding, and
+  interface bugs belong upstream, where they get fixed for everyone.
 
-* If you're looking to contribute code, please read [CONTRIBUTING.md](CONTRIBUTING.md) — it has information on IINA's process for handling contributions, and tips on how the code is structured to make your work easier.
+* If you want to contribute code to Reel, or you find a bug specific to this fork, open an
+  issue or pull request in this repository.
 
-* If you'd like to translate IINA to your language, please visit [IINA's instance of Crowdin](https://translate.iina.io/). You can create an account for free and start translating. Please do not send a pull request to this repo directly, Crowdin will automatically sync new translations with our repo. If you want to translate IINA into a new language that is currently not on the list, feel free to open an issue.
+* Translations are inherited from upstream. This repository does not run a translation service
+  of its own; if you want to translate Reel, translate it upstream, where the Crowdin project
+  for this codebase lives, and the strings will reach this fork with the next merge.
 
-## IINA Plugins List
+## Plugins
 
-### Official Plugins
+The plugin interface and file formats are unchanged from IINA, so IINA's plugins work in
+Reel.
+
+### Bundled with Reel
+
+- **AirPlay video casting** (`ozykhan/iina-airplay` v0.3.2) ships installed but disabled. Enable
+  it under Settings → Plugins; Reel asks you to approve its filesystem permission before enabling
+  it. The first cast may also trigger macOS's Local Network permission prompt. Setup, limitations,
+  and privacy details are in [AirPlay video casting](docs/airplay-casting.md).
+
+### Upstream-maintained plugins
 - **[Online Media](https://github.com/iina/plugin-online-media)** (`iina/plugin-online-media`) - Enhances online streaming and downloading.
 - **[OpenSubtitles](https://github.com/iina/plugin-opensub)** (`iina/plugin-opensub`) - Search and download subtitles.
 - **[User Scripts](https://github.com/iina/plugin-userscript)** (`iina/plugin-userscript`) - Run custom JavaScript snippets.
 
-### Community Plugins
-- **[AirPlay](https://github.com/ozykhan/iina-airplay)** (`ozykhan/iina-airplay`) - Cast the current file to an Apple TV over AirPlay; IINA stays the remote.
+### Community plugins
 - **[Anime4K](https://github.com/yorkyang2333/iina-anime4k)** (`yorkyang2333/iina-anime4k`) - Apply Anime4K shaders for real-time anime upscaling.
 - **[Auto Skip](https://github.com/pangziqiang/iina-auto-skip)** (`pangziqiang/iina-auto-skip`) - Automatically skip intro and outro sections with visual drag-to-set overlay.
 - **[Bilingual Audio](https://github.com/glechic/iina-bilingual-audio)** (`glechic/iina-bilingual-audio`) - Play two audio tracks with left/right channel separation for bilingual viewing.
@@ -114,7 +147,7 @@ Reel is a fork; its own development happens in this repository. Upstream IINA is
 - **[Danmaku Cosmos](https://github.com/karappo-yu/iina-plugin-danmaku-cosmos)** (`karappo-yu/iina-plugin-danmaku-cosmos`) - Niconico/Bilibili danmaku with CSS/Canvas dual rendering, Comment Art support.
 - **[Detached Playlist](https://github.com/HowDidTheCatGetSoFat/iina-detached-playlist)** (`HowDidTheCatGetSoFat/iina-detached-playlist`) - Show the playlist in a separate floating window.
 - **[Episode Info](https://github.com/Zain-Imam/iina-episode-info)** (`Zain-Imam/iina-episode-info`) - TMDB episode/movie info overlay on pause, with built-in subtitle search.
-- **[File Viewer](https://github.com/qktechies/iina-plugin-file-viewer)** (`qktechies/iina-plugin-file-viewer`) - bookmark folders, browse directory contents, and play video files directly within IINA.
+- **[File Viewer](https://github.com/qktechies/iina-plugin-file-viewer)** (`qktechies/iina-plugin-file-viewer`) - bookmark folders, browse directory contents, and play video files directly within the player.
 - **[Hold to Speed](https://github.com/Tommy12356F/iina-hold-to-speed)** (`Tommy12356F/iina-hold-to-speed`) - Hold Space to play at 2× speed, just like YouTube.
 - **[Jellyfin](https://github.com/mhajder/iina-jellyfin)** (`mhajder/iina-jellyfin`) - Browse and play media from Jellyfin servers.
 - **[Jump to Frame](https://github.com/bbeny123/iina-jump-to-frame)** (`bbeny123/iina-jump-to-frame`) - Navigate video by specific frame number.
@@ -127,11 +160,11 @@ Reel is a fork; its own development happens in this repository. Upstream IINA is
 - **[recorder](https://github.com/5thDimensionalVader/recorder-iina)** (`5thDimensionalVader/recorder-iina`) - to clip a video using ffmpeg.
 - **[Skip Intro](https://github.com/pparanoiidd/iina-skip-intro)** (`pparanoiidd/iina-skip-intro`) - Detect and skip intros, recaps and credits.
 - **[SubTandem](https://github.com/janwee-sha/SubTandem)** (`janwee-sha/SubTandem`) - A powerful plugin for real-time AI-powered bilingual subtitle translation.
-- **[Thumbnails](https://github.com/aminozuur/iina-thumbnails)** (`aminozuur/iina-thumbnails`) - An IINA plugin that shows clickable thumbnails for each video.
-- **[Trakt Scrobbler](https://github.com/i3p9/iina-trakt-scrobbler)** (`i3p9/iina-trakt-scrobbler`) - Trakt.tv scrobbler plugin for IINA.
+- **[Thumbnails](https://github.com/aminozuur/iina-thumbnails)** (`aminozuur/iina-thumbnails`) - A plugin that shows clickable thumbnails for each video.
+- **[Trakt Scrobbler](https://github.com/i3p9/iina-trakt-scrobbler)** (`i3p9/iina-trakt-scrobbler`) - Trakt.tv scrobbler plugin.
 - **[VR2D](https://github.com/fetzu/iina-plugin-vr2d)** (`fetzu/iina-plugin-vr2d`) - Watch 3D VR videos (180°/360°, side-by-side or over-under) flat, with pan, zoom and automatic detection.
 
 
 > 💡 **Want to build your own plugin?**
 >
-> Explore the existing plugins listed here to learn how they work. If you create a new plugin or improve an existing one, feel free to contribute back by adding it to this list via a pull request.
+> Explore the existing plugins listed here to learn how they work. If you create a new plugin or improve an existing one, feel free to contribute it back to [upstream IINA](https://github.com/iina/iina), where it will reach Reel through the plugin list.

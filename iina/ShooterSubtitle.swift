@@ -132,10 +132,12 @@ class Shooter {
           var index = 1
 
           json.forEach { sub in
-            let filesDic = sub["Files"] as! ResponseFilesData
-            let files = filesDic.map { o -> Subtitle.SubFile in
-              return Subtitle.SubFile(ext: o["Ext"]!, path: o["Link"]!)
+            guard let filesDic = sub["Files"] as? ResponseFilesData else { return }
+            let files = filesDic.compactMap { file -> Subtitle.SubFile? in
+              guard let ext = file["Ext"], let path = file["Link"], !path.isEmpty else { return nil }
+              return Subtitle.SubFile(ext: ext, path: path)
             }
+            guard !files.isEmpty else { return }
             let desc = sub["Desc"] as? String ?? ""
             let delay = sub["Delay"] as? Int ?? 0
 

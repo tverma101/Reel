@@ -140,8 +140,9 @@ extension OnlineSubtitle {
     // so from this thread would mean mutating a view controller off the main queue.
     guard !subs.isEmpty else { return .value(subs) }
 
+    let mediaTokens = SubtitleMatchScorer.prepareMediaName(mediaName)
     let scores = subs.map {
-      SubtitleMatchScorer.score(releaseName: $0.releaseName, mediaName: mediaName)
+      SubtitleMatchScorer.score(releaseName: $0.releaseName, mediaTokens: mediaTokens)
     }
     let perfect = scores.enumerated().filter {
       $0.element == SubtitleMatchScorer.perfectMatch && subs[$0.offset].canAutomaticallySelect
@@ -167,8 +168,8 @@ extension OnlineSubtitle {
       // is AppKit: loading the nib from `chooser.view` and the table/selection/button updates in
       // `reload()`. Presenting them on the calling thread was already wrong for the table reload,
       // and writing the selection made it worse, so hop to main explicitly.
-      DispatchQueue.main.async {
-        guard player.info.state.active, player.info.currentURL == expectedURL else {
+      DispatchQueue.main.async { [player, chooser] in
+        guard player.info.state.loaded, player.info.currentURL == expectedURL, !player.isInMiniPlayer else {
           resolver.reject(CommonError.dismissed)
           return
         }
@@ -181,15 +182,16 @@ extension OnlineSubtitle {
         // promise cannot be left pending with the chooser destroyed. Rejecting routes through the
         // normal error path, which resets `isSearchingOnlineSubtitle`.
         var settled = false
-        let settle: (Bool) -> Void = { wasCancelled in
+        var wasPresented = false
+        let settle: (Bool) -> Void = { [weak player, weak chooser] wasCancelled in
           guard !settled else { return }
           settled = true
-          player.cancelOnlineSubtitleSearch = nil
+          player?.cancelOnlineSubtitleSearch = nil
           if wasCancelled {
-            chooser.userDoneAction = nil
-            chooser.userCanceledAction = nil
-            chooser.context = nil
-            player.hideOSD()
+            chooser?.userDoneAction = nil
+            chooser?.userCanceledAction = nil
+            chooser?.context = nil
+            if wasPresented { player?.hideOSD() }
             resolver.reject(CommonError.dismissed)
           }
         }
@@ -204,8 +206,23 @@ extension OnlineSubtitle {
           resolver.reject(CommonError.canceled)
         }
 
-        player.sendOSD(.foundSub(subs.count), autoHide: false, accessoryView: chooser.view)
-        chooser.reload()
+        player.sendOSD(.foundSub(subs.count),
+                       autoHide: false,
+                       accessoryView: chooser.view,
+                       presentationCheck: { [weak player] in
+                         guard let player else { return false }
+                         return player.info.state.loaded &&
+                           player.info.currentURL == expectedURL &&
+                           !player.isInMiniPlayer
+                       },
+                       onDisplayed: { displayed in
+                         guard displayed else {
+                           settle(true)
+                           return
+                         }
+                         wasPresented = true
+                         chooser.reload()
+                       })
       }
     }
   }

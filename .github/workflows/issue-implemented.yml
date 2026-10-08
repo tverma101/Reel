@@ -56,18 +56,16 @@ jobs:
             const body = [
               "**This issue has been closed as completed.**",
               "",
-              "The changes that address it have been merged into the **`develop`** branch, which holds the sources for the development version of IINA. They might **not yet in a stable release**. To try them now you can:",
+              "The changes that address it have been merged into this fork's default branch. They might **not yet be in a stable release**. To try them now:",
               "",
-              "- Download an [IINA Nightly build][nightly] (see [What is an IINA Nightly build?][nightly-faq]), or",
-              "- [Build IINA yourself][build] from the `develop` branch.",
+              "- Download the latest `Reel` artifact from the repository's Actions runs, or",
+              "- [Build Reel yourself][build] from source.",
               "",
-              "These changes will be included in a future release of IINA. Further tweaks related to this issue are still expected.",
+              "These changes will be included in a future release of Reel. Further tweaks related to this issue are still expected.",
               "",
-              "Thanks for helping improve IINA! 🎉",
+              "Thanks for helping improve Reel!",
               "",
-              "[nightly]: https://iina.io/nightly",
-              "[nightly-faq]: https://github.com/iina/iina/wiki/FAQ#what-is-an-iina-nightly-build",
-              "[build]: https://github.com/iina/iina/wiki/FAQ",
+              "[build]: https://github.com/tverma101/Reel#building",
             ].join("\n");
 
             await github.rest.issues.createComment({

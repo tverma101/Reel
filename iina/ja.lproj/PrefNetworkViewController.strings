@@ -23,7 +23,7 @@
 "LNk-io-MM7.title" = "キャッシュ:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "RwW-JS-iTv"; */
-"RwW-JS-iTv.title" = "有効にするにはIINAを再起動する必要があります。";
+"RwW-JS-iTv.title" = "有効にするにはReelを再起動する必要があります。";
 
 /* Class = "NSTextFieldCell"; title = "IINA will search youtube-dl in this folder. Restart needed."; ObjectID = "YqE-yV-BvQ"; */
 "YqE-yV-BvQ.title" = "youtube-dlをこのフォルダ内で検索します。再起動が必要です。";

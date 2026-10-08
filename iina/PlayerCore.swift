@@ -265,6 +265,9 @@ class PlayerCore: NSObject {
     // Clear first so the cancel action cannot run twice, and so a re-entrant call is a no-op.
     cancelOnlineSubtitleSearch = nil
     cancel()
+    // A provider can still be awaiting an uncancellable request. Its completion is ignored once
+    // the search ID is cleared, so dismiss the non-auto-hiding progress OSD here as well.
+    if hadSearch { hideOSD() }
   }
 
   /// For supporting mpv `--shuffle` arg, to shuffle playlist when launching from command line
@@ -1686,9 +1689,12 @@ class PlayerCore: NSObject {
   }
 
   func setCrop(fromString str: String) {
-    let vwidth = info.videoWidth!
-    let vheight = info.videoHeight!
     if let aspect = Aspect(string: str) {
+      guard let vwidth = info.videoWidth, vwidth > 0,
+            let vheight = info.videoHeight, vheight > 0 else {
+        log("Ignoring crop request before valid video dimensions are available", level: .warning)
+        return
+      }
       let cropped = NSMakeSize(CGFloat(vwidth), CGFloat(vheight)).crop(withAspect: aspect)
       let vf = MPVFilter.crop(w: Int(cropped.width), h: Int(cropped.height), x: nil, y: nil)
       vf.label = Constants.FilterName.crop
@@ -1999,26 +2005,38 @@ class PlayerCore: NSObject {
 
   func setSubTextColor(_ colorString: String) {
     mpv.setString("options/" + MPVOption.Subtitles.subColor, colorString)
+    info.subtitleStyleOverrides.textColor = colorString
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextSize(_ size: Double) {
     mpv.setDouble("options/" + MPVOption.Subtitles.subFontSize, size)
+    info.subtitleStyleOverrides.size = size
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBold(_ bold: Bool) {
     mpv.setFlag("options/" + MPVOption.Subtitles.subBold, bold)
+    info.subtitleStyleOverrides.bold = bold
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBorderColor(_ colorString: String) {
     mpv.setString("options/" + MPVOption.Subtitles.subOutlineColor, colorString)
+    info.subtitleStyleOverrides.borderColor = colorString
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBorderSize(_ size: Double) {
     mpv.setDouble("options/" + MPVOption.Subtitles.subOutlineSize, size)
+    info.subtitleStyleOverrides.borderSize = size
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBgColor(_ colorString: String) {
     mpv.setString("options/" + MPVOption.Subtitles.subBackColor, colorString)
+    info.subtitleStyleOverrides.backgroundColor = colorString
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubEncoding(_ encoding: String) {
@@ -2028,6 +2046,8 @@ class PlayerCore: NSObject {
 
   func setSubFont(_ font: String) {
     mpv.setString(MPVOption.Subtitles.subFont, font)
+    info.subtitleStyleOverrides.font = font
+    postNotification(.iinaSubStyleChanged)
   }
 
   func savePlaybackPosition() {
@@ -2251,6 +2271,13 @@ class PlayerCore: NSObject {
     trackListChanged()
     getPlaylist()
     getChapters()
+    // These property notifications can be delivered while an mpv loading hook is still running.
+    // Their handlers intentionally avoid synchronous mpv reads during that phase, so resync their
+    // current values now that FILE_LOADED makes those reads safe. This also catches a selected
+    // CoreAudio/AirPlay device that disappeared during loading.
+    chapterChanged()
+    currentAoChanged()
+    audioDeviceListChanged()
     syncAbLoop()
     refreshSyncUITimer()
     touchBarSupport.setupTouchBarUI()
@@ -2932,21 +2959,34 @@ class PlayerCore: NSObject {
     }
   }
 
-  func sendOSD(_ osd: OSDMessage, autoHide: Bool = true, forcedTimeout: Float? = nil, accessoryView: NSView? = nil, context: Any? = nil, external: Bool = false) {
+  func sendOSD(_ osd: OSDMessage, autoHide: Bool = true, forcedTimeout: Float? = nil, accessoryView: NSView? = nil, context: Any? = nil, external: Bool = false, presentationCheck: (() -> Bool)? = nil, onDisplayed: ((Bool) -> Void)? = nil) {
     // querying `mainWindow.isWindowLoaded` will initialize mainWindow unexpectedly
     guard !isInMiniPlayer, mainWindow.loaded, info.state.loaded,
-          Preference.bool(for: .enableOSD) || osd.alwaysEnabled, !osd.isDisabled else { return }
+          Preference.bool(for: .enableOSD) || osd.alwaysEnabled, !osd.isDisabled else {
+      if let onDisplayed {
+        DispatchQueue.main.async { onDisplayed(false) }
+      }
+      return
+    }
     if info.disableOSDForFileLoading && !external {
       guard case .fileStart = osd else {
+        if let onDisplayed {
+          DispatchQueue.main.async { onDisplayed(false) }
+        }
         return
       }
     }
     DispatchQueue.main.async {
-      self.mainWindow.displayOSD(osd,
-                                 autoHide: autoHide,
-                                 forcedTimeout: forcedTimeout,
-                                 accessoryView: accessoryView,
-                                 context: context)
+      guard presentationCheck?() ?? true else {
+        onDisplayed?(false)
+        return
+      }
+      let displayed = self.mainWindow.displayOSD(osd,
+                                                 autoHide: autoHide,
+                                                 forcedTimeout: forcedTimeout,
+                                                 accessoryView: accessoryView,
+                                                 context: context)
+      onDisplayed?(displayed)
     }
   }
 

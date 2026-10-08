@@ -66,9 +66,9 @@ class OnlineSubtitle: NSObject {
    */
   var releaseName: String? { nil }
 
-  /// Whether this provider result has enough content evidence to be selected without review.
-  /// Providers that do not perform content verification keep the historic behavior.
-  var canAutomaticallySelect: Bool { true }
+  /// Whether this provider result has independent evidence beyond uploader-controlled names.
+  /// Providers must opt in explicitly; exact filename matches alone are not proof of content.
+  var canAutomaticallySelect: Bool { false }
 
   /// Provider-supplied preference for chooser preselection, without changing result ordering.
   var verifiedSelectionBoost: Int { 0 }
@@ -482,10 +482,17 @@ enum SubtitleMatchScorer {
   /// - Returns: A score from `0` (no useful resemblance) to `100` (same title, same year or
   ///   episode), where only a `100` may trigger automatic selection.
   static func score(releaseName: String?, mediaName: String) -> Int {
-    guard let releaseName, !releaseName.isEmpty, !mediaName.isEmpty else { return 0 }
+    score(releaseName: releaseName, mediaTokens: prepareMediaName(mediaName))
+  }
 
+  static func prepareMediaName(_ mediaName: String) -> [String] {
+    normalizeEpisodeMarkers(tokenize(clip(mediaName)))
+  }
+
+  static func score(releaseName: String?, mediaTokens: [String]) -> Int {
+    guard let releaseName, !releaseName.isEmpty, !mediaTokens.isEmpty else { return 0 }
     let release = normalizeEpisodeMarkers(tokenize(clip(stripSubtitleExtension(from: releaseName))))
-    let media = normalizeEpisodeMarkers(tokenize(clip(mediaName)))
+    let media = mediaTokens
     guard !release.isEmpty, !media.isEmpty else { return 0 }
 
     if isIdenticalTitleAndAnchor(release, media) { return perfectMatch }
@@ -499,7 +506,9 @@ enum SubtitleMatchScorer {
     let shared = Set(media).intersection(release).count
     guard shared > 0 else { return 0 }
     var value = Int(((2.0 * Double(shared)) / Double(media.count + release.count) * 100).rounded())
-    if titleTokens(of: release) == titleTokens(of: media), !titleTokens(of: release).isEmpty {
+    let releaseTitle = titleTokens(of: release)
+    let mediaTitle = titleTokens(of: media)
+    if releaseTitle == mediaTitle, !releaseTitle.isEmpty {
       value = max(value, 90)
     }
     return min(95, value)
@@ -515,11 +524,31 @@ enum SubtitleMatchScorer {
     // Compared as an ordered sequence. Joining the tokens instead would treat "The.Matrix" and
     // "t.hematrix" as equal, which is not a property worth having.
     guard releaseTitle == mediaTitle else { return false }
+    // Release names are uploader-controlled. A real release tail contains technical tags and at
+    // most one arbitrary release-group token; multiple unknown words after the first tag can be a
+    // second title inserted after an otherwise matching filename.
+    guard hasSafeReleaseTail(release) else { return false }
     // Read from the full names, so a release cannot dodge the comparison by leaving its year or
     // episode out, and so a second year or episode cannot be smuggled in after a release tag.
     let releaseAnchors = identityAnchors(in: release)
     let mediaAnchors = identityAnchors(in: media)
     return !mediaAnchors.isEmpty && releaseAnchors == mediaAnchors
+  }
+
+  private static func hasSafeReleaseTail(_ tokens: [String]) -> Bool {
+    guard let firstTag = tokens.firstIndex(where: isReleaseTag) else { return true }
+    var unclassifiedTokens = 0
+    for token in tokens.dropFirst(firstTag + 1) where !isReleaseDetail(token) {
+      unclassifiedTokens += 1
+      if unclassifiedTokens > 1 { return false }
+    }
+    return true
+  }
+
+  private static func isReleaseDetail(_ token: String) -> Bool {
+    if isReleaseTag(token) || ["h", "ddp5", "ddp7"].contains(token) { return true }
+    // Channel-count fragments such as the `1` in `DDP5.1` are split out by `tokenize`.
+    return token.count <= 2 && Int(token) != nil
   }
 
   /// The leading tokens of `tokens` that belong to the title, discarding the token that starts the
