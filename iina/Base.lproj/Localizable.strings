@@ -803,7 +803,7 @@
 "settings.opensub.manual_help" = "OpenSubtitles remains available for manual search. Results open a chooser so you can select a subtitle before downloading. Optional audio checking uses your download quota.";
 "settings.$LiveCaptions" = "Apple Live Captions";
 "settings.appleLiveCaptionsFallback.label" = "Caption video when no subtitles are available";
-"settings.appleLiveCaptionsFallback.desc" = "Caption local video with no subtitle track using Apple's on-device speech engine. macOS 26 and later uses SpeechTranscriber; older systems ask for Speech Recognition permission. Captions follow playback and stop when a subtitle track appears. Their appearance follows Subtitle Text and Position settings, including font, size, color, border, shadow, alignment, margins, and window scaling.";
+"settings.appleLiveCaptionsFallback.desc" = "Caption local or http(s)-streamed video with no subtitle track using Apple's on-device speech engine. macOS 26 and later uses SpeechTranscriber; older systems ask for Speech Recognition permission. Captions follow playback and stop when a subtitle track appears. Their appearance follows Subtitle Text and Position settings, including font, size, color, border, shadow, alignment, margins, and window scaling.";
 "settings.appleLiveCaptionsLanguage.label" = "Speech language";
 "settings.appleLiveCaptionsLanguage.desc" = "Leave empty to use the Mac's current language, or enter a language tag such as en-US. On-device recognition must be available for that language.";
 "live_captions.accessibility" = "Apple live captions";
@@ -1062,3 +1062,12 @@
 "settings.$toThe" = "to the";
 "settings.$top" = "top";
 "settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+
+"menu.apple_live_captions" = "Apple Live Captions";
+"sidebar.apple_live_captions" = "Apple Live Captions";
+"sidebar.apple_live_captions_hint" = "Transcribes speech on-device for local files and http(s) streams that have no subtitle track.";
+"osd.apple_live_captions_on" = "Apple Live Captions: On";
+"osd.apple_live_captions_off" = "Apple Live Captions: Off";
+"osc_toolbar.airplay" = "AirPlay";
+"osd.airplay_pinned_device" = "AirPlay speakers need Audio Device set to Auto";
+"osd.airplay_pinned_device_detail" = "Choose Audio > Audio Device > Auto, then pick speakers.";

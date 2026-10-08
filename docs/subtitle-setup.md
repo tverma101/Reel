@@ -45,7 +45,7 @@ public integration contract was not verified, so they are not part of the automa
 
 ## Apple speech fallback
 
-When a local video has no subtitle track, **Caption video when no subtitles are available** uses
+When a video has no subtitle track, **Caption video when no subtitles are available** uses
 Apple's Speech framework to transcribe short audio chunks on device and shows the text over the
 video at playback time. macOS 26 and later uses `SpeechTranscriber` without the older Speech
 Recognition permission prompt; earlier systems use `SFSpeechRecognizer` and ask for that
@@ -77,8 +77,15 @@ A local playback check showed the Apple-generated caption over a subtitle-free v
 a manually loaded `.srt` in its place. This verifies that path on this Mac, not every speech
 language or media format.
 
-This implementation reads local media files; network streams and protected media are outside its
-audio-decoding path. Reel does not control the separate macOS system-wide Live Captions window.
+Turn captions on or off from **Subtitles → Apple Live Captions** in the menu bar, the **Apple Live
+Captions** switch in the player's Subtitles sidebar, or the Settings checkbox; all three change the
+same setting.
+
+Local files and `http`/`https` streams are both transcribed. For a stream, Reel keeps one network
+connection open, reads only the audio track, and decodes about six seconds ahead of playback. If
+the stream's audio cannot be read three times in a row, captions stop for that item. A playback
+check on an archive.org MP4 playlist showed captions over the stream. Protected media is outside
+this path. Reel does not control the separate macOS system-wide Live Captions window.
 
 ## Related debugging notes
 

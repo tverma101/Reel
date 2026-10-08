@@ -66,10 +66,30 @@
 
 + (nullable NSDictionary *)probeVideoInfoForFile:(nonnull NSString *)file;
 
-/// Decode a short local audio excerpt as 16 kHz mono float PCM for on-device matching.
+/// Decode a short audio excerpt as 16 kHz mono float PCM for on-device matching.
+/// `file` is a local path or an http(s) URL string.
 + (nullable NSData *)readMonoAudioFromFile:(nonnull NSString *)file
                                  startTime:(double)startTime
                                   duration:(double)duration
                         cancellationCheck:(nullable BOOL (^)(void))cancellationCheck;
+
+@end
+
+/// Decodes 16 kHz mono float PCM excerpts from one media source, keeping it open between reads.
+/// Reusing a reader avoids reconnecting and re-reading the container header for every excerpt,
+/// which matters for network streams. Not thread-safe: use one reader from one queue at a time.
+@interface FFmpegAudioChunkReader: NSObject
+
+/// `source` is a local path or an http(s) URL string. Returns nil if it has no decodable audio.
+- (nullable instancetype)initWithSource:(nonnull NSString *)source
+                      cancellationCheck:(nullable BOOL (^)(void))cancellationCheck;
+
+/// Returns nil if fewer than one second of audio was decoded.
+- (nullable NSData *)readMonoAudioFrom:(double)startTime
+                              duration:(double)duration
+                     cancellationCheck:(nullable BOOL (^)(void))cancellationCheck;
+
+/// Set after a seek or read error; the reader should be replaced.
+@property (nonatomic, readonly) BOOL failed;
 
 @end

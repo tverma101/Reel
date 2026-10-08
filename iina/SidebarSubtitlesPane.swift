@@ -63,6 +63,10 @@ class SidebarSubtitlesPane: SidebarScrollView {
       $0.padding(.all(.sidebarContainerPadding))
     })
 
+    stack.addArrangedSubview(Container(LiveCaptionsView(player: player)) {
+      $0.padding(.all(.sidebarContainerPadding))
+    })
+
     stack.addArrangedSubview(Container(SubPositionDelayView(player: player)) {
       $0.padding(.all(.sidebarContainerPadding))
     })
@@ -151,6 +155,63 @@ fileprivate class VisibilitySwitch: NSSwitch {
     } else {
       player.toggleSecondSubVisibility()
     }
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+}
+
+
+/// Turns Apple's on-device live captions on or off without opening Settings.
+fileprivate class LiveCaptionsView: NSView {
+  private unowned let player: PlayerCore
+  private let prefObserver = Preference.Observer()
+  private let toggle = NSSwitch()
+  private let hint = ui.label("sidebar.apple_live_captions_hint", wrapping: true, isSmall: true, isSecondary: true, canCompress: false)
+
+  init(player: PlayerCore) {
+    self.player = player
+    super.init(frame: .zero)
+    translatesAutoresizingMaskIntoConstraints = false
+    hint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+    if #available(macOS 26, *) {
+      toggle.controlSize = .mini
+    }
+    toggle.target = self
+    toggle.action = #selector(switchAction)
+
+    let stack = ui.vStack(
+      spacing: 4,
+      ui.hStack(
+        spacing: 8,
+        ui.label("sidebar.apple_live_captions", font: .boldSystemFont(ofSize: 12)),
+        ui.flexibleSpace(),
+        toggle,
+      ),
+      hint,
+    )
+    addSubview(stack)
+    stack.padding(.all)
+    hint.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+    prefObserver.add(.appleLiveCaptionsFallback, runNow: true) { [weak self] _ in
+      self?.toggle.state = Preference.bool(for: .appleLiveCaptionsFallback) ? .on : .off
+    }
+  }
+
+  override func layout() {
+    super.layout()
+    // A wrapping label needs a width to wrap at; without one it stays on one truncated line.
+    if hint.preferredMaxLayoutWidth != hint.frame.width {
+      hint.preferredMaxLayoutWidth = hint.frame.width
+      super.layout()
+    }
+  }
+
+  @objc private func switchAction(_ sender: NSSwitch) {
+    AppleLiveCaptions.setEnabled(sender.state == .on, osdPlayer: player)
   }
 
   required init?(coder: NSCoder) {

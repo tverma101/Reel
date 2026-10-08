@@ -2,9 +2,10 @@
 //  AppleLiveCaptions.swift
 //  iina
 //
-//  Caption local video audio with Apple's on-device Speech recognizer when no subtitle track exists.
-//  Audio is decoded from the current file in short chunks; it is never recorded from the microphone
-//  or sent to an online subtitle provider. Each transcription is tied to its file and playback time.
+//  Caption local or streamed video audio with Apple's on-device Speech recognizer when no subtitle
+//  track exists. Audio is decoded from the current file or http(s) stream in short chunks (a stream
+//  is fetched again from its own server); it is never recorded from the microphone or sent to an
+//  online subtitle provider. Each transcription is tied to its media and playback time.
 //
 
 import AVFoundation
@@ -221,8 +222,31 @@ final class AppleLiveCaptions: @unchecked Sendable {
   private var installedSpeechLanguageCodes: Set<String>?
   private var speechLocaleCheckTask: Task<Void, Never>?
   private let chunkDuration: Double = 10
+  /// Consecutive chunks of the active stream that could not be opened or decoded.
+  private var streamDecodeFailures = 0
+  /// Set after repeated stream failures so an unreadable URL is not refetched every chunk.
+  private var abandonedURL: URL?
+  /// Keeps the media open between chunks so a stream is not reconnected and re-probed each time.
+  /// Confined to `decodeQueue`.
+  private var chunkReader: FFmpegAudioChunkReader?
+  private var chunkReaderSource: String?
 
   init(player: PlayerCore) { self.player = player }
+
+  /// Turns live captions on or off from the player and confirms the change on screen.
+  static func setEnabled(_ enabled: Bool, osdPlayer player: PlayerCore?) {
+    Preference.set(enabled, for: .appleLiveCaptionsFallback)
+    let key = enabled ? "osd.apple_live_captions_on" : "osd.apple_live_captions_off"
+    player?.sendOSD(.custom(NSLocalizedString(key, comment: key)))
+  }
+
+  /// Local files and plain http(s) media streams can be decoded for transcription. Other schemes
+  /// (for example pages resolved by yt-dlp) have no directly readable audio URL.
+  static func canTranscribe(_ url: URL) -> Bool {
+    if url.isFileURL { return true }
+    let scheme = url.scheme?.lowercased()
+    return scheme == "http" || scheme == "https"
+  }
 
   func install(in contentView: NSView, above videoContainer: NSView) {
     self.videoContainer = videoContainer
@@ -501,7 +525,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
     guard player.info.state.loaded,
           player.info.vid != nil, player.info.vid != 0,
           player.info.subTracks.isEmpty,
-          let url = player.info.currentURL, url.isFileURL else {
+          let url = player.info.currentURL, Self.canTranscribe(url) else {
       Logger.log("Apple live captions ineligible: state=\(player.info.state), video=\(player.info.vid ?? -1), subtitleTracks=\(player.info.subTracks.count)",
                  level: .debug, subsystem: Logger.Sub.onlinesub)
       stop()
@@ -599,6 +623,10 @@ final class AppleLiveCaptions: @unchecked Sendable {
     captionResults.removeAll()
     overlay.isHidden = true
     overlay.setCaptionText("")
+    decodeQueue.async { [weak self] in
+      self?.chunkReader = nil
+      self?.chunkReaderSource = nil
+    }
   }
 
   private func startTimer() {
@@ -617,7 +645,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
           Preference.bool(for: .appleLiveCaptionsFallback),
           player.info.state.loaded,
           player.info.subTracks.isEmpty,
-          let url = player.info.currentURL, url.isFileURL else {
+          let url = player.info.currentURL, Self.canTranscribe(url) else {
       stop()
       return
     }
@@ -634,6 +662,8 @@ final class AppleLiveCaptions: @unchecked Sendable {
       exhaustedAtPosition = nil
       captionResults.removeAll()
       playbackTimeline.reset()
+      streamDecodeFailures = 0
+      abandonedURL = nil
       activeURL = url
     }
     // The UI timer stops after the OSC hides. Keep the cached position current so the chunk
@@ -668,7 +698,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
     }
     overlay.isHidden = text.isEmpty
 
-    guard player.info.state == .playing else { return }
+    guard player.info.state == .playing, abandonedURL != url else { return }
     if inFlight, let recognitionStartedAt,
        Date().timeIntervalSince(recognitionStartedAt) > 15 {
       generation += 1
@@ -704,10 +734,24 @@ final class AppleLiveCaptions: @unchecked Sendable {
         return
       }
     }
-    if !inFlight && (requestedStart == nil || position >= requestedStart! + chunkDuration - 2) {
+    // A stream has to reconnect and probe before each chunk, so it starts the next one earlier.
+    let lookahead: Double = url.isFileURL ? 2 : 6
+    if !inFlight && (requestedStart == nil || position >= requestedStart! + chunkDuration - lookahead) {
       let start = requestedStart.map { $0 + chunkDuration } ?? floor(position / chunkDuration) * chunkDuration
       transcribe(url: url, start: start)
     }
+  }
+
+  /// Runs on `decodeQueue`. Reuses the open reader for the same media; replaces it after an error.
+  private func readChunk(from source: String, start: Double, duration: Double,
+                         cancellation: LiveCaptionDecodeCancellation) -> Data? {
+    let check: () -> Bool = { cancellation.isCancelled }
+    if chunkReaderSource != source || chunkReader?.failed != false {
+      chunkReader = nil
+      chunkReaderSource = source
+      chunkReader = FFmpegAudioChunkReader(source: source, cancellationCheck: check)
+    }
+    return chunkReader?.readMonoAudio(from: start, duration: duration, cancellationCheck: check)
   }
 
   private func transcribe(url: URL, start: Double) {
@@ -740,9 +784,9 @@ final class AppleLiveCaptions: @unchecked Sendable {
     let token = generation
     let decodeCancellation = LiveCaptionDecodeCancellation()
     self.decodeCancellation = decodeCancellation
+    let source = url.isFileURL ? url.path : url.absoluteString
     decodeQueue.async { [weak self] in
-      let data = FFmpegController.readMonoAudio(fromFile: url.path, startTime: start, duration: duration,
-                                                cancellationCheck: { decodeCancellation.isCancelled })
+      let data = self?.readChunk(from: source, start: start, duration: duration, cancellation: decodeCancellation)
       DispatchQueue.main.async {
         guard let self else { return }
         if self.decodeCancellation === decodeCancellation { self.decodeCancellation = nil }
@@ -755,8 +799,17 @@ final class AppleLiveCaptions: @unchecked Sendable {
               let channel = buffer.floatChannelData?[0] else {
           self.inFlight = false
           self.recognitionStartedAt = nil
+          if !url.isFileURL, !decodeCancellation.isCancelled {
+            self.streamDecodeFailures += 1
+            if self.streamDecodeFailures >= 3 {
+              self.abandonedURL = url
+              Logger.log("Apple live captions stopped for this stream: its audio could not be read",
+                         level: .warning, subsystem: Logger.Sub.onlinesub)
+            }
+          }
           return
         }
+        self.streamDecodeFailures = 0
         data.copyBytes(to: UnsafeMutableRawBufferPointer(start: channel, count: data.count))
         buffer.frameLength = buffer.frameCapacity
         // Start the recognition timeout after FFmpeg has finished. A slow local-container probe

@@ -875,6 +875,7 @@ struct Preference {
     case screenshot
     case plugins
     case liveText
+    case airPlay
 
     var description: String {
       switch self {
@@ -887,6 +888,7 @@ struct Preference {
       case .screenshot: "screenshot"
       case .plugins: "plugins"
       case .liveText: "liveText"
+      case .airPlay: "airPlay"
       }
     }
 
@@ -906,6 +908,7 @@ struct Preference {
       case .screenshot: return makeSymbol(["camera.shutter.button", "camera.fill"])
       case .plugins: return makeSymbol(["puzzlepiece.extension", "puzzlepiece"], size: 13.5)
       case .liveText: return makeSymbol(["document.viewfinder", "doc.viewfinder", "doc.text.viewfinder"])
+      case .airPlay: return makeSymbol(["airplay.audio", "airplayaudio"])
       }
     }
 
@@ -933,6 +936,7 @@ struct Preference {
       case .screenshot: key = "screenshot"
       case .plugins: key = "plugins"
       case .liveText: key = "live_text"
+      case .airPlay: key = "airplay"
       }
       return NSLocalizedString("osc_toolbar.\(key)", comment: key)
     }
@@ -1073,7 +1077,7 @@ struct Preference {
     .controlBarStickToCenter: true,
     .controlBarAutoHideTimeout: Float(2.5),
     .enableControlBarAutoHide: true,
-    .controlBarToolbarButtons: [ToolBarButton.plugins.rawValue, ToolBarButton.pip.rawValue, ToolBarButton.playlist.rawValue, ToolBarButton.settings.rawValue],
+    .controlBarToolbarButtons: [ToolBarButton.airPlay.rawValue, ToolBarButton.plugins.rawValue, ToolBarButton.pip.rawValue, ToolBarButton.playlist.rawValue, ToolBarButton.settings.rawValue],
     .oscPosition: OSCPosition.floating.rawValue,
     .disablePlaySliderScrolling: false,
     .disableVolumeSliderScrolling: false,

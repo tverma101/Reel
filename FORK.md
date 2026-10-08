@@ -63,6 +63,10 @@ project; Reel ships under its own name, bundle identifier, and icon.
   `requiresOnDeviceRecognition` otherwise) captions the audio over the video.
   Off by default; audio is never uploaded, recorded from a microphone, or sent
   to subtitle providers; it stops the moment a real subtitle track appears.
+  It also captions `http`/`https` streams, reading only the audio track over
+  one kept-open connection (`FFmpegAudioChunkReader` in
+  `iina/FFmpegController.m`), and can be switched from the Subtitles menu and
+  the Subtitles sidebar as well as Settings.
 
 ### AirPlay video casting
 
@@ -76,6 +80,10 @@ project; Reel ships under its own name, bundle identifier, and icon.
 
 ### Audio output
 
+- **AirPlay button** (`iina/AirPlayAudioRoutePicker.swift`): an on-screen
+  controller button, on by default, that opens Apple's `AVRoutePickerView`
+  speaker picker. Choosing speakers changes the Mac's output, which Reel
+  follows while `audio-device` is `auto`.
 - Device selection itself is inherited, not reimplemented: Settings → Audio,
   *Preferred audio device*, and the Audio → Audio Device menu both set mpv's
   `audio-device`, and selecting an AirPlay destination such as a HomePod routes

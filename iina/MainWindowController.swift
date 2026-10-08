@@ -120,6 +120,8 @@ class MainWindowController: PlayerWindowController {
 
   lazy var liveText = LiveTextController(mainWindow: self)
   lazy var liveCaptions = AppleLiveCaptions(player: player)
+  /// Created when the AirPlay button is first added to the on-screen controller.
+  private(set) var airPlay: AirPlayAudioRoutePicker?
   lazy var interactiveMode = InteractiveModeController(mainWindow: self)
   var pipStatus = PIPStatus.notInPIP
   var isVideoLoaded: Bool = false
@@ -369,7 +371,7 @@ class MainWindowController: PlayerWindowController {
       }
     case PK.enableLiveText.rawValue:
       if #available(macOS 13, *), let newValue = change[.newKey] as? Bool {
-        let buttons = oscToolbarView.subviews as! [NSButton]
+        let buttons = oscToolbarView.subviews.compactMap { $0 as? NSButton }
         if let btn = buttons.first(where: { $0.tag == Preference.ToolBarButton.liveText.rawValue }) {
           btn.image = newValue ? Preference.ToolBarButton.liveText.alternateImage() : Preference.ToolBarButton.liveText.image()
         }
@@ -913,6 +915,15 @@ class MainWindowController: PlayerWindowController {
     oscToolbarView.views.forEach { oscToolbarView.removeView($0) }
     let liveTextEnabled = Preference.bool(for: .enableLiveText)
     for buttonType in effectiveButtons {
+      if buttonType == .airPlay {
+        // Apple's route picker presents the AirPlay speaker list itself.
+        if airPlay == nil { airPlay = AirPlayAudioRoutePicker(player: player) }
+        let picker = airPlay!.makePickerView()
+        picker.translatesAutoresizingMaskIntoConstraints = false
+        picker.size(width: Preference.ToolBarButton.frameSize, height: Preference.ToolBarButton.frameSize)
+        oscToolbarView.addView(picker, in: .trailing)
+        continue
+      }
       let button = NSButton()
       OSCToolbarButton.setStyle(of: button, buttonType: buttonType, reducedWidth: false)
       if buttonType == .liveText && liveTextEnabled {
@@ -934,7 +945,7 @@ class MainWindowController: PlayerWindowController {
   @objc
   private func updateOSCToolbarButtons(_ notification: Notification) {
     func highlight(_ button: Preference.ToolBarButton, _ isHighlighted: Bool) {
-      let buttons = oscToolbarView.subviews as! [NSButton]
+      let buttons = oscToolbarView.subviews.compactMap { $0 as? NSButton }
       let currentButton = buttons.first(where: { $0.tag == button.rawValue })
       currentButton?.image = isHighlighted ? button.alternateImage() : button.image()
     }
@@ -3016,6 +3027,8 @@ class MainWindowController: PlayerWindowController {
       sidebars.show(sidebar: .plugins)
     case .liveText:
       Preference.set(!Preference.bool(for: .enableLiveText), for: .enableLiveText)
+    case .airPlay:
+      break  // An AVRoutePickerView handles its own clicks.
     }
   }
 
