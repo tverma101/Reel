@@ -9,6 +9,7 @@
 //
 
 import AVFoundation
+import CoreAudio
 import Cocoa
 import Speech
 
@@ -734,7 +735,9 @@ final class AppleLiveCaptions: @unchecked Sendable {
     // Bound result growth: chunks arrive throughout the session, so discard text the playhead can
     // no longer reach without a seek (a seek resets the store wholesale).
     captionResults.removeCues(endingBefore: position - 20)
-    let text = captionResults.text(at: position, playbackRate: player.info.playSpeed)
+    // Subtitle Delay applies to these captions as it does to a subtitle track: positive is later.
+    let heard = position - uncountedOutputLatency(player) - player.info.subDelay
+    let text = captionResults.text(at: heard, playbackRate: player.info.playSpeed)
     if overlay.setCaptionText(text) {
       updateAppearance()
     }
@@ -792,10 +795,35 @@ final class AppleLiveCaptions: @unchecked Sendable {
   }
 
   /// Captions follow the sound, not the picture. mpv's audio position is the media time of the
-  /// audio being heard, so it already includes the audio delay setting and the output device's
-  /// latency (an AirPlay speaker, for example). The video position is used when there is no audio.
+  /// audio it has handed to the output, including the audio delay setting. The video position is
+  /// used when there is no audio.
   private func captionClock(videoPosition: Double) -> Double {
     guard let player, let aid = player.info.aid, aid > 0 else { return videoPosition }
+    return mpvAudioClock(videoPosition: videoPosition)
+  }
+
+  private var outputLatency: (value: Double, checkedAt: Date)?
+
+  /// mpv's CoreAudio output leaves out the stream latency, which is where an AirPlay speaker reports
+  /// its roughly two seconds of buffering, so the sound being heard is this far behind mpv's audio
+  /// position. Only the displayed text uses it; the chunk scheduler stays on mpv's clock, so
+  /// switching speakers does not look like a seek.
+  private func uncountedOutputLatency(_ player: PlayerCore) -> Double {
+    guard let aid = player.info.aid, aid > 0 else { return 0 }
+    if let outputLatency, Date().timeIntervalSince(outputLatency.checkedAt) < 1 { return outputLatency.value }
+    // Until mpv has opened its audio output there is nothing to measure yet.
+    guard let ao = player.mpv.getString(MPVProperty.currentAo) else { return outputLatency?.value ?? 0 }
+    let value = ao == "coreaudio"
+      ? CoreAudioOutput.streamLatency(mpvDevice: player.mpv.getString(MPVProperty.audioDevice) ?? "auto") : 0
+    if value != outputLatency?.value {
+      Logger.log("Apple live captions: output stream latency \(value)s", level: .debug, subsystem: Logger.Sub.onlinesub)
+    }
+    outputLatency = (value, Date())
+    return value
+  }
+
+  private func mpvAudioClock(videoPosition: Double) -> Double {
+    guard let player else { return videoPosition }
     if let audioPosition = player.mpv.getDoubleIfAvailable(MPVProperty.audioPts), audioPosition >= 0 {
       let measured = audioPosition - videoPosition
       if abs(measured) < 30 {
@@ -1059,5 +1087,56 @@ final class AppleLiveCaptions: @unchecked Sendable {
         self.updateEligibility()
       }
     }
+  }
+}
+
+/// Output latency that mpv's CoreAudio driver does not count. mpv adds the device latency, buffer
+/// size and safety offset, but not the stream latency, which is where AirPlay reports its buffering.
+enum CoreAudioOutput {
+  /// `mpvDevice` is mpv's audio-device value: "auto" for the system output, or "coreaudio/<UID>".
+  static func streamLatency(mpvDevice: String) -> Double {
+    guard let device = deviceID(mpvDevice: mpvDevice) else { return 0 }
+    var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams,
+                                             mScope: kAudioObjectPropertyScopeOutput,
+                                             mElement: kAudioObjectPropertyElementMain)
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr, size > 0 else { return 0 }
+    var streams = [AudioStreamID](repeating: 0, count: Int(size) / MemoryLayout<AudioStreamID>.size)
+    guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &streams) == noErr,
+          let stream = streams.first else { return 0 }
+    var frames: UInt32 = 0
+    var rate: Float64 = 0
+    guard get(stream, kAudioStreamPropertyLatency, &frames),
+          get(device, kAudioDevicePropertyNominalSampleRate, &rate), rate > 0 else { return 0 }
+    return Double(frames) / rate
+  }
+
+  private static func deviceID(mpvDevice: String) -> AudioObjectID? {
+    var device = AudioObjectID(kAudioObjectUnknown)
+    if mpvDevice == "auto" {
+      guard get(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice, &device) else {
+        return nil
+      }
+    } else {
+      guard mpvDevice.hasPrefix("coreaudio/") else { return nil }
+      var uid = String(mpvDevice.dropFirst("coreaudio/".count)) as CFString
+      var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+                                               mScope: kAudioObjectPropertyScopeGlobal,
+                                               mElement: kAudioObjectPropertyElementMain)
+      var size = UInt32(MemoryLayout<AudioObjectID>.size)
+      let status = withUnsafeMutablePointer(to: &uid) { uidPointer in
+        AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address,
+                                   UInt32(MemoryLayout<CFString>.size), uidPointer, &size, &device)
+      }
+      guard status == noErr else { return nil }
+    }
+    return device == kAudioObjectUnknown ? nil : device
+  }
+
+  private static func get<T>(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector, _ value: inout T) -> Bool {
+    var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                             mElement: kAudioObjectPropertyElementMain)
+    var size = UInt32(MemoryLayout<T>.size)
+    return AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value) == noErr
   }
 }

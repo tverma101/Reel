@@ -68,7 +68,8 @@ project; Reel ships under its own name, bundle identifier, and icon.
   `iina/FFmpegController.m`), and can be switched from the Subtitles menu and
   the Subtitles sidebar as well as Settings. Captions use final, word-timed
   results shown one line at a time, follow the audio clock (so audio delay
-  moves them with the sound), and draw the outline behind the letters.
+  moves them with the sound) minus the AirPlay stream latency mpv does not
+  count, honor Subtitle Delay, and draw the outline behind the letters.
 
 ### AirPlay video casting
 

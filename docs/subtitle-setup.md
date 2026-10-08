@@ -61,7 +61,10 @@ not rewrite itself as drafts change. The words are grouped into short lines (abo
 or 4 seconds, broken at pauses and sentence ends). Each line appears when its first word is spoken
 and stays about a second after its last word, and only one line is shown at a time. Timing follows
 the audio clock (`audio-pts`), so a per-file **Audio Delay** shifts captions together with the
-sound rather than the picture. Recognition can make mistakes. A recently returned caption may still
+sound rather than the picture. mpv's CoreAudio output does not count an output's stream latency,
+which is where an AirPlay speaker reports about two seconds of buffering, so Reel subtracts that
+latency before choosing the caption. **Subtitle Delay** also applies to these captions (positive is
+later) for any remaining fine-tuning. Recognition can make mistakes. A recently returned caption may still
 appear briefly after its time has passed, so chunk-processing delay does not leave a gap.
 
 Caption appearance follows the existing Settings → Subtitles → Text and Position controls. Font,
