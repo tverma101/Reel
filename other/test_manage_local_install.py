@@ -1586,6 +1586,7 @@ with module.installation_lock(Path(sys.argv[2])):
             self.assertFalse(result["destructiveChanges"])
             self.assertIn(("/usr/bin/pluginkit", "-r", str(missing_plugin)), calls)
             self.assertIn(("/usr/bin/pluginkit", "-a", str(installed_plugin)), calls)
+            self.assertIn((manage.LSREGISTER, "-f", "-R", "-trusted", str(installed)), calls)
             self.assertIn((manage.LSREGISTER, "-u", str(missing_app)), calls)
             self.assertNotIn(("/usr/bin/pluginkit", "-r", str(live_plugin)), calls)
             self.assertNotIn((manage.LSREGISTER, "-u", str(extra)), calls)
@@ -1751,7 +1752,10 @@ with module.installation_lock(Path(sys.argv[2])):
             extension_path = str(installed / "Contents/PlugIns/OpenInIINA.appex")
             self.assertEqual(calls.count(("/usr/bin/pluginkit", "-a", extension_path)), 2)
             self.assertIn(("/usr/bin/pluginkit", "-r", extension_path), calls)
-            self.assertIn((manage.LSREGISTER, "-f", str(installed)), calls)
+            self.assertEqual(
+                calls.count((manage.LSREGISTER, "-f", "-R", "-trusted", str(installed))),
+                2,
+            )
             self.assertTrue(restored_plugin.is_dir())
 
 

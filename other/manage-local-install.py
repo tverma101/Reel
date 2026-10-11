@@ -2473,7 +2473,7 @@ def _repair_locked(support):
         run("/usr/bin/pluginkit", "-r", str(plugin))
     for app in sorted(stale_apps):
         run(LSREGISTER, "-u", str(app))
-    run(LSREGISTER, "-f", str(INSTALLED))
+    run(LSREGISTER, "-f", "-R", "-trusted", str(INSTALLED))
     register_embedded_open_in_extension(INSTALLED)
     after = audit()
     after["registered"] = [str(p) for p in registrations()]
@@ -2648,7 +2648,7 @@ def _install_locked(source, support):
                     or installed_info.get("CFBundleVersion") != staged_info.get("CFBundleVersion")
                     or installed_info.get("CFBundleShortVersionString") != staged_info.get("CFBundleShortVersionString")):
                 raise RuntimeError("Installed Reel does not match the verified staged build.")
-            run(LSREGISTER, "-f", str(INSTALLED))
+            run(LSREGISTER, "-f", "-R", "-trusted", str(INSTALLED))
             register_embedded_open_in_extension(INSTALLED)
             after = audit()
             after["registered"] = [str(path) for path in registrations()]
@@ -2699,7 +2699,7 @@ def _install_locked(source, support):
                     rollback_errors.append(f"atomically restoring the previous app failed: {rollback_error}")
                 if not swapped:
                     try:
-                        run(LSREGISTER, "-f", str(INSTALLED))
+                        run(LSREGISTER, "-f", "-R", "-trusted", str(INSTALLED))
                     except Exception as rollback_error:
                         rollback_errors.append(f"re-registering the restored app failed: {rollback_error}")
                     try:
