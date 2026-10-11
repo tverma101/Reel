@@ -2661,10 +2661,24 @@ def _install_locked(source, support):
                 and (not expected_open_plugin.exists() or expected_open_plugin in plugin_registrations)
             )
             if not registration_ready:
+                diagnostic = {
+                    "preferred": after.get("preferred"),
+                    "canonicalAppRegistered": any(
+                        Path(path).resolve() == INSTALLED.resolve()
+                        for path in after["registered"]
+                    ),
+                    "running": after.get("running", []),
+                    "openExtensionRegistered": (
+                        not expected_open_plugin.exists()
+                        or expected_open_plugin in plugin_registrations
+                    ),
+                    "registeredExtensionCount": len(plugin_registrations),
+                }
                 raise RuntimeError(
                     "The new Reel bundle was swapped, but Launch Services did not resolve the "
                     "canonical app and embedded extension to /Applications/Reel.app. "
-                    "The installer is restoring the previous bundle."
+                    "The installer is restoring the previous bundle. Registration state: "
+                    f"{json.dumps(diagnostic, sort_keys=True)}"
                 )
             result = {
                 "target": str(INSTALLED),
