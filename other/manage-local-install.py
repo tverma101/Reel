@@ -7,6 +7,7 @@ from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
+import locale
 import os
 from pathlib import Path
 import plistlib
@@ -17,6 +18,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 from datetime import datetime, timezone
 import zipfile
 import uuid
@@ -30,6 +32,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 REEL_LAUNCH_LOCK = Path.home() / "Library/Caches/.reel-install-transition.lock"
 REEL_LAUNCH_HANDOFF = REEL_LAUNCH_LOCK.with_name(".reel-launch-handoff.json")
 MAX_LAUNCH_HANDOFF_BYTES = 1024
+MAX_PROCESS_OUTPUT_BYTES = 8 * 1024 * 1024
 RENAME_SWAP = 0x00000002
 LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 AUDIT_SWIFT = '''import AppKit
@@ -44,10 +47,61 @@ print(String(data: try JSONSerialization.data(withJSONObject: result, options: [
 
 
 def run(*args):
-    result = subprocess.run(args, capture_output=True, text=True, timeout=120)
-    if result.returncode:
-        raise RuntimeError(f"{args[0]} failed ({result.returncode}): {result.stderr.strip() or result.stdout.strip()}")
-    return result.stdout
+    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    captures = {"stdout": bytearray(), "stderr": bytearray()}
+    captured_bytes = 0
+    output_exceeded = threading.Event()
+    capture_lock = threading.Lock()
+
+    def drain(name, stream):
+        nonlocal captured_bytes
+        while True:
+            try:
+                chunk = stream.read(64 * 1024)
+            except (OSError, ValueError):
+                return
+            if not chunk:
+                return
+            with capture_lock:
+                remaining = MAX_PROCESS_OUTPUT_BYTES - captured_bytes
+                if remaining > 0:
+                    accepted = chunk[:remaining]
+                    captures[name].extend(accepted)
+                    captured_bytes += len(accepted)
+                if len(chunk) > max(remaining, 0):
+                    output_exceeded.set()
+
+    readers = [
+        threading.Thread(target=drain, args=(name, stream), daemon=True)
+        for name, stream in (("stdout", process.stdout), ("stderr", process.stderr))
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        returncode = process.wait(timeout=120)
+    except subprocess.TimeoutExpired as error:
+        process.kill()
+        process.wait()
+        for reader in readers:
+            reader.join(timeout=1)
+        process.stdout.close()
+        process.stderr.close()
+        raise RuntimeError(f"{args[0]} timed out after 120 seconds.") from error
+    for reader in readers:
+        reader.join(timeout=5)
+    process.stdout.close()
+    process.stderr.close()
+    if any(reader.is_alive() for reader in readers):
+        raise RuntimeError(f"{args[0]} did not close its output streams after exiting.")
+
+    encoding = locale.getpreferredencoding(False) or "utf-8"
+    stdout = captures["stdout"].decode(encoding, errors="replace")
+    stderr = captures["stderr"].decode(encoding, errors="replace")
+    if output_exceeded.is_set():
+        raise RuntimeError(f"{args[0]} exceeded the {MAX_PROCESS_OUTPUT_BYTES}-byte output limit.")
+    if returncode:
+        raise RuntimeError(f"{args[0]} failed ({returncode}): {stderr.strip() or stdout.strip()}")
+    return stdout
 
 
 @contextmanager

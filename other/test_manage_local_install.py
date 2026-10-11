@@ -1067,6 +1067,12 @@ with module.installation_lock(Path(sys.argv[2])):
         with mock.patch.object(manage, "run", return_value=listing):
             self.assertEqual(manage.registrations(), [Path("/Applications/Reel.app")])
 
+    def test_subprocess_output_is_capped_across_stdout_and_stderr(self):
+        script = "import sys; sys.stdout.write('o' * 50); sys.stderr.write('e' * 50)"
+        with mock.patch.object(manage, "MAX_PROCESS_OUTPUT_BYTES", 64):
+            with self.assertRaisesRegex(RuntimeError, "64-byte output limit"):
+                manage.run(sys.executable, "-c", script)
+
     @unittest.skipUnless(sys.platform == "darwin", "extended-attribute copying is macOS-specific")
     def test_install_rejects_xattr_mutation_before_signing(self):
         with tempfile.TemporaryDirectory(dir=Path.home()) as folder:
