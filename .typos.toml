@@ -17,7 +17,9 @@ extend-ignore-re = [
     "V\\[alue\\]",
     "ba!",
     # Ignore the token declaration in AssrtSubtitle.
-    "5IzWrb.*"
+    "5IzWrb.*",
+    # Preserve this generated Interface Builder localization key.
+    '\bBIz-NQ-0qD\.title\b'
 ]
 
 [default.extend-words]
