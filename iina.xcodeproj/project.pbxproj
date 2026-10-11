@@ -267,7 +267,6 @@
 		9E47DAC01E3CFA6D00457420 /* DurationDisplayTextField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E47DABF1E3CFA6D00457420 /* DurationDisplayTextField.swift */; };
 		B4E446E825CB53920069F06E /* PromiseKit in Frameworks */ = {isa = PBXBuildFile; productRef = B4E446E725CB53920069F06E /* PromiseKit */; };
 		B4E446F725CB54EF0069F06E /* Mustache in Frameworks */ = {isa = PBXBuildFile; productRef = B4E446F625CB54EF0069F06E /* Mustache */; };
-		B4E4470125CE3F930069F06E /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = B4E4470025CE3F930069F06E /* Sparkle */; };
 		C789872F1E34EF170005769F /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = C78987311E34EF170005769F /* InfoPlist.strings */; };
 		D17504A82918F13E005C3DD0 /* OSCToolbarButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17504A72918F13E005C3DD0 /* OSCToolbarButton.swift */; };
 		D17B857B2C94C8B5002A8EDE /* movist-v2-default-input.conf in Copy Configs */ = {isa = PBXBuildFile; fileRef = D1F68E742C6ABC22003D1208 /* movist-v2-default-input.conf */; };
@@ -297,6 +296,7 @@
 		E33BA5C4204315740069A0F6 /* AssrtSubtitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33BA5C3204315740069A0F6 /* AssrtSubtitle.swift */; };
 		E33BA5C7204BD9FE0069A0F6 /* SubChooseViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33BA5C5204BD9FE0069A0F6 /* SubChooseViewController.swift */; };
 		E33FEEB52229A44F00B59711 /* JavascriptAPIUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33FEEB42229A44F00B59711 /* JavascriptAPIUtils.swift */; };
+		F4A1B2C3D4E5F60718293A4B /* BoundedProcessOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A6C7D8E9F0011223344556 /* BoundedProcessOutput.swift */; };
 		E342832F20B7149800139865 /* Logger.swift in Sources */ = {isa = PBXBuildFile; fileRef = E342832E20B7149800139865 /* Logger.swift */; };
 		E34A0E012053F93A00B50097 /* PrefOSCToolbarSettingsSheetController.xib in Resources */ = {isa = PBXBuildFile; fileRef = E34A0E032053F93A00B50097 /* PrefOSCToolbarSettingsSheetController.xib */; };
 		E34BC28D2C27733200A94680 /* SettingsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = E34BC28C2C27733200A94680 /* SettingsPage.swift */; };
@@ -1639,6 +1639,7 @@
 		E33C315D210701A100983986 /* zh-Hant */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hant"; path = "zh-Hant.lproj/PrefUtilsViewController.strings"; sourceTree = "<group>"; };
 		E33C315F210701C200983986 /* zh-Hant */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hant"; path = "zh-Hant.lproj/PreferenceWindowController.strings"; sourceTree = "<group>"; };
 		E33FEEB42229A44F00B59711 /* JavascriptAPIUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JavascriptAPIUtils.swift; sourceTree = "<group>"; };
+		B5A6C7D8E9F0011223344556 /* BoundedProcessOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundedProcessOutput.swift; sourceTree = "<group>"; };
 		E342832E20B7149800139865 /* Logger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logger.swift; sourceTree = "<group>"; };
 		E34A0E022053F93A00B50097 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = Base; path = Base.lproj/PrefOSCToolbarSettingsSheetController.xib; sourceTree = "<group>"; };
 		E34A0E052053F93E00B50097 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/PrefOSCToolbarSettingsSheetController.strings"; sourceTree = "<group>"; };
@@ -1851,7 +1852,6 @@
 			files = (
 				496B19921E2968530035AF10 /* PIP.framework in Frameworks */,
 				8403CEA72007CBD400645516 /* MediaPlayer.framework in Frameworks */,
-				B4E4470125CE3F930069F06E /* Sparkle in Frameworks */,
 				8451E6D92604AEFC009A15D7 /* Just in Frameworks */,
 				5196819A29EC963F00B05D55 /* CoreDisplay.framework in Frameworks */,
 				B4E446E825CB53920069F06E /* PromiseKit in Frameworks */,
@@ -2487,6 +2487,7 @@
 				E3CB258A2222885E00A62C47 /* JavascriptAPIOverlay.swift */,
 				84E5221223FF3D080006FDA1 /* JavascriptAPIPlaylist.swift */,
 				E33FEEB42229A44F00B59711 /* JavascriptAPIUtils.swift */,
+				B5A6C7D8E9F0011223344556 /* BoundedProcessOutput.swift */,
 				E3366AF9224A039500EF3C32 /* JavascriptAPIPreferences.swift */,
 				E337D5E5241EF60400B5729A /* JavascriptAPISubtitle.swift */,
 				E3839C5824FFF817007D0AB4 /* JavascriptAPIStandaloneWindow.swift */,
@@ -2658,7 +2659,6 @@
 				B4E446E725CB53920069F06E /* PromiseKit */,
 				7118E23746884C528117280D /* whisper */,
 				B4E446F625CB54EF0069F06E /* Mustache */,
-				B4E4470025CE3F930069F06E /* Sparkle */,
 				8451E6D82604AEFC009A15D7 /* Just */,
 			);
 			productName = mpvx;
@@ -2779,7 +2779,6 @@
 			packageReferences = (
 				B4E446E625CB53920069F06E /* XCRemoteSwiftPackageReference "PromiseKit" */,
 				B4E446F525CB54EF0069F06E /* XCRemoteSwiftPackageReference "GRMustache" */,
-				B4E446FF25CE3F930069F06E /* XCRemoteSwiftPackageReference "Sparkle" */,
 				8451E6D72604AEFC009A15D7 /* XCRemoteSwiftPackageReference "Just" */,
 				D8BD4AAE52EC448A9D58855A /* XCLocalSwiftPackageReference "IINAWhisper" */,
 			);
@@ -3060,6 +3059,7 @@
 				E39A11FD240F176E00A67F9F /* StringEncodingName.swift in Sources */,
 				5125117D2E89B2ED00CDAE9F /* Display.swift in Sources */,
 				E33FEEB52229A44F00B59711 /* JavascriptAPIUtils.swift in Sources */,
+				F4A1B2C3D4E5F60718293A4B /* BoundedProcessOutput.swift in Sources */,
 				84C6D3671EB2A427009BF721 /* HistoryWindowController.swift in Sources */,
 				9E47DAC01E3CFA6D00457420 /* DurationDisplayTextField.swift in Sources */,
 				E35306F62147F7AF008FE492 /* JavascriptAPIMpv.swift in Sources */,
@@ -4853,14 +4853,6 @@
 				minimumVersion = 4.2.0;
 			};
 		};
-		B4E446FF25CE3F930069F06E /* XCRemoteSwiftPackageReference "Sparkle" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/sparkle-project/Sparkle/";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.7.0;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -4883,11 +4875,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B4E446F525CB54EF0069F06E /* XCRemoteSwiftPackageReference "GRMustache" */;
 			productName = Mustache;
-		};
-		B4E4470025CE3F930069F06E /* Sparkle */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = B4E446FF25CE3F930069F06E /* XCRemoteSwiftPackageReference "Sparkle" */;
-			productName = Sparkle;
 		};
 		E38558902A486E060083772D /* Mustache */ = {
 			isa = XCSwiftPackageProductDependency;

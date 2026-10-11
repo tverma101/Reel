@@ -33,9 +33,27 @@ default because it can use up to three downloads per search; when enabled, it ch
 sample locally. VAD may identify timing alignment but cannot auto-select on timing alone; only a
 same-language dialogue match can permit automatic selection.
 
-Canceling a search closes its progress display and prevents the next provider or verification step
-from starting. A request already in flight may finish; if an OpenSubtitles quota response arrives
-after cancellation, Reel stops before fetching the candidate subtitle file.
+Canceling a search closes its progress display and prevents a later provider, selected-file download,
+or verification step from starting. Built-in HTTP requests are canceled as tasks; installed plugins
+that do not implement cancellation may finish their current request. If an OpenSubtitles quota
+response arrives after cancellation, Reel stops before fetching the candidate subtitle file.
+
+Built-in subtitle downloads use bounded responses and stop when their search is canceled. Failed or
+canceled downloads remove their temporary files; successful files stay available to the player.
+The provider cache has a 200 MiB aggregate limit. To make room, Reel removes only its own unleased
+provider-cache directories after 30 days. Subtitle paths leased to a player are preserved, including
+when a search is canceled after the result has been handed off; those leases last until the app exits
+because mpv can retain a subtitle path after the chooser closes. If active files fill the cache cap,
+new downloads fail rather than unlinking a path in use. Age-based cleanup also runs at application
+startup, so abandoned temporary downloads do not accumulate indefinitely.
+
+The optional dialogue check downloads pinned local speech models with a 2 MiB limit for its VAD model
+and a 100 MiB limit for Whisper. Downloads are streamed to temporary staging files, canceled on
+search cancellation, and checked against their pinned SHA-256 before being kept in Application
+Support. Each model has one private staging file shared under an OS lock, so a force quit can leave
+at most one size-capped partial per model; the next attempt verifies any installed model and safely
+truncates that partial after acquiring the lock. A verified model replaces the prior file atomically.
+The checksum reader also checks cancellation between bounded reads.
 
 Podnapisi and YIFY were suggested as additional sources, but this checkout does not run browser
 scrapers for them. Downloaded files from those sites can be loaded through Subtitles → Load External
@@ -47,7 +65,9 @@ public integration contract was not verified, so they are not part of the automa
 
 When a video has no subtitle track, **Caption video when no subtitles are available** uses
 Apple's Speech framework to transcribe short audio chunks on device and shows the text over the
-video at playback time. macOS 26 and later uses `SpeechTranscriber` without the older Speech
+video at playback time. Pausing cancels the current decode/recognition request and retires its
+generation, so a late result cannot appear; resuming retries the excerpt that covers the current
+playhead. macOS 26 and later uses `SpeechTranscriber` without the older Speech
 Recognition permission prompt; earlier systems use `SFSpeechRecognizer` and ask for that
 permission on first use. The default
 speech language is the Mac's current language; the setting accepts a language tag such as `en-US`.
@@ -88,11 +108,21 @@ Turn captions on or off from **Subtitles → Apple Live Captions** in the menu b
 Captions** switch in the player's Subtitles sidebar, or the Settings checkbox; all three change the
 same setting.
 
-Local files and `http`/`https` streams are both transcribed. For a stream, Reel keeps one network
-connection open, reads only the audio track, and decodes about six seconds ahead of playback. If
-the stream's audio cannot be read three times in a row, captions stop for that item. A playback
-check on an archive.org MP4 playlist showed captions over the stream. Protected media is outside
-this path. Reel does not control the separate macOS system-wide Live Captions window.
+Local files and direct `http`/`https` sources are candidates. Captions follow the selected internal
+audio track; external audio and tracks without a matching FFmpeg stream index are not transcribed.
+A network source must support seeking to each short excerpt; live or nonseekable sources are stopped
+after the first failed seek. Other stream read failures stop captions after three consecutive
+attempts. Reel keeps one FFmpeg reader open per active caption session, reads only the selected audio
+track, and requests the next 10-second excerpt
+four seconds before the current chunk ends for a local file or six seconds ahead for a network source.
+Each decode uses a monotonic 15-second deadline that includes time waiting for the serial decode
+queue and is checked between FFmpeg operations; an individual noninterruptible codec call may finish
+after that deadline before cancellation is observed. Network reconnects are bounded. PCM output is
+capped at 12 seconds (about 750 KiB of mono
+16 kHz float samples). FFmpeg also bounds each decoded frame across all channels, so ordinary
+surround audio remains supported while an unusually large frame is rejected before its decoded
+buffer is allocated. Protected media is outside this path. Reel does not control the separate
+macOS system-wide Live Captions window.
 
 ## Related debugging notes
 

@@ -51,17 +51,97 @@ class JavascriptPlugin: NSObject {
 
   var globalInstance: JavascriptPluginInstance?
 
+  private var storedEnabled = false
+  private var enabledChangeGeneration = 0
+  private var pendingEnabledTarget: Bool?
+  private var pendingEnabledCallbacks: [(Result<Void, Error>) -> Void] = []
+
   @objc var enabled: Bool {
-    didSet {
-      UserDefaults.standard.set(enabled, forKey: "PluginEnabled." + identifier)
-      if enabled {
-        registerSubProviders()
-      } else {
-        removeSubProviders()
+    get { storedEnabled }
+    set {
+      requestEnabledChange(newValue) { result in
+        if case .failure(let error) = result {
+          Logger.log("Unable to change plugin \(self.identifier) enabled state: \(error.localizedDescription)",
+                     level: .error)
+          NotificationCenter.default.post(Notification(name: .iinaPluginChanged))
+        }
       }
-      reloadGlobalInstance()
-      PlayerCore.reloadPluginForAll(self)
-      NotificationCenter.default.post(Notification(name: .iinaPluginChanged))
+    }
+  }
+
+  /// Commits a state change after any required unload barrier has succeeded. Callers performing a
+  /// remove/replace transaction may supply their existing permit instead of requesting a second
+  /// unload.
+  func commitEnabledState(_ enabled: Bool, forceReload: Bool = false) {
+    let didChange = storedEnabled != enabled
+    storedEnabled = enabled
+    UserDefaults.standard.set(enabled, forKey: "PluginEnabled." + identifier)
+    guard didChange || forceReload else { return }
+    if enabled {
+      registerSubProviders()
+    } else {
+      removeSubProviders()
+    }
+    reloadGlobalInstance()
+    PlayerCore.reloadPluginForAll(self)
+    NotificationCenter.default.post(Notification(name: .iinaPluginChanged))
+  }
+
+  func requestEnabledChange(_ enabled: Bool,
+                            completion: @escaping (Result<Void, Error>) -> Void) {
+    let request = {
+      if self.pendingEnabledTarget == enabled {
+        self.pendingEnabledCallbacks.append(completion)
+        return
+      }
+      if self.pendingEnabledTarget != nil {
+        let superseded = self.pendingEnabledCallbacks
+        self.pendingEnabledCallbacks.removeAll()
+        self.pendingEnabledTarget = nil
+        self.enabledChangeGeneration += 1
+        superseded.forEach {
+          $0(.failure(NSError(domain: "PluginEnabledState", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Plugin state change was superseded"])))
+        }
+      }
+      guard self.storedEnabled != enabled else {
+        completion(.success(()))
+        return
+      }
+      guard self.identifier == "dev.faruk.iina-airplay", !enabled else {
+        self.commitEnabledState(enabled)
+        completion(.success(()))
+        return
+      }
+
+      self.enabledChangeGeneration += 1
+      let generation = self.enabledChangeGeneration
+      self.pendingEnabledTarget = enabled
+      self.pendingEnabledCallbacks = [completion]
+      PlayerCore.acquirePluginUnloadPermit(identifier: self.identifier) { result in
+        guard self.enabledChangeGeneration == generation,
+              self.pendingEnabledTarget == enabled else {
+          if case .success(let permit) = result { permit.release() }
+          return
+        }
+        let callbacks = self.pendingEnabledCallbacks
+        self.pendingEnabledCallbacks.removeAll()
+        self.pendingEnabledTarget = nil
+        switch result {
+        case .success(let permit):
+          self.commitEnabledState(enabled)
+          permit.release()
+          callbacks.forEach { $0(.success(())) }
+        case .failure(let error):
+          callbacks.forEach { $0(.failure(error)) }
+        }
+      }
+    }
+
+    if Thread.isMainThread {
+      request()
+    } else {
+      DispatchQueue.main.async(execute: request)
     }
   }
 
@@ -411,7 +491,7 @@ class JavascriptPlugin: NSObject {
       self.sidebarTabName = nil
     }
 
-    self.enabled = UserDefaults.standard.bool(forKey: "PluginEnabled." + identifier)
+    self.storedEnabled = UserDefaults.standard.bool(forKey: "PluginEnabled." + identifier)
 
     if let ghRepo = jsonDict["ghRepo"] as? String {
       if githubRepoRegex.matches(ghRepo) {

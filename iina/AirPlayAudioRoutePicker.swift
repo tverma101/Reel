@@ -23,8 +23,8 @@ final class AirPlayAudioRoutePicker: NSObject {
     button.isBordered = false
     button.target = self
     button.action = #selector(presentAudioOutputs(_:))
-    button.toolTip = NSLocalizedString("osc_toolbar.airplay", comment: "AirPlay")
-    button.setAccessibilityLabel(button.toolTip ?? "AirPlay")
+    button.toolTip = NSLocalizedString("osc_toolbar.airplay", comment: "Reel audio output")
+    button.setAccessibilityLabel(button.toolTip ?? "Audio Output")
     return button
   }
 
@@ -71,6 +71,14 @@ final class AirPlayAudioRoutePicker: NSObject {
 
   @objc private func selectAudioOutput(_ sender: NSMenuItem) {
     guard let player, let name = sender.representedObject as? String else { return }
-    player.setAudioDevice(name)
+    let message: String
+    if player.setAudioDevice(name) {
+      message = String(format: NSLocalizedString("osc_toolbar.airplay_output.requested",
+                                                 comment: "Reel's requested audio output"), sender.title)
+    } else {
+      message = NSLocalizedString("osc_toolbar.airplay_output.failed",
+                                  comment: "Reel could not request the selected audio output")
+    }
+    player.sendOSD(.custom(message))
   }
 }

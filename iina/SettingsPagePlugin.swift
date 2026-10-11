@@ -419,7 +419,14 @@ extension PluginListView: NSTableViewDelegate, NSTableViewDataSource {
     @objc func enabledSwitchAction(_ sender: NSSwitch) {
       let shouldEnable = sender.state == .on
       guard shouldEnable else {
-        plugin.enabled = false
+        sender.isEnabled = false
+        plugin.requestEnabledChange(false) { result in
+          sender.isEnabled = true
+          sender.state = self.plugin.enabled ? .on : .off
+          if case .failure(let error) = result {
+            self.pluginManager.handleInstallationError(error)
+          }
+        }
         return
       }
       guard plugin.identifier == "dev.faruk.iina-airplay", !plugin.permissions.isEmpty else {
@@ -539,12 +546,9 @@ extension PluginListView: NSTableViewDelegate, NSTableViewDataSource {
 extension PluginListView {
   @objc func uninstallAction() {
     guard let currentPlugin = PluginListView.currentPlugin else { return }
-    Utility.quickAskPanel("plugin_uninstall", titleArgs: [currentPlugin.name], sheetWindow: view.window!) { response in
-      if response == .alertFirstButtonReturn {
-        currentPlugin.enabled = false
-        currentPlugin.remove()
-        self.tableView.reloadData()
-      }
+    Task { @MainActor in
+      _ = await page.pluginManager.uninstall(currentPlugin)
+      tableView.reloadData()
     }
   }
 

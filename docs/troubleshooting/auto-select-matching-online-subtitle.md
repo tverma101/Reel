@@ -35,6 +35,10 @@ matches the whole film.
 If the search is canceled or the current media changes, Reel dismisses the progress display and
 does not start another provider request or candidate download. A request already in flight may
 finish; after a canceled OpenSubtitles quota response, Reel does not fetch the subtitle file.
+OpenSubtitles response bodies are capped at 10 MiB as bytes arrive, including responses without a
+declared size. Candidate files above 10 MiB are not parsed; cue parsing also caps line, block, and
+cue counts so newline-dense or unusually long WebVTT/ASS input cannot create an unbounded list of
+temporary strings.
 
 Reel runs a small Silero voice-activity model against every parseable candidate, whether or not
 OpenSubtitles reports a movie-hash match. A timing label requires at least two speech segments to
@@ -62,7 +66,8 @@ WebVTT, and ASS; unsupported, oversized, or malformed files remain unverified.
 
 ## Developer checks
 
-Run `bash other/check_subtitle_matcher.sh` for the 66 exact-title, anchor, tie, adversarial-name, and
-pathological-input checks. Run `bash other/check_subtitle_audio_parser.sh` for WebVTT cue metadata
-and SRT parsing checks, and `bash other/check_subdl_search_parser.sh` for SubDL response-schema,
+Run `bash other/check_subtitle_matcher.sh` for the exact-title, anchor, tie, adversarial-name, and
+pathological-input checks. Run `bash other/check_subtitle_audio_parser.sh` for bounded WebVTT/ASS
+and SRT parsing checks, `bash other/check_opensub_bounded_download.sh` for streamed response caps
+and cancellation, and `bash other/check_subdl_search_parser.sh` for SubDL response-schema,
 URL-origin, filename, and provider-score checks. The app target has no unit-test target.

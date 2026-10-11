@@ -7,7 +7,6 @@
 //
 
 import Foundation
-import Just
 import PromiseKit
 
 class Shooter {
@@ -15,6 +14,7 @@ class Shooter {
     var desc: String
     var delay: Int
     var files: [SubFile]
+    private let downloadCache = BuiltinSubtitleCache(provider: "shooter")
 
     struct SubFile {
       var ext: String
@@ -29,20 +29,54 @@ class Shooter {
     }
 
     override func download() -> Promise<[URL]> {
-      return Promise { resolver in
-        Just.get(files[0].path, asyncCompletionHandler: { response in
-          guard response.ok, let data = response.content else {
-            resolver.reject(OnlineSubtitle.CommonError.networkError(response.error))
-            return
-          }
-          let fileName = "[\(self.index)]\(response.fileName ?? "")"
-          guard let url = data.saveToFolder(Utility.tempDirURL, filename: fileName) else {
-            resolver.reject(OnlineSubtitle.CommonError.fsError)
-            return
-          }
-          resolver.fulfill([url])
-        })
+      download(cancellation: SubtitleAudioMatcher.Cancellation())
+    }
+
+    override func download(cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<[URL]> {
+      cancellation.onCancel { [weak self] in self?.discardCachedDownload() }
+      guard !cancellation.isCancelled, let file = files.first else {
+        return Promise(error: cancellation.isCancelled ? OnlineSubtitle.CommonError.dismissed :
+                         OnlineSubtitle.CommonError.networkError(nil))
       }
+      guard let remoteURL = URL(string: file.path) else {
+        return Promise(error: OnlineSubtitle.CommonError.networkError(nil))
+      }
+      var request = URLRequest(url: remoteURL)
+      request.timeoutInterval = 30
+      return Promise { resolver in
+        let transfer = BuiltinSubtitleHTTPTransfer(request: request,
+                                                  maximumBytes: BuiltinSubtitleResponseLimit.subtitleBytes,
+                                                  cancellation: cancellation) { result in
+          guard !cancellation.isCancelled else {
+            self.discardCachedDownload()
+            resolver.reject(OnlineSubtitle.CommonError.dismissed)
+            return
+          }
+          switch result {
+          case .success(let (data, response)) where (200..<300).contains(response.statusCode):
+            do {
+              let url = try self.downloadCache.store(data,
+                                                     suggestedFileName: "[\(self.index)]\(response.suggestedFilename ?? "subtitle")",
+                                                     cancellation: cancellation)
+              resolver.fulfill([url])
+            } catch {
+              self.discardCachedDownload()
+              resolver.reject(cancellation.isCancelled ? OnlineSubtitle.CommonError.dismissed :
+                                OnlineSubtitle.CommonError.fsError)
+            }
+          case .success(let (_, response)):
+            resolver.reject(OnlineSubtitle.CommonError.networkError(
+              NSError(domain: NSURLErrorDomain, code: response.statusCode)))
+          case .failure(let error):
+            resolver.reject(OnlineSubtitle.CommonError.networkError(error))
+          }
+        }
+        transfer.start()
+      }
+    }
+
+    override func discardCachedDownload() {
+      downloadCache.discard()
     }
   }
 
@@ -78,11 +112,23 @@ class Shooter {
     private var language: String?
 
     func fetch(from url: URL, withProviderID id: String, playerCore player: PlayerCore) -> Promise<[Subtitle]> {
-      return hash(url).then { self.request($0) }
+      fetch(from: url, withProviderID: id, playerCore: player,
+            cancellation: SubtitleAudioMatcher.Cancellation())
     }
 
-    private func hash(_ url: URL) -> Promise<FileInfo> {
+    func fetch(from url: URL, withProviderID id: String, playerCore player: PlayerCore,
+               cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<[Subtitle]> {
+      guard !cancellation.isCancelled else { return Promise(error: OnlineSubtitle.CommonError.dismissed) }
+      return hash(url, cancellation: cancellation).then { self.request($0, cancellation: cancellation) }
+    }
+
+    private func hash(_ url: URL,
+                      cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<FileInfo> {
       return Promise { resolver in
+        guard !cancellation.isCancelled else {
+          resolver.reject(OnlineSubtitle.CommonError.dismissed)
+          return
+        }
         let file: FileHandle
         do {
           file = try FileHandle(forReadingFrom: url)
@@ -112,18 +158,37 @@ class Shooter {
           return file.readData(ofLength: chunkSize).md5
           }.joined(separator: ";")
 
+        guard !cancellation.isCancelled else {
+          resolver.reject(OnlineSubtitle.CommonError.dismissed)
+          return
+        }
         resolver.fulfill(FileInfo(hashValue: hash, path: url.path))
       }
     }
 
-    private func request(_ info: FileInfo) -> Promise<[Subtitle]> {
+    private func request(_ info: FileInfo,
+                         cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<[Subtitle]> {
+      guard !cancellation.isCancelled else { return Promise(error: OnlineSubtitle.CommonError.dismissed) }
+      let parameters = info.dictionary
+      var components = URLComponents(string: apiPath)!
+      components.queryItems = parameters.keys.sorted().compactMap { key in
+        guard let value = parameters[key] as? String else { return nil }
+        return URLQueryItem(name: key, value: value)
+      }
+      var request = URLRequest(url: components.url!)
+      request.httpMethod = "POST"
+      request.timeoutInterval = 10
       return Promise { resolver in
-        Just.post(apiPath, params: info.dictionary, timeout: 10, asyncCompletionHandler: { response in
-          guard response.ok else {
-            resolver.reject(OnlineSubtitle.CommonError.networkError(response.error))
+        let transfer = BuiltinSubtitleHTTPTransfer(request: request,
+                                                  maximumBytes: BuiltinSubtitleResponseLimit.searchBytes,
+                                                  cancellation: cancellation) { result in
+          guard !cancellation.isCancelled else {
+            resolver.reject(OnlineSubtitle.CommonError.dismissed)
             return
           }
-          guard let json = response.json as? ResponseData else {
+          guard case .success(let (data, response)) = result,
+                (200..<300).contains(response.statusCode),
+                let json = try? JSONSerialization.jsonObject(with: data) as? ResponseData else {
             resolver.reject(OnlineSubtitle.CommonError.noResult)
             return
           }
@@ -131,7 +196,7 @@ class Shooter {
           var subtitles: [Subtitle] = []
           var index = 1
 
-          json.forEach { sub in
+          json.prefix(30).forEach { sub in
             guard let filesDic = sub["Files"] as? ResponseFilesData else { return }
             let files = filesDic.compactMap { file -> Subtitle.SubFile? in
               guard let ext = file["Ext"], let path = file["Link"], !path.isEmpty else { return nil }
@@ -145,7 +210,8 @@ class Shooter {
             index += 1
           }
           resolver.fulfill(subtitles)
-        })
+        }
+        transfer.start()
       }
     }
   }

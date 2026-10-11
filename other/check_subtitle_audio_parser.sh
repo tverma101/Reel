@@ -15,7 +15,7 @@ trap 'rm -rf "$WORK"' EXIT
 import Foundation
 
 enum SubtitleAudioMatcher {
-  static let maxSubtitleBytes = 32 * 1024 * 1024
+  static let maxSubtitleBytes = 10 * 1024 * 1024
 
   struct Cue {
     let start: Double

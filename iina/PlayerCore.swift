@@ -8,7 +8,32 @@
 
 import Cocoa
 
+final class PluginUnloadPermit {
+  private let lock = NSLock()
+  private var releaseHandler: ((Bool) -> Void)?
+
+  init(releaseHandler: @escaping (Bool) -> Void) {
+    self.releaseHandler = releaseHandler
+  }
+
+  func release(reloadDeferredContexts: Bool = true) {
+    lock.lock()
+    let handler = releaseHandler
+    releaseHandler = nil
+    lock.unlock()
+    handler?(reloadDeferredContexts)
+  }
+
+  deinit {
+    release()
+  }
+}
+
 class PlayerCore: NSObject {
+
+  /// A queued AirPlay serve can remain cancellable for 20 seconds. Keep its JS context alive
+  /// asynchronously long enough for that finite helper stop window plus process teardown.
+  private static let unexpectedMPVAirPlayStopTimeout: TimeInterval = 40
 
   /// Minimum value to set a mpv loop point to.
   ///
@@ -66,6 +91,167 @@ class PlayerCore: NSObject {
 
   static var playerCores: [PlayerCore] = []
   static private var playerCoreCounter = 0
+  private static let pluginLifecycleCores = NSHashTable<PlayerCore>.weakObjects()
+  private static let pluginLifecycleCoresLock = NSLock()
+  private static var pluginUnloadOperations = Set<String>()
+  private static var deferredPluginLoads: [String: Set<ObjectIdentifier>] = [:]
+
+  private var isPluginRuntimeUnavailable: Bool {
+    info.state == .shuttingDown || info.state == .shutDown
+  }
+
+  private static var pluginLifecycleCoresSnapshot: [PlayerCore] {
+    pluginLifecycleCoresLock.lock()
+    defer { pluginLifecycleCoresLock.unlock() }
+    return pluginLifecycleCores.allObjects
+  }
+
+  private static func finishPluginUnloadOperation(_ identifier: String,
+                                                  reloadDeferredContexts: Bool = true) {
+    _ = pluginUnloadOperations.remove(identifier)
+    let deferred = deferredPluginLoads.removeValue(forKey: identifier) ?? []
+    guard reloadDeferredContexts else { return }
+    guard let plugin = JavascriptPlugin.plugins.first(where: { $0.identifier == identifier }),
+          plugin.enabled else { return }
+    for player in pluginLifecycleCoresSnapshot where deferred.contains(ObjectIdentifier(player)) &&
+        player.info.state != .shuttingDown && player.info.state != .shutDown &&
+        player.pluginMap[identifier] == nil {
+      player.reloadPlugin(plugin)
+    }
+  }
+
+  static func hasLivePluginContext(identifier: String) -> Bool {
+    retireShutDownPluginContexts(identifier: identifier)
+    return pluginLifecycleCoresSnapshot.contains {
+      $0.info.state != .shutDown && $0.pluginMap[identifier] != nil
+    }
+  }
+
+  private static func retireShutDownPluginContexts(identifier: String) {
+    for player in pluginLifecycleCoresSnapshot
+    where player.info.state == .shutDown && player.pluginMap[identifier] != nil {
+      player.retirePluginInstancesAfterMPVShutdown()
+    }
+  }
+
+  static func hasAnyPluginContext(identifier: String) -> Bool {
+    pluginLifecycleCoresSnapshot.contains { $0.pluginMap[identifier] != nil }
+  }
+
+  private enum PluginUnloadError: LocalizedError {
+    case operationInProgress
+    case timedOut
+
+    var errorDescription: String? {
+      switch self {
+      case .operationInProgress:
+        return "Another AirPlay plugin change is already in progress"
+      case .timedOut:
+        return "Timed out waiting for AirPlay to stop. The plugin remains loaded so you can retry."
+      }
+    }
+  }
+
+  /// Reserves the target plugin for an unload-sensitive mutation, then waits for every loaded
+  /// PlayerCore JavaScript context to confirm its asynchronous unload listeners. The returned
+  /// permit must be released after the caller commits or abandons its mutation.
+  static func acquirePluginUnloadPermit(identifier: String,
+                                        timeout: TimeInterval = 45,
+                                        completion: @escaping (Result<PluginUnloadPermit, Error>) -> Void) {
+    let begin = {
+      guard !pluginUnloadOperations.contains(identifier) else {
+        completion(.failure(PluginUnloadError.operationInProgress))
+        return
+      }
+      pluginUnloadOperations.insert(identifier)
+
+      let finishOnce = EventPromiseCompletionOnce { result in
+        switch result {
+        case .success:
+          let permit = PluginUnloadPermit { reloadDeferredContexts in
+            let release: (Bool) -> Void = { reloadDeferredContexts in
+              finishPluginUnloadOperation(identifier,
+                                          reloadDeferredContexts: reloadDeferredContexts)
+            }
+            if Thread.isMainThread {
+              release(reloadDeferredContexts)
+            } else {
+              DispatchQueue.main.async { release(reloadDeferredContexts) }
+            }
+          }
+          completion(.success(permit))
+        case .failure(let error):
+          finishPluginUnloadOperation(identifier)
+          completion(.failure(error))
+        }
+      }
+
+      var didFinish = false
+      var timeoutWork: DispatchWorkItem!
+      var runNextBatch: (() -> Void)?
+      let finishOperation: (Result<Void, Error>) -> Void = { result in
+        guard !didFinish else { return }
+        didFinish = true
+        timeoutWork.cancel()
+        runNextBatch = nil
+        finishOnce.finish(result)
+      }
+      timeoutWork = DispatchWorkItem {
+        finishOperation(.failure(PluginUnloadError.timedOut))
+      }
+      DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: timeoutWork)
+
+      var coveredContexts = Set<ObjectIdentifier>()
+      runNextBatch = {
+        guard !didFinish else { return }
+        // mpv-initiated shutdown can leave a PluginInstance retained in pluginMap. Retire it
+        // without JS or mpv calls. A shutting-down core cannot acknowledge a stop safely, so do
+        // not wait for it to become unreachable and accidentally treat that as proof.
+        retireShutDownPluginContexts(identifier: identifier)
+        let loadedCores = pluginLifecycleCoresSnapshot.filter {
+          $0.pluginMap[identifier] != nil
+        }
+        if loadedCores.contains(where: { $0.info.state == .shuttingDown }) {
+          finishOperation(.failure(EventController.AsyncEventError.playerUnavailable(identifier)))
+          return
+        }
+        let loadedContexts = loadedCores.filter { $0.info.state != .shutDown }
+        let contexts = loadedContexts.filter { !coveredContexts.contains(ObjectIdentifier($0)) }
+        guard !contexts.isEmpty else {
+          finishOperation(.success(()))
+          runNextBatch = nil
+          return
+        }
+        coveredContexts.formUnion(contexts.map(ObjectIdentifier.init))
+
+        let barrier = EventPromiseBarrier(count: contexts.count) { result in
+          DispatchQueue.main.async {
+            guard !didFinish else { return }
+            if case .failure = result {
+              finishOperation(result)
+              runNextBatch = nil
+            } else {
+              runNextBatch?()
+            }
+          }
+        }
+        for player in contexts {
+          player.events.emitAndWaitForPluginPromises(.pluginWillUnload,
+                                                     pluginIdentifier: identifier,
+                                                     data: [identifier]) { result in
+            barrier.receive(result)
+          }
+        }
+      }
+      runNextBatch?()
+    }
+
+    if Thread.isMainThread {
+      begin()
+    } else {
+      DispatchQueue.main.async(execute: begin)
+    }
+  }
 
   static private func findIdlePlayerCore() -> PlayerCore? {
     playerCores.first { $0.info.state == .idle && !$0.backgroundTaskInUse }
@@ -366,6 +552,9 @@ class PlayerCore: NSObject {
     TouchBarSettings.shared.addObserver(self, forKey: .PresentationModeFnModes)
     TouchBarSettings.shared.addObserver(self, forKey: .PresentationModeGlobal)
     TouchBarSettings.shared.addObserver(self, forKey: .PresentationModePerApp)
+    Self.pluginLifecycleCoresLock.lock()
+    Self.pluginLifecycleCores.add(self)
+    Self.pluginLifecycleCoresLock.unlock()
   }
 
   func observe(_ name: Notification.Name, block: @escaping (Notification) -> Void) {
@@ -382,19 +571,46 @@ class PlayerCore: NSObject {
   // MARK: - Plugins
 
   static func reloadPluginForAll(_ plugin: JavascriptPlugin, forced: Bool = false) {
-    playerCores.forEach { $0.reloadPlugin(plugin, forced: forced) }
+    let targets = plugin.identifier == BundledAirPlayPluginManager.identifier ? pluginLifecycleCoresSnapshot : playerCores
+    let liveTargets = targets.filter { $0.info.state != .shuttingDown && $0.info.state != .shutDown }
+    liveTargets.forEach { $0.reloadPlugin(plugin, forced: forced) }
     AppDelegate.shared.menuController?.updatePluginMenu()
   }
 
+  private func notifyLoadedPluginsWillUnload() {
+    guard !isPluginRuntimeUnavailable else { return }
+    // Emit while each JavaScript context and its registered event listeners are still alive.
+    // Plugins can use this synchronous notification to restore player state and start bounded
+    // cleanup for helpers they own before their context is released.
+    for identifier in pluginMap.keys.sorted() {
+      emitPluginWillUnload(identifier)
+    }
+  }
+
+  private func emitPluginWillUnload(_ identifier: String) {
+    // An unload permit already awaited this plugin's Promise listeners. Do not dispatch the same
+    // stop callback again while the caller commits its disable, reload, replacement, or removal.
+    guard !Self.pluginUnloadOperations.contains(identifier) else { return }
+    events.emit(.pluginWillUnload, data: identifier)
+  }
+
   func clearPlugins() {
+    guard !isPluginRuntimeUnavailable else { return }
+    notifyLoadedPluginsWillUnload()
     pluginMap.removeAll()
     plugins.removeAll()
   }
 
   func loadPlugins() {
+    guard !isPluginRuntimeUnavailable else { return }
+    notifyLoadedPluginsWillUnload()
     pluginMap.removeAll()
     plugins = JavascriptPlugin.plugins.compactMap { plugin in
       guard plugin.enabled else { return nil }
+      guard !Self.pluginUnloadOperations.contains(plugin.identifier) else {
+        Self.deferredPluginLoads[plugin.identifier, default: []].insert(ObjectIdentifier(self))
+        return nil
+      }
       let instance = JavascriptPluginInstance(player: self, plugin: plugin)
       pluginMap[plugin.identifier] = instance
       return instance
@@ -402,13 +618,20 @@ class PlayerCore: NSObject {
   }
 
   func reloadPlugin(_ plugin: JavascriptPlugin, forced: Bool = false) {
+    guard !isPluginRuntimeUnavailable else { return }
     let id = plugin.identifier
+    if pluginMap[id] == nil, Self.pluginUnloadOperations.contains(id) {
+      Self.deferredPluginLoads[id, default: []].insert(ObjectIdentifier(self))
+      return
+    }
     if let _ = pluginMap[id] {
       if plugin.enabled {
         // no need to reload, unless forced
         guard forced else { return }
+        emitPluginWillUnload(id)
         pluginMap[id] = JavascriptPluginInstance(player: self, plugin: plugin)
       } else {
+        emitPluginWillUnload(id)
         pluginMap.removeValue(forKey: id)
       }
     } else {
@@ -738,6 +961,11 @@ class PlayerCore: NSObject {
   ///     task is still running this method only changes the player state. When the background task ends it will notice that shutting
   ///     down was in progress and will call this method again to continue the process of shutting down..
   func shutdown() {
+    if !isPluginRuntimeUnavailable {
+      // Quiesce plugin timers, event listeners, and hooks while the mpv APIs are still valid.
+      // In particular, do not wait until the SHUTDOWN event to call JavascriptAPIMpv cleanup.
+      pluginMap.values.forEach { $0.prepareForPlayerShutdown() }
+    }
     info.state = .shuttingDown
     guard !backgroundTaskInUse else { return }
     log("Shutting down")
@@ -764,6 +992,7 @@ class PlayerCore: NSObject {
   ///     windows of vulnerability that can not be fully closed. IINA has no choice but to support a mpv initiated shutdown as best it
   ///     can.
   func mpvHasShutdown() {
+    guard info.state != .shutDown else { return }
     let isMPVInitiated = info.state != .shuttingDown
     let suffix = isMPVInitiated ? " (initiated by mpv)" : ""
     log("Player has shutdown\(suffix)")
@@ -774,19 +1003,68 @@ class PlayerCore: NSObject {
       if backgroundTaskInUse {
         stopBackgroundTask()
       }
-      mpv.removeObservers()
-      savePlayerState()
+      // MPV_SHUTDOWN arrives after mpv has destroyed its core. Observer removal and watch-later
+      // queries use that core, so they cannot be performed safely on this path.
     }
+    if isMPVInitiated {
+      // Stop only Reel's managed bundled AirPlay helper. The mpv core is already gone, so generic
+      // plugin listeners and mpv APIs are unsafe here. Keep the matching JS context alive for its
+      // helper-only Promise, but never block this main-thread shutdown callback.
+      pluginMap.values.forEach { $0.quiesceAfterUnexpectedPlayerShutdown() }
+      uninitVideo()
+      postNotification(.iinaPlayerShutdown)
+      stopBundledAirPlayAfterUnexpectedMPVShutdown { [self] result in
+        if case .failure(let error) = result {
+          Logger.log("Unable to confirm bundled AirPlay helper shutdown after mpv quit: \(error.localizedDescription)",
+                     level: .error)
+        }
+        retirePluginInstancesAfterMPVShutdown()
+        // AppKit requires termination from the main thread. Keep it in the run loop rather than
+        // synchronously waiting for helper work while mpvHasShutdown is on the main thread.
+        RunLoop.main.perform(inModes: [.common]) {
+          NSApp.terminate(nil)
+        }
+      }
+      return
+    }
+
+    retirePluginInstancesAfterMPVShutdown()
     uninitVideo()
     postNotification(.iinaPlayerShutdown)
-    if isMPVInitiated {
-      // Initiate application termination. AppKit requires this be done from the main thread,
-      // however the main dispatch queue must not be used to avoid blocking the queue as per
-      // instructions from Apple.
-      RunLoop.main.perform(inModes: [.common]) {
-        NSApp.terminate(nil)
+  }
+
+  private func stopBundledAirPlayAfterUnexpectedMPVShutdown(
+    completion: @escaping (Result<Void, Error>) -> Void
+  ) {
+    let identifier = "dev.faruk.iina-airplay"
+    guard let instance = pluginMap[identifier] else {
+      completion(.success(()))
+      return
+    }
+    guard instance.isManagedBundledAirPlayPlugin else {
+      completion(.failure(EventController.AsyncEventError.listenerRejected(
+        "A non-managed AirPlay plugin context was not called after mpv shutdown")))
+      return
+    }
+
+    _ = events.emitAndWaitForBundledAirPlayShutdown(
+      timeout: Self.unexpectedMPVAirPlayStopTimeout
+    ) { result in
+      if Thread.isMainThread {
+        completion(result)
+      } else {
+        DispatchQueue.main.async { completion(result) }
       }
     }
+  }
+
+  /// Releases plugin state after mpv is gone without invoking JavaScript or the mpv API.
+  private func retirePluginInstancesAfterMPVShutdown() {
+    guard info.state == .shutDown else { return }
+    pluginMap.values.forEach { $0.retireAfterPlayerShutdown() }
+    pluginMap.removeAll()
+    plugins.removeAll()
+    events.removeAllListeners()
   }
 
   /// Switch the current player to mini player from the main window.
@@ -1985,8 +2263,9 @@ class PlayerCore: NSObject {
     return result
   }
 
-  func setAudioDevice(_ name: String) {
-    mpv.setString(MPVProperty.audioDevice, name)
+  @discardableResult
+  func setAudioDevice(_ name: String) -> Bool {
+    mpv.setString(MPVProperty.audioDevice, name) >= 0
   }
 
   /** Scale is a double value in [-100, -1] + [1, 100] */
@@ -2688,6 +2967,7 @@ class PlayerCore: NSObject {
     info.vid = id
     postNotification(.iinaVIDChanged)
     sendOSD(.track(info.currentTrack(.video) ?? .noneVideoTrack))
+    if mainWindow.loaded { mainWindow.liveCaptions.updateEligibility() }
     if isInMiniPlayer {
       miniPlayer.refreshArtworkVisibility()
       miniPlayer.handleVideoSizeChange()

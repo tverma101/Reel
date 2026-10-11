@@ -59,13 +59,43 @@ struct SubtitleAudioParserChecks {
     WEBVTT
 
     00:00:01.000 --> 00:00:02.000
-    \(String(repeating: "A", count: 5_000))
+    \(String(repeating: "A", count: 3_000))
+    \(String(repeating: "B", count: 3_000))
     """
     let oversizedURL = root.appendingPathComponent("oversized-cue.vtt")
     try Data(oversizedVTT.utf8).write(to: oversizedURL)
     let oversizedCues = SubtitleAudioMatcher.parseForCheck(fileURL: oversizedURL) ?? []
     check(oversizedCues.count == 1 && oversizedCues[0].text.utf16.count <= 4_096,
           "WebVTT cue text retains the parser's per-cue size bound")
+
+    let oversizedLineVTT = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n" +
+      String(repeating: "A", count: 4_097) + "\n\n" +
+      "00:00:03.000 --> 00:00:04.000\nBounded line survives.\n"
+    let oversizedLineURL = root.appendingPathComponent("oversized-line.vtt")
+    try Data(oversizedLineVTT.utf8).write(to: oversizedLineURL)
+    let oversizedLineCues = SubtitleAudioMatcher.parseForCheck(fileURL: oversizedLineURL) ?? []
+    check(oversizedLineCues.map(\.text) == ["Bounded line survives."],
+          "An overlong WebVTT line drops only its block without copying or accepting that line")
+
+    let oversizedBlockVTT = "WEBVTT\n\nidentifier\n00:00:01.000 --> 00:00:02.000\n" +
+      String(repeating: "filler\n", count: 31) + "\n" +
+      "00:00:03.000 --> 00:00:04.000\nBounded block survives.\n"
+    let oversizedBlockURL = root.appendingPathComponent("oversized-block.vtt")
+    try Data(oversizedBlockVTT.utf8).write(to: oversizedBlockURL)
+    let oversizedBlockCues = SubtitleAudioMatcher.parseForCheck(fileURL: oversizedBlockURL) ?? []
+    check(oversizedBlockCues.map(\.text) == ["Bounded block survives."],
+          "An overlong WebVTT block is discarded at the configured line-count bound")
+
+    let newlineDenseVTT = "WEBVTT\n" + String(repeating: "\n", count: 200_001) +
+      "00:00:01.000 --> 00:00:02.000\nThis cue is beyond the line limit.\n"
+    let newlineDenseURL = root.appendingPathComponent("newline-dense-under-byte-cap.vtt")
+    let newlineDenseData = Data(newlineDenseVTT.utf8)
+    check(newlineDenseData.count < 10 * 1024 * 1024,
+          "newline-dense fixture exercises the line bound below production's 10 MiB byte cap")
+    try newlineDenseData.write(to: newlineDenseURL)
+    let newlineDenseCues = SubtitleAudioMatcher.parseForCheck(fileURL: newlineDenseURL) ?? []
+    check(newlineDenseCues.isEmpty,
+          "A newline-dense WebVTT stops at the line bound before reaching trailing cue data")
 
     print("\(checks) subtitle audio parser checks passed")
   }

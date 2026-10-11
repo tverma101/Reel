@@ -73,7 +73,7 @@ project; Reel ships under its own name, bundle identifier, and icon.
 
 ### AirPlay video casting
 
-- Reel bundles the pinned `ozykhan/iina-airplay` v0.3.2 plugin with a small
+- Reel bundles the pinned `ozykhan/iina-airplay` v0.4.0 plugin with a small
   hardening patch. It installs disabled, and enabling it requires the plugin's
   filesystem-permission approval. Video is remuxed or transcoded to HLS by the
   bundled helper and streamed to the selected TV over the local network; the
@@ -114,8 +114,8 @@ project; Reel ships under its own name, bundle identifier, and icon.
 - App identity: name `Reel`, bundle identifier `io.github.tverma101.reel`
   (the Safari extension becomes `io.github.tverma101.reel.OpenInIINA`). The
   upstream `iina-cli` and plugin-development targets keep their upstream names.
-- Sparkle's update feed is disabled in code: a fork must never download and
-  replace itself with upstream IINA builds.
+- The Sparkle app-updater dependency is removed. Reel does not auto-update or
+  fetch upstream IINA builds; app updates are installed from Reel builds or releases.
 - New icon built as an Icon Composer bundle with the same glass structure as
   upstream's, with a distinct reel-and-play mark and palette.
 - `Packages/IINAWhisper`: a local Swift package wrapping a statically built

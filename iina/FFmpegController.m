@@ -9,6 +9,9 @@
 #import "FFmpegController.h"
 #import <Accelerate/Accelerate.h>
 #import <Cocoa/Cocoa.h>
+#include <errno.h>
+#include <limits.h>
+#import "FFmpegAudioLimits.h"
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdocumentation"
@@ -813,6 +816,7 @@ return -1;\
 // MARK: - FFmpegAudioChunkReader
 
 static int FFmpegAudioChunkReaderInterrupt(void *opaque);
+static const double FFmpegAudioChunkMaximumDuration = 12.0;
 
 @interface FFmpegAudioChunkReader () {
   AVFormatContext *formatContext;
@@ -823,6 +827,10 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque);
 }
 @property (nonatomic, copy, nullable) BOOL (^cancellationCheck)(void);
 @property (nonatomic, readwrite) BOOL failed;
+@property (nonatomic, readwrite) BOOL seekUnsupported;
+- (nullable instancetype)initWithSource:(nonnull NSString *)source
+              requestedAudioStreamIndex:(NSInteger)requestedAudioStreamIndex
+                     cancellationCheck:(nullable BOOL (^)(void))cancellationCheck;
 @end
 
 static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
@@ -836,11 +844,32 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
 - (nullable instancetype)initWithSource:(nonnull NSString *)source
                       cancellationCheck:(nullable BOOL (^)(void))cancellationCheck
 {
-  self = [super init];
-  if (self == nil || source.length == 0) {
+  return [self initWithSource:source requestedAudioStreamIndex:-1 cancellationCheck:cancellationCheck];
+}
+
+- (nullable instancetype)initWithSource:(nonnull NSString *)source
+                       audioStreamIndex:(NSInteger)selectedAudioStreamIndex
+                      cancellationCheck:(nullable BOOL (^)(void))cancellationCheck
+{
+  if (selectedAudioStreamIndex < 0) {
     return nil;
   }
-  audioStreamIndex = -1;
+  return [self initWithSource:source
+     requestedAudioStreamIndex:selectedAudioStreamIndex
+            cancellationCheck:cancellationCheck];
+}
+
+- (nullable instancetype)initWithSource:(nonnull NSString *)source
+              requestedAudioStreamIndex:(NSInteger)requestedAudioStreamIndex
+                     cancellationCheck:(nullable BOOL (^)(void))cancellationCheck
+{
+  self = [super init];
+  if (self == nil || source.length == 0 || requestedAudioStreamIndex < -1 ||
+      requestedAudioStreamIndex > INT_MAX) {
+    return nil;
+  }
+  const BOOL useBestAudioStream = requestedAudioStreamIndex == -1;
+  audioStreamIndex = useBestAudioStream ? -1 : (int)requestedAudioStreamIndex;
   _cancellationCheck = [cancellationCheck copy];
 
   // Network streams are opened by URL with bounded I/O timeouts; anything else is a local path.
@@ -850,9 +879,16 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
   if (isNetworkStream) {
     av_dict_set(&openOptions, "rw_timeout", "10000000", 0);
     av_dict_set(&openOptions, "reconnect", "1", 0);
+    av_dict_set(&openOptions, "reconnect_max_retries", "2", 0);
+    av_dict_set(&openOptions, "reconnect_delay_max", "1", 0);
+    av_dict_set(&openOptions, "reconnect_delay_total_max", "3", 0);
     av_dict_set(&openOptions, "protocol_whitelist", "http,https,tcp,tls", 0);
   }
 
+  if (_cancellationCheck != nil && _cancellationCheck()) {
+    av_dict_free(&openOptions);
+    return nil;
+  }
   formatContext = avformat_alloc_context();
   if (formatContext == NULL) {
     av_dict_free(&openOptions);
@@ -867,9 +903,19 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
   if (ret < 0) {
     return nil;  // avformat_open_input frees the context on failure.
   }
+  if (_cancellationCheck != nil && _cancellationCheck()) {
+    return nil;
+  }
 
-  audioStreamIndex = av_find_best_stream(formatContext, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
-  AVCodecParameters *params = audioStreamIndex >= 0 ? formatContext->streams[audioStreamIndex]->codecpar : NULL;
+  if (useBestAudioStream) {
+    audioStreamIndex = av_find_best_stream(formatContext, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
+  }
+  AVCodecParameters *params = audioStreamIndex >= 0 &&
+    (unsigned int)audioStreamIndex < formatContext->nb_streams
+    ? formatContext->streams[audioStreamIndex]->codecpar : NULL;
+  if (!useBestAudioStream && (params == NULL || params->codec_type != AVMEDIA_TYPE_AUDIO)) {
+    return nil;
+  }
   // Containers such as MP4 describe the audio fully in their header. Probing packets would also
   // download video data, which for a network stream costs seconds, so only probe when needed.
   BOOL needsProbe = params == NULL || params->sample_rate <= 0 || params->ch_layout.nb_channels <= 0;
@@ -877,10 +923,19 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
     if (avformat_find_stream_info(formatContext, NULL) < 0) {
       return nil;
     }
-    audioStreamIndex = av_find_best_stream(formatContext, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
-    if (audioStreamIndex < 0) {
+    if (_cancellationCheck != nil && _cancellationCheck()) {
       return nil;
     }
+    if (useBestAudioStream) {
+      audioStreamIndex = av_find_best_stream(formatContext, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
+    } else if ((unsigned int)audioStreamIndex >= formatContext->nb_streams ||
+               formatContext->streams[audioStreamIndex]->codecpar == NULL ||
+               formatContext->streams[audioStreamIndex]->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) {
+      return nil;
+    }
+  }
+  if (audioStreamIndex < 0 || (unsigned int)audioStreamIndex >= formatContext->nb_streams) {
+    return nil;
   }
   for (unsigned int index = 0; index < formatContext->nb_streams; index++) {
     if ((int)index != audioStreamIndex) {
@@ -895,7 +950,22 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
   }
   decoder = avcodec_alloc_context3(codec);
   if (decoder == NULL || avcodec_parameters_to_context(decoder, audioStream->codecpar) < 0 ||
-      avcodec_open2(decoder, codec, NULL) < 0 || decoder->sample_rate <= 0 || decoder->ch_layout.nb_channels <= 0) {
+      decoder->sample_rate <= 0 || decoder->ch_layout.nb_channels <= 0 ||
+      decoder->ch_layout.nb_channels > 32) {
+    return nil;
+  }
+  // Captions decode excerpts on a single serial queue; parallel decoder workers increase peak
+  // memory without helping the one-at-a-time 12-second workload. Reject pathological decoded
+  // frames before libavcodec allocates them so the later PCM cap is not the only memory guard.
+  decoder->thread_count = 1;
+  decoder->thread_type = 0;
+  // The bundled FFmpeg allocation guard compares aggregate channel-samples against max_samples
+  // and rejects only larger frames, so the exact aggregate budget is safe to accept.
+  decoder->max_samples = REEL_AUDIO_MAX_DECODED_CHANNEL_SAMPLES;
+  if (decoder->max_samples <= 0 || avcodec_open2(decoder, codec, NULL) < 0) {
+    return nil;
+  }
+  if (_cancellationCheck != nil && _cancellationCheck()) {
     return nil;
   }
 
@@ -927,31 +997,66 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
                               duration:(double)duration
                      cancellationCheck:(nullable BOOL (^)(void))cancellationCheck
 {
-  if (_failed || !isfinite(startTime) || !isfinite(duration) || startTime < 0 || duration <= 0) {
+  if (_failed || !isfinite(startTime) || !isfinite(duration) || startTime < 0 || duration <= 0 ||
+      duration > FFmpegAudioChunkMaximumDuration) {
     return nil;
   }
+  double sampleEnd = startTime + duration;
+  double seekTime = mediaOrigin + MAX(0, startTime - 0.5);
+  long double seekUnits = (long double)seekTime * AV_TIME_BASE;
+  if (!isfinite(sampleEnd) || sampleEnd <= startTime || !isfinite(seekTime) ||
+      !isfinite(seekUnits) || seekUnits > INT64_MAX || seekUnits < INT64_MIN) {
+    return nil;
+  }
+  NSUInteger maximumOutputSamples = (NSUInteger)ceil(duration * 16000.0);
+  if (maximumOutputSamples > NSUIntegerMax / sizeof(float)) {
+    return nil;
+  }
+  NSUInteger maximumOutputBytes = maximumOutputSamples * sizeof(float);
+
   self.cancellationCheck = cancellationCheck;
+  if (cancellationCheck != nil && cancellationCheck()) {
+    _failed = YES;
+    self.cancellationCheck = nil;
+    return nil;
+  }
   NSMutableData *output = [NSMutableData data];
   AVPacket *packet = av_packet_alloc();
   AVFrame *frame = av_frame_alloc();
   BOOL reachedEnd = NO;
   int readResult = 0;
-  double sampleEnd = startTime + duration;
   AVStream *audioStream = formatContext->streams[audioStreamIndex];
 
-  double seekTime = mediaOrigin + MAX(0, startTime - 0.5);
-  int64_t seekTimestamp = av_rescale_q((int64_t)llround(seekTime * AV_TIME_BASE),
-                                       AV_TIME_BASE_Q, audioStream->time_base);
-  if (packet == NULL || frame == NULL ||
-      avformat_seek_file(formatContext, audioStreamIndex, INT64_MIN, seekTimestamp,
-                         seekTimestamp, AVSEEK_FLAG_BACKWARD) < 0) {
+  if (audioStream->time_base.num <= 0 || audioStream->time_base.den <= 0) {
     _failed = YES;
+    goto cleanup;
+  }
+  int64_t seekTimestamp = av_rescale_q((int64_t)llroundl(seekUnits),
+                                       AV_TIME_BASE_Q, audioStream->time_base);
+  if (seekTimestamp == INT64_MIN || seekTimestamp == INT64_MAX) {
+    _failed = YES;
+    goto cleanup;
+  }
+  BOOL attemptedSeek = packet != NULL && frame != NULL;
+  int seekResult = attemptedSeek
+    ? avformat_seek_file(formatContext, audioStreamIndex, INT64_MIN, seekTimestamp,
+                         seekTimestamp, AVSEEK_FLAG_BACKWARD)
+    : AVERROR(ENOMEM);
+  if (seekResult < 0) {
+    _failed = YES;
+    BOOL interrupted = cancellationCheck != nil && cancellationCheck();
+    BOOL nonseekableIO = formatContext->pb != NULL &&
+      (formatContext->pb->seekable & AVIO_SEEKABLE_NORMAL) == 0;
+    if (attemptedSeek && !interrupted &&
+        (seekResult == AVERROR(ENOSYS) || seekResult == AVERROR(ESPIPE) || nonseekableIO)) {
+      self.seekUnsupported = YES;
+    }
     goto cleanup;
   }
   avcodec_flush_buffers(decoder);
   // Drop samples buffered from the previous chunk; this chunk starts at a new position.
   swr_close(resampler);
-  if (swr_init(resampler) < 0) {
+  if (swr_init(resampler) < 0 || (cancellationCheck != nil && cancellationCheck())) {
     _failed = YES;
     goto cleanup;
   }
@@ -959,36 +1064,69 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
   while (!reachedEnd && !(cancellationCheck && cancellationCheck()) &&
          (readResult = av_read_frame(formatContext, packet)) >= 0) {
     if (packet->stream_index == audioStreamIndex && avcodec_send_packet(decoder, packet) >= 0) {
-      while (!(cancellationCheck && cancellationCheck()) && avcodec_receive_frame(decoder, frame) >= 0) {
+      while (!reachedEnd && !(cancellationCheck && cancellationCheck()) &&
+             avcodec_receive_frame(decoder, frame) >= 0) {
         if (frame->best_effort_timestamp == AV_NOPTS_VALUE) {
           av_frame_unref(frame);
           continue;
         }
         double frameStart = frame->best_effort_timestamp * av_q2d(audioStream->time_base) - mediaOrigin;
         double frameEnd = frameStart + (double)frame->nb_samples / decoder->sample_rate;
+        if (!isfinite(frameStart) || !isfinite(frameEnd) || frame->nb_samples < 0) {
+          _failed = YES;
+          goto cleanup;
+        }
         if (frameStart > sampleEnd + 1.0) {
           reachedEnd = YES;
           av_frame_unref(frame);
           break;
         }
         if (frameEnd >= startTime - 0.1 && frameStart <= sampleEnd + 0.1) {
-          int outputCapacity = (int)av_rescale_rnd(swr_get_delay(resampler, decoder->sample_rate) + frame->nb_samples,
-                                                   16000, decoder->sample_rate, AV_ROUND_UP);
+          int64_t outputCapacityValue = av_rescale_rnd(swr_get_delay(resampler, decoder->sample_rate) + frame->nb_samples,
+                                                       16000, decoder->sample_rate, AV_ROUND_UP);
+          // Keep a single decoded frame's temporary float buffer bounded too. Normal audio frames
+          // are far below this; an absurd frame is safer to reject than to allocate from its size.
+          int64_t maximumFrameSamples = (int64_t)maximumOutputSamples + 16000;
+          if (outputCapacityValue < 0 || outputCapacityValue > maximumFrameSamples) {
+            _failed = YES;
+            goto cleanup;
+          }
+          int outputCapacity = (int)outputCapacityValue;
           if (outputCapacity > 0) {
             float *samples = av_malloc_array(outputCapacity, sizeof(float));
             if (samples == NULL) {
-              av_frame_unref(frame);
+              _failed = YES;
               goto cleanup;
             }
             uint8_t *outputPlanes[] = {(uint8_t *)samples};
             int outputSamples = swr_convert(resampler, outputPlanes, outputCapacity,
                                             (const uint8_t **)frame->extended_data, frame->nb_samples);
             if (outputSamples > 0) {
-              int first = MAX(0, (int)floor((startTime - frameStart) * 16000));
-              int last = MIN(outputSamples, (int)ceil((sampleEnd - frameStart) * 16000));
-              if (last > first) {
-                [output appendBytes:samples + first length:(NSUInteger)(last - first) * sizeof(float)];
+              double firstSample = floor((startTime - frameStart) * 16000.0);
+              double lastSample = ceil((sampleEnd - frameStart) * 16000.0);
+              if (!isfinite(firstSample) || !isfinite(lastSample)) {
+                av_free(samples);
+                _failed = YES;
+                goto cleanup;
               }
+              int first = (int)fmin(outputSamples, fmax(0.0, firstSample));
+              int last = (int)fmin(outputSamples, fmax(0.0, lastSample));
+              if (last > first) {
+                NSUInteger requestedBytes = (NSUInteger)(last - first) * sizeof(float);
+                NSUInteger remainingBytes = maximumOutputBytes - output.length;
+                NSUInteger appendBytes = MIN(requestedBytes, remainingBytes);
+                appendBytes -= appendBytes % sizeof(float);
+                if (appendBytes > 0) {
+                  [output appendBytes:samples + first length:appendBytes];
+                }
+                if (output.length >= maximumOutputBytes) {
+                  reachedEnd = YES;
+                }
+              }
+            } else if (outputSamples < 0) {
+              av_free(samples);
+              _failed = YES;
+              goto cleanup;
             }
             av_free(samples);
           }
@@ -1005,10 +1143,15 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
   }
 
 cleanup:
+  if (cancellationCheck != nil && cancellationCheck()) {
+    // A timed out or cancelled read must never pass partial speech to the recognizer.
+    _failed = YES;
+    [output setLength:0];
+  }
   if (frame != NULL) av_frame_free(&frame);
   if (packet != NULL) av_packet_free(&packet);
   self.cancellationCheck = nil;
-  return output.length >= sizeof(float) * 16000 ? [output copy] : nil;
+  return !_failed && output.length >= sizeof(float) * 16000 ? [output copy] : nil;
 }
 
 @end

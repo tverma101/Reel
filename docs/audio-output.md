@@ -54,6 +54,11 @@ and the matching `audio-device` property. Reel applies the selected output to it
 not change the system-wide output. Device discovery can vary with the macOS version, network, and
 active mpv output driver.
 
+The menu checkmark reflects the device Reel requested from mpv. mpv can fall back if that output
+cannot be opened, and its `audio-device` property does not confirm which physical endpoint is
+actually playing. A successful menu action means the request was accepted; listen for the result
+and switch back to **System Default** if the selected device stays silent.
+
 Reel also chooses the mpv audio output driver, and mpv ties each listed device
 to one driver. The list is filtered to the active driver so that selecting a
 device cannot silently fail by pairing a device with the wrong driver. If the

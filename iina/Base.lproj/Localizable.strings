@@ -599,6 +599,14 @@
 "sidebar.add_url" = "Add URL…";
 
 "sidebar.plugins_placeholder" = "Plugins can display custom sidebar contents. Select a plugin to view its sidebar or install a new plugin in Settings.";
+"sidebar.plugins_airplay_video_title" = "AirPlay Video";
+"sidebar.plugins_airplay_video_description" = "Cast a local video file to an AirPlay receiver. Network streams aren't supported. Enabling AirPlay asks for permission to access your files.";
+"sidebar.plugins_airplay_video_setup" = "Set Up AirPlay…";
+"sidebar.plugins_airplay_video_open" = "Open AirPlay";
+"sidebar.plugins_airplay_video_setup_help" = "Opens Plugins settings. AirPlay stays off until you approve its file access.";
+"sidebar.plugins_airplay_video_open_help" = "Opens the AirPlay video controls in this sidebar.";
+"sidebar.plugins_airplay_video_legacy_helper_running" = "Reel could not confirm that the older AirPlay helper has stopped, so its package was kept. Stop the cast in its AirPlay tab, then quit and reopen Reel to retry. If Quit is blocked, force quit only after the cast is idle; Reel will keep the package if a helper is still running.";
+"sidebar.plugins_airplay_video_legacy_update_unavailable" = "Reel kept the older AirPlay package because the bundled update could not be verified. Try Update again from this card. The plugin's settings and data were left in place.";
 
 // Settings
 
@@ -1068,9 +1076,11 @@
 "sidebar.apple_live_captions_hint" = "Transcribes speech on-device for local files and http(s) streams that have no subtitle track.";
 "osd.apple_live_captions_on" = "Apple Live Captions: On";
 "osd.apple_live_captions_off" = "Apple Live Captions: Off";
-"osc_toolbar.airplay" = "AirPlay";
+"osc_toolbar.airplay" = "Audio Output";
 "osc_toolbar.airplay_output.heading" = "Reel Audio Output";
 "osc_toolbar.airplay_output.default" = "System Default";
 "osc_toolbar.airplay_output.empty" = "No audio outputs available";
+"osc_toolbar.airplay_output.requested" = "Reel audio output requested: %@";
+"osc_toolbar.airplay_output.failed" = "Could not request this audio output";
 "osd.airplay_pinned_device" = "AirPlay speakers need Audio Device set to Auto";
 "osd.airplay_pinned_device_detail" = "Choose Audio > Audio Device > Auto, then pick speakers.";

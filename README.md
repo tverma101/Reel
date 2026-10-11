@@ -33,7 +33,7 @@
 Reel does not ship signed releases yet; build it from source (see *Building* below) or check this repository's releases. For the original IINA application, visit the [upstream IINA release page](https://github.com/iina/iina/releases) or the [IINA official website](https://iina.io/) — that project deserves your downloads and stars, not this fork.
 
 > [!IMPORTANT]
-> Reel does not configure an application update appcast, so Sparkle automatic checks and its first-launch permission prompt are disabled. Community plugin updates remain available in Settings → Plugins.
+> Reel does not include an application updater, so it will not show update-check prompts. Install app updates from a Reel build or release; community plugin updates remain available in Settings → Plugins.
 
 ## Building
 
@@ -126,7 +126,7 @@ Reel.
 
 ### Bundled with Reel
 
-- **AirPlay video casting** (`ozykhan/iina-airplay` v0.3.2) ships installed but disabled. Enable
+- **AirPlay video casting** (`ozykhan/iina-airplay` v0.4.0) ships installed but disabled. Enable
   it under Settings → Plugins; Reel asks you to approve its filesystem permission before enabling
   it. The first cast may also trigger macOS's Local Network permission prompt. Setup, limitations,
   and privacy details are in [AirPlay video casting](docs/airplay-casting.md).
