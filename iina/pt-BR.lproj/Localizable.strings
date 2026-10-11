@@ -30,11 +30,11 @@
 "guide.faq" = "Dúvidas frequentes";
 
 // Initial Window
-"initial.announcement" = "Você está usando uma versão %@ do IINA";
-"initial.beta.desc" = "Se quiser reverter para uma versão oficial, desmarque a opção \"receber atualizações beta\" em Configurações > Geral e instale uma versão estável do nosso <a href=\"https://iina.io\">site oficial</a>.";
-"initial.nightly.desc" = "Compilações Nightly não são recomendadas para uso diário. Atualmente as compilações Nightly não suportam a atualização automática. Por favor, baixe manualmente versões mais recentes do nosso <a href=\"https://nightly.iina.io\">site Nightly</a>.";
+"initial.announcement" = "Você está usando uma versão %@ do Reel";
+"initial.beta.desc" = "Se quiser reverter para uma versão oficial, desmarque a opção \"receber atualizações beta\" em Configurações > Geral e instale uma versão estável do nosso <a href=\"https://github.com/tverma101/Reel\">site oficial</a>.";
+"initial.nightly.desc" = "Compilações Nightly não são recomendadas para uso diário. Atualmente as compilações Nightly não suportam a atualização automática. Por favor, baixe manualmente versões mais recentes do nosso <a href=\"https://github.com/tverma101/Reel/actions\">site Nightly</a>.";
 "initial.debug.desc" = "Compilações de depuração geralmente não são otimizadas para desempenho, então não são recomendadas para uso diário. Compilações de depuração não suportam atualização automática.";
-"initial.bug_report" = "Denuncie via <a href=\"https://github.com/iina/iina/issues\">GitHub issues</a>.";
+"initial.bug_report" = "Denuncie via <a href=\"https://github.com/tverma101/Reel/issues\">GitHub issues</a>.";
 
 // Inspector Window
 "inspector.error" = "Erro";
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "Impossível logar. Verifique usuário, senha ou estado da rede.\n\n%@";
 "alert.sub.save_downloaded.title" = "Salvar Legenda Baixada";
 
-"alert.set_default.title" = "Definindo IINA como App padrão";
-"alert.set_default.message" = "IINA será usado como player padrão para todos os tipos de arquivos que suporta.";
+"alert.set_default.title" = "Definindo Reel como App padrão";
+"alert.set_default.message" = "Reel será usado como player padrão para todos os tipos de arquivos que suporta.";
 "alert.set_default.success" = "Realizado com %d sucessos e %d falhas.";
 
 "alert.add_watch.title" = "Adicionar propriedade de exibição";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "Não foi possível encontrar o arquivo do pacote.";
 "plugin.install_error.cannot_download" = "Falha ao baixar o plugin.\n\nSaída:%@\n";
 "plugin.install_error.cannot_unpackage" = "Falha ao desempacotar o plugin.\n\nSaída:%@\n";
-"plugin.install_error.cannot_load" = "IINA não pode carregar este plugin. Ele pode estar no formato errado.";
+"plugin.install_error.cannot_load" = "Reel não pode carregar este plugin. Ele pode estar no formato errado.";
 "plugin.check_for_updates" = "Buscar por atualizações";
 "plugin.updating" = "Baixando a atualização…";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "Pausa";
 "settings.pauseresumeWhen" = "Pausar/Reproduzir quando";
 "settings.playWhenEnteringFullScreen.label" = "Tocar ao entrar em tela-cheia";
-"settings.playlistAutoAdd.desc" = "Necessita reiniciar IINA pra fazer efeito.";
+"settings.playlistAutoAdd.desc" = "Necessita reiniciar Reel pra fazer efeito.";
 "settings.playlistAutoAdd.label" = "Adicionar arquivos que estiverem na mesma pasta automaticamente";
 "settings.playlistAutoPlayNext.label" = "Tocar proximo item automaticamente";
 "settings.playlistShowMetadata.label" = "Mostrar o nome do artista e da faixa de arquivos de áudio quando disponível";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "Pico alvo";
 "settings.videoThreads.desc" = "Padrão: 0 (Auto)";
 "settings.videoThreads.label" = "Número de threads";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "Necessita reiniciar IINA pra funcionar.";
+"settings.httpProxy.desc" = "Necessita reiniciar Reel pra funcionar.";
 "settings.httpProxy.label" = "Proxy HTTP";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "Segundos a pré-carregar";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Enable mpv's youtube-dl script";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "Opções raw";
-"settings.ytdlSearchPath.desc" = "IINA vai procurar youtube-dl nesta pasta. Reinício necessário.";
+"settings.ytdlSearchPath.desc" = "Reel vai procurar youtube-dl nesta pasta. Reinício necessário.";
 "settings.ytdlSearchPath.label" = "Caminho customizado para youtube-dl";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "If enabled, IINA will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
+"settings.autoSearchOnlineSub.desc" = "If enabled, Reel will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
 "settings.autoSearchOnlineSub.label" = "Pesquisar legendas on-line automaticamente";
 "settings.displayInLetterBox.label" = "Mostrar legendas em caixa quando em tela cheia";
 "settings.subAlignX.items.0" = "Esquerda";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "Embaixo";
 "settings.subAutoLoadIINA.items.0" = "Desabilitado";
 "settings.subAutoLoadIINA.items.1" = "Legendas contendo nome do arquivo de mídia";
-"settings.subAutoLoadIINA.items.2" = "Detecção inteligente do IINA";
+"settings.subAutoLoadIINA.items.2" = "Detecção inteligente do Reel";
 "settings.subAutoLoadIINA.label" = "Auto carregar";
 "settings.subAutoLoadPriorityString.desc" = "Digite uma lista separadas por virgulas.";
 "settings.subAutoLoadPriorityString.label" = "Legendas possuem prioridade quando nome do arquivo contem";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "Usar o botão esquerda/direita para";
 "settings.controlBarAutoHideTimeout.label" = "Auto hide after";
 "settings.controlBarStickToCenter.label" = "Grudar ao centro quando arrastar";
-"settings.disableAnimations.desc" = "Quando a configuração de acessibilidade \"Reduzir Movimento\" do macOS está ativada, o IINA reduz as animações da interface do usuário que sabidamente causam problemas para pessoas com distúrbios vestibulares. Caso isso não seja suficiente, essa configuração pode ser usada para reduzir ainda mais o movimento, eliminando as animações da interface do usuário.";
+"settings.disableAnimations.desc" = "Quando a configuração de acessibilidade \"Reduzir Movimento\" do macOS está ativada, o Reel reduz as animações da interface do usuário que sabidamente causam problemas para pessoas com distúrbios vestibulares. Caso isso não seja suficiente, essa configuração pode ser usada para reduzir ainda mais o movimento, eliminando as animações da interface do usuário.";
 "settings.disableAnimations.label" = "Desativar animações";
 "settings.disableOSDFileStartMsg.label" = "Início do arquivo";
 "settings.disableOSDPauseResumeMsgs.label" = "Pausar / Reproduzir";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "Janela";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "Os ajustes seguintes necessitam reiniciar o IINA para funcionarem.";
+"settings.enableAdvancedSettings.desc" = "Os ajustes seguintes necessitam reiniciar o Reel para funcionarem.";
 "settings.enableAdvancedSettings.label" = "Habilitar ajustes avançados";
 "settings.enableLogging.label" = "Habilitar Log";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "Falha ao carregar a página.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "Fonte";
-"settings.$GetBrowserExtensionsForIINA" = "Obter extensões de navegador para IINA";
+"settings.$GetBrowserExtensionsForIINA" = "Obter extensões de navegador para Reel";
 "settings.$GetPlugins" = "Get Plugins…";
 "settings.$Hardware" = "Hardware";
 "settings.$Height" = "Altura";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "Controles OSD";
 "settings.$OnScreenDisplay" = "On Screen Display";
 "settings.$OnlineSubtitles" = "Legendas Online";
-"settings.$OpenLinksOrCurrentWebpage" = "Abrir links ou página da Web no IINA com um clique. O site deve ser suportado pelo youtube-dl.";
+"settings.$OpenLinksOrCurrentWebpage" = "Abrir links ou página da Web no Reel com um clique. O site deve ser suportado pelo youtube-dl.";
 "settings.$OpenLogDirectory" = "Abrir Diretório de Registros";
 "settings.$OpenLogWindow" = "Open the log viewer";
 "settings.$OrSelectFrom" = "Or select from available plugins";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "Modo picture-in-picture";
 "settings.$Playlist" = "Lista de Reprodução";
-"settings.$PleaseSelectTheMediaTypes" = "Por favor, selecione os tipos de mídia que você deseja fazer IINA como o aplicativo padrão.";
+"settings.$PleaseSelectTheMediaTypes" = "Por favor, selecione os tipos de mídia que você deseja fazer Reel como o aplicativo padrão.";
 "settings.$Position" = "Posição";
 "settings.$PreferredLanguage" = "Idioma preferido";
 "settings.$RestoreAlerts" = "Restaurar Alertas";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "Capturas";
-"settings.$SetIINAAsTheDefault" = "Set IINA as the Default Application";
+"settings.$SetIINAAsTheDefault" = "Set Reel as the Default Application";
 "settings.$Settings" = "Configurações";
 "settings.$Shadow" = "Sombra";
 "settings.$ShowInFinder" = "Mostrar no Finder";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "lado da janela";
 "settings.$toThe" = "para";
 "settings.$top" = "topo";
-"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";

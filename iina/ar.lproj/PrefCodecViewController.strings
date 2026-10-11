@@ -86,7 +86,7 @@
 "baO-xy-7hD.title" = "nits";
 
 /* Class = "NSTextFieldCell"; title = "Measured peak brightness of the display. If set to 0, IINA detects this value. If detection fails, IINA sets the target peak to 400."; ObjectID = "aTt-aZ-rjK"; */
-"aTt-aZ-rjK.title" = "قياس ذروة سطوع العرض. إذا تم تعيينها إلى 0، فإن IINA  يكشف هذه القيمة. إذا فشل الكشف ، فإن IINA يحدد الذروة المستهدفة إلى 400.";
+"aTt-aZ-rjK.title" = "قياس ذروة سطوع العرض. إذا تم تعيينها إلى 0، فإن Reel  يكشف هذه القيمة. إذا فشل الكشف ، فإن Reel يحدد الذروة المستهدفة إلى 400.";
 
 /* Class = "NSTextFieldCell"; title = "Algorithm:"; ObjectID = "qzI-rq-PqO"; */
 "qzI-rq-PqO.title" = "الخوارزمية:";

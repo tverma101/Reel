@@ -66,9 +66,39 @@
 
 + (nullable NSDictionary *)probeVideoInfoForFile:(nonnull NSString *)file;
 
-/// Decode a short local audio excerpt as 16 kHz mono float PCM for on-device matching.
+/// Decode an excerpt of at most 12 seconds as 16 kHz mono float PCM for on-device matching.
+/// `file` is a local path or an http(s) URL string. Excerpt reads require a seekable source.
 + (nullable NSData *)readMonoAudioFromFile:(nonnull NSString *)file
                                  startTime:(double)startTime
-                                  duration:(double)duration;
+                                  duration:(double)duration
+                        cancellationCheck:(nullable BOOL (^)(void))cancellationCheck;
+
+@end
+
+/// Decodes 16 kHz mono float PCM excerpts from one media source, keeping it open between reads.
+/// Reusing a reader avoids reconnecting and re-reading the container header for every excerpt,
+/// which matters for network streams. Not thread-safe: use one reader from one queue at a time.
+@interface FFmpegAudioChunkReader: NSObject
+
+/// `source` is a local path or an http(s) URL string. Uses FFmpeg's preferred audio stream.
+- (nullable instancetype)initWithSource:(nonnull NSString *)source
+                      cancellationCheck:(nullable BOOL (^)(void))cancellationCheck;
+
+/// `audioStreamIndex` must identify the selected audio stream in `source`. Returns nil if that
+/// stream is absent or not decodable.
+- (nullable instancetype)initWithSource:(nonnull NSString *)source
+                       audioStreamIndex:(NSInteger)audioStreamIndex
+                      cancellationCheck:(nullable BOOL (^)(void))cancellationCheck;
+
+/// Returns nil for invalid windows, durations over 12 seconds, or fewer than one second of audio.
+- (nullable NSData *)readMonoAudioFrom:(double)startTime
+                              duration:(double)duration
+                     cancellationCheck:(nullable BOOL (^)(void))cancellationCheck;
+
+/// Set after a seek or read error; the reader should be replaced.
+@property (nonatomic, readonly) BOOL failed;
+
+/// Set when a read's seek fails and the source does not support seeking to excerpts.
+@property (nonatomic, readonly) BOOL seekUnsupported;
 
 @end

@@ -30,11 +30,11 @@
 "guide.faq" = "Gyakran Ismételt Kérdések";
 
 // Initial Window
-"initial.announcement" = "Ön Az IINA %@ verzióját használja";
-"initial.beta.desc" = "Amennyiben végleges verzióra váltana, szüntesse meg a kijelölést a \"béta frissítések\" opciónál a Beállítások > Általános almenüben, és telepítsen stabil verziót a <a href=\"https://iina.io\">hivatalos weboldalunkról</a>.";
-"initial.nightly.desc" = "A Nightly verzió nem ajánlott mindennapi használatra. Jelenleg a nightly verzió nem támogatja az automatikus frissítést.. Töltsd le a friss verziót a <a href=\"https://nightly.iina.io\">nightly oldalunkról</a>.";
+"initial.announcement" = "Ön Az Reel %@ verzióját használja";
+"initial.beta.desc" = "Amennyiben végleges verzióra váltana, szüntesse meg a kijelölést a \"béta frissítések\" opciónál a Beállítások > Általános almenüben, és telepítsen stabil verziót a <a href=\"https://github.com/tverma101/Reel\">hivatalos weboldalunkról</a>.";
+"initial.nightly.desc" = "A Nightly verzió nem ajánlott mindennapi használatra. Jelenleg a nightly verzió nem támogatja az automatikus frissítést.. Töltsd le a friss verziót a <a href=\"https://github.com/tverma101/Reel/actions\">nightly oldalunkról</a>.";
 "initial.debug.desc" = "A hibakeresési verzió általában nincs teljesítményre optimalizálva, ezért nem ajánlott napi használatra. A hibakeresési verziók nem támogatják az automatikus frissítést.";
-"initial.bug_report" = "Jelentés a <a href=\"https://github.com/iina/iina/issues\">GitHub-bugok</a> felületen.";
+"initial.bug_report" = "Jelentés a <a href=\"https://github.com/tverma101/Reel/issues\">GitHub-bugok</a> felületen.";
 
 // Inspector Window
 "inspector.error" = "Hiba";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "Új filter";
 "alert.add_filter.message" = "Adjon meg egy szűrő karakterláncot az mpv vf vagy af parancsának formátumában.";
 
-"alert.keybinding_config.error" = "Hiba a \"%@\" billentyűkombinációs konfigurációs fájl elemzésekor! Visszatérés az IINA alapértelmezett billentyűkombinációjához. Kérjük, ellenőrizze a konfigurációt.";
+"alert.keybinding_config.error" = "Hiba a \"%@\" billentyűkombinációs konfigurációs fájl elemzésekor! Visszatérés az Reel alapértelmezett billentyűkombinációjához. Kérjük, ellenőrizze a konfigurációt.";
 "alert.delete_keybindingset.title" = "Delete Key Binding Set";
 "alert.delete_keybindingset.message" = "Are you sure to delete this key binding set?";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "Nem tudsz bejelentkezni. Kérjük, ellenőrizd a felhasználónevedet, jelszavadat és a hálózat állapotát.\n\n%@";
 "alert.sub.save_downloaded.title" = "Letöltött felirat mentése";
 
-"alert.set_default.title" = "IINA beállítása alapértelmezettként";
-"alert.set_default.message" = "Az IINA be lesz állítva mint alapértelmezett lejátszó az összes támogatott fájltípushoz.";
+"alert.set_default.title" = "Reel beállítása alapértelmezettként";
+"alert.set_default.message" = "Az Reel be lesz állítva mint alapértelmezett lejátszó az összes támogatott fájltípushoz.";
 "alert.set_default.success" = "Befejezve %d sikeres és %d sikertelen.";
 
 "alert.add_watch.title" = "Nézési tulajdonság hozzáadása";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "A csomagfájl nem található.";
 "plugin.install_error.cannot_download" = "Nem sikerült letölteni a plugint.\n\nKimenet:%@\n";
 "plugin.install_error.cannot_unpackage" = "Nem sikerült kicsomagolni a plugint.\n\nKimenet:%@\n";
-"plugin.install_error.cannot_load" = "Az IINA nem tudja betölteni ezt a bővítményt. Lehet, hogy rossz formátumban van.";
+"plugin.install_error.cannot_load" = "Az Reel nem tudja betölteni ezt a bővítményt. Lehet, hogy rossz formátumban van.";
 "plugin.check_for_updates" = "Frissítések keresése";
 "plugin.updating" = "Frissítés letöltése…";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "Szünet";
 "settings.pauseresumeWhen" = "Szünet/folytatás, amikor";
 "settings.playWhenEnteringFullScreen.label" = "Lejátszás a teljes képernyőbe lépéskor";
-"settings.playlistAutoAdd.desc" = "Az IINA újraindítása szükséges ahhoz, hogy életbe lépjen.";
+"settings.playlistAutoAdd.desc" = "Az Reel újraindítása szükséges ahhoz, hogy életbe lépjen.";
 "settings.playlistAutoAdd.label" = "Fájlok hozzáadása automatikusan ugyanabba a mappába";
 "settings.playlistAutoPlayNext.label" = "Következő automatikus lejátszása";
 "settings.playlistShowMetadata.label" = "Az előadó és a zeneszám nevének megjelenítése az audiofájlokhoz, ha elérhető";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "Célcsúcs";
 "settings.videoThreads.desc" = "Alapértelmezett: 0 (Automatikus)";
 "settings.videoThreads.label" = "Szálak száma";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "Az IINA újraindítása szükséges a módositások érvénybe lépéséhez.";
+"settings.httpProxy.desc" = "Az Reel újraindítása szükséges a módositások érvénybe lépéséhez.";
 "settings.httpProxy.label" = "HTTP Proxy";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "Másodpercek az előtöltéshez";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Enable mpv's youtube-dl script";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "Raw beállítások";
-"settings.ytdlSearchPath.desc" = "Az IINA ebben a mappában fogja keresni a youtube-dl-t. Újraindítás szükséges.";
+"settings.ytdlSearchPath.desc" = "Az Reel ebben a mappában fogja keresni a youtube-dl-t. Újraindítás szükséges.";
 "settings.ytdlSearchPath.label" = "Egyedi youtube-dl útvonal";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "If enabled, IINA will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
+"settings.autoSearchOnlineSub.desc" = "If enabled, Reel will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
 "settings.autoSearchOnlineSub.label" = "Feliratok automatikus keresése online";
 "settings.displayInLetterBox.label" = "Feliratok megjelenítése a letterbox stílusban teljes képernyőn";
 "settings.subAlignX.items.0" = "Bal";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "Alul";
 "settings.subAutoLoadIINA.items.0" = "Kikapcsolva";
 "settings.subAutoLoadIINA.items.1" = "A médiafájl nevét tartalmazó feliratok";
-"settings.subAutoLoadIINA.items.2" = "Intelligens észlelés az IINA által";
+"settings.subAutoLoadIINA.items.2" = "Intelligens észlelés az Reel által";
 "settings.subAutoLoadIINA.label" = "Automatikus betöltés";
 "settings.subAutoLoadPriorityString.desc" = "Kérjük, add meg a karakterláncok vesszővel elválasztott listáját.";
 "settings.subAutoLoadPriorityString.label" = "A feliratok elsőbbséget élveznek, ha a fájlnév tartalmazza";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "Használja a bal/jobb gombot";
 "settings.controlBarAutoHideTimeout.label" = "Auto hide after";
 "settings.controlBarStickToCenter.label" = "Középre ugrás húzásnál";
-"settings.disableAnimations.desc" = "Ha a macOS Reduce Motion (Mozgáscsökkentés) hozzáférhetőségi beállítása engedélyezve van, az IINA csökkenti a felhasználói felület animációit, amelyekről ismert, hogy problémákat okoznak az egyensúlyzavarban szenvedők számára. Ha ez nem elegendő, akkor ezzel a beállítással tovább csökkenthető a mozgás a felhasználói felület animációinak megszüntetésével.";
+"settings.disableAnimations.desc" = "Ha a macOS Reduce Motion (Mozgáscsökkentés) hozzáférhetőségi beállítása engedélyezve van, az Reel csökkenti a felhasználói felület animációit, amelyekről ismert, hogy problémákat okoznak az egyensúlyzavarban szenvedők számára. Ha ez nem elegendő, akkor ezzel a beállítással tovább csökkenthető a mozgás a felhasználói felület animációinak megszüntetésével.";
 "settings.disableAnimations.label" = "Animációk letiltása";
 "settings.disableOSDFileStartMsg.label" = "Fájl kezdete";
 "settings.disableOSDPauseResumeMsgs.label" = "Szünet/Folytatás";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "Ablak";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "A következő beállítások érvénybe lépéséhez az IINA újraindítása szükséges.";
+"settings.enableAdvancedSettings.desc" = "A következő beállítások érvénybe lépéséhez az Reel újraindítása szükséges.";
 "settings.enableAdvancedSettings.label" = "Haladó beállítások engedélyezése";
 "settings.enableLogging.label" = "Naplózás engedélyezése";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "Oldal betöltése sikertelen.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "Betűtípus";
-"settings.$GetBrowserExtensionsForIINA" = "Böngésző bővítmény az IINA-hoz";
+"settings.$GetBrowserExtensionsForIINA" = "Böngésző bővítmény az Reel-hoz";
 "settings.$GetPlugins" = "Get Plugins…";
 "settings.$Hardware" = "Hardware";
 "settings.$Height" = "Magasság";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "Kijelzőn lévő kontroller";
 "settings.$OnScreenDisplay" = "Képernyőre vetített kijelző (Osd)";
 "settings.$OnlineSubtitles" = "Online feliratok";
-"settings.$OpenLinksOrCurrentWebpage" = "Nyissa meg a hivatkozásokat vagy a jelenlegi weboldalt az IINA-ban egyetlen kattintással. A weboldalnak támogatni a kell youtube-dl funkciót.";
+"settings.$OpenLinksOrCurrentWebpage" = "Nyissa meg a hivatkozásokat vagy a jelenlegi weboldalt az Reel-ban egyetlen kattintással. A weboldalnak támogatni a kell youtube-dl funkciót.";
 "settings.$OpenLogDirectory" = "Napló könyvtár megnyitása";
 "settings.$OpenLogWindow" = "Open the log viewer";
 "settings.$OrSelectFrom" = "Or select from available plugins";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "Kép a Képben";
 "settings.$Playlist" = "Lejátszási lista";
-"settings.$PleaseSelectTheMediaTypes" = "Kérjük, válassza ki azokat a médiatípusokat, amelyekhez az IINA-t szeretné alapértelmezett alkalmazásként megadni.";
+"settings.$PleaseSelectTheMediaTypes" = "Kérjük, válassza ki azokat a médiatípusokat, amelyekhez az Reel-t szeretné alapértelmezett alkalmazásként megadni.";
 "settings.$Position" = "Pozíció";
 "settings.$PreferredLanguage" = "Előnyben részesített nyelv";
 "settings.$RestoreAlerts" = "Riasztások visszaállítása";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "Képernyőképek";
-"settings.$SetIINAAsTheDefault" = "Set IINA as the Default Application";
+"settings.$SetIINAAsTheDefault" = "Set Reel as the Default Application";
 "settings.$Settings" = "Beállítások";
 "settings.$Shadow" = "Árnyék";
 "settings.$ShowInFinder" = "Megjelenítés a Finder-ben";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "képernyő szélén";
 "settings.$toThe" = "hoz";
 "settings.$top" = "legjobb";
-"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";

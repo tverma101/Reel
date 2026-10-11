@@ -7,9 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A3E2D44D81584AF491EC0701 /* SubDLSearchResultParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3E2D44D81584AF491EC0702 /* SubDLSearchResultParser.swift */; };
+		D9B1767F0CB34787AF5B4B01 /* SpeechCaptionResultStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9B1767F0CB34787AF5B4B02 /* SpeechCaptionResultStore.swift */; };
 		3EB9DF44DD05478D9CBE77EF /* SubtitleAudioMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = E96DA2816B5A4253BB63AA35 /* SubtitleAudioMatcher.swift */; };
 		7E28504B65A44CBCAA1D4047 /* SubDLSubtitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E28504B65A44CBCAA1D4048 /* SubDLSubtitle.swift */; };
 		7E28504B65A44CBCAA1D4049 /* AppleLiveCaptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E28504B65A44CBCAA1D4050 /* AppleLiveCaptions.swift */; };
+		7E28504B65A44CBCAA1D4051 /* AirPlayAudioRoutePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E28504B65A44CBCAA1D4052 /* AirPlayAudioRoutePicker.swift */; };
 		24BEF9FB6EF24D0F8A5A45B9 /* whisper in Frameworks */ = {isa = PBXBuildFile; productRef = 7118E23746884C528117280D /* whisper */; };
 		1326717E20852D0D000FA7E2 /* SubChooseViewController.xib in Resources */ = {isa = PBXBuildFile; fileRef = 1326718020852D0D000FA7E2 /* SubChooseViewController.xib */; };
 		3412DB8E2C2FC64C00BBC142 /* Equalizations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3412DB8D2C2FC64800BBC142 /* Equalizations.swift */; };
@@ -212,7 +215,7 @@
 		8492C2861E771FB200CE5825 /* ISO639.strings in Resources */ = {isa = PBXBuildFile; fileRef = 8492C2851E771FB200CE5825 /* ISO639.strings */; };
 		8492C2881E7721A600CE5825 /* ISO639Helper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8492C2871E7721A600CE5825 /* ISO639Helper.swift */; };
 		849581F11F02728700D3B359 /* InitialWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 849581EF1F02728700D3B359 /* InitialWindowController.swift */; };
-		849581F31F03D55A00D3B359 /* InitialWindowController.xib in Resources */ = {isa = PBXBuildFile; fileRef = 849581F51F03D55A00D3B359 /* InitialWindowController.xib */; };
+		849581F31F03D55A00D3B359 /* InitialWindowController.strings in Resources */ = {isa = PBXBuildFile; fileRef = 849581F51F03D55A00D3B359 /* InitialWindowController.strings */; };
 		84A09A0E1F2DF596000FF343 /* MiniPlayerWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84A09A0C1F2DF596000FF343 /* MiniPlayerWindowController.swift */; };
 		84A0BA951D2F9E9600BC8DA1 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 84A0BA931D2F9E9600BC8DA1 /* MainMenu.xib */; };
 		84A0BA971D2FA1CE00BC8DA1 /* PlayerCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84A0BA961D2FA1CE00BC8DA1 /* PlayerCore.swift */; };
@@ -264,7 +267,6 @@
 		9E47DAC01E3CFA6D00457420 /* DurationDisplayTextField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E47DABF1E3CFA6D00457420 /* DurationDisplayTextField.swift */; };
 		B4E446E825CB53920069F06E /* PromiseKit in Frameworks */ = {isa = PBXBuildFile; productRef = B4E446E725CB53920069F06E /* PromiseKit */; };
 		B4E446F725CB54EF0069F06E /* Mustache in Frameworks */ = {isa = PBXBuildFile; productRef = B4E446F625CB54EF0069F06E /* Mustache */; };
-		B4E4470125CE3F930069F06E /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = B4E4470025CE3F930069F06E /* Sparkle */; };
 		C789872F1E34EF170005769F /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = C78987311E34EF170005769F /* InfoPlist.strings */; };
 		D17504A82918F13E005C3DD0 /* OSCToolbarButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17504A72918F13E005C3DD0 /* OSCToolbarButton.swift */; };
 		D17B857B2C94C8B5002A8EDE /* movist-v2-default-input.conf in Copy Configs */ = {isa = PBXBuildFile; fileRef = D1F68E742C6ABC22003D1208 /* movist-v2-default-input.conf */; };
@@ -294,6 +296,7 @@
 		E33BA5C4204315740069A0F6 /* AssrtSubtitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33BA5C3204315740069A0F6 /* AssrtSubtitle.swift */; };
 		E33BA5C7204BD9FE0069A0F6 /* SubChooseViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33BA5C5204BD9FE0069A0F6 /* SubChooseViewController.swift */; };
 		E33FEEB52229A44F00B59711 /* JavascriptAPIUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33FEEB42229A44F00B59711 /* JavascriptAPIUtils.swift */; };
+		F4A1B2C3D4E5F60718293A4B /* BoundedProcessOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A6C7D8E9F0011223344556 /* BoundedProcessOutput.swift */; };
 		E342832F20B7149800139865 /* Logger.swift in Sources */ = {isa = PBXBuildFile; fileRef = E342832E20B7149800139865 /* Logger.swift */; };
 		E34A0E012053F93A00B50097 /* PrefOSCToolbarSettingsSheetController.xib in Resources */ = {isa = PBXBuildFile; fileRef = E34A0E032053F93A00B50097 /* PrefOSCToolbarSettingsSheetController.xib */; };
 		E34BC28D2C27733200A94680 /* SettingsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = E34BC28C2C27733200A94680 /* SettingsPage.swift */; };
@@ -538,9 +541,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A3E2D44D81584AF491EC0702 /* SubDLSearchResultParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubDLSearchResultParser.swift; sourceTree = "<group>"; };
+		D9B1767F0CB34787AF5B4B02 /* SpeechCaptionResultStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechCaptionResultStore.swift; sourceTree = "<group>"; };
 		E96DA2816B5A4253BB63AA35 /* SubtitleAudioMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubtitleAudioMatcher.swift; sourceTree = "<group>"; };
 		7E28504B65A44CBCAA1D4048 /* SubDLSubtitle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubDLSubtitle.swift; sourceTree = "<group>"; };
 		7E28504B65A44CBCAA1D4050 /* AppleLiveCaptions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleLiveCaptions.swift; sourceTree = "<group>"; };
+		7E28504B65A44CBCAA1D4052 /* AirPlayAudioRoutePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirPlayAudioRoutePicker.swift; sourceTree = "<group>"; };
 		0507C25E2B5617650043AD05 /* he */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = he; path = he.lproj/MainMenu.strings; sourceTree = "<group>"; };
 		0507C25F2B5617660043AD05 /* he */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = he; path = he.lproj/MainWindowController.strings; sourceTree = "<group>"; };
 		0507C2622B5617660043AD05 /* he */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = he; path = he.lproj/InspectorWindowController.strings; sourceTree = "<group>"; };
@@ -1311,7 +1317,6 @@
 		8492C2851E771FB200CE5825 /* ISO639.strings */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.strings; path = ISO639.strings; sourceTree = "<group>"; };
 		8492C2871E7721A600CE5825 /* ISO639Helper.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ISO639Helper.swift; sourceTree = "<group>"; };
 		849581EF1F02728700D3B359 /* InitialWindowController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = InitialWindowController.swift; sourceTree = "<group>"; };
-		849581F41F03D55A00D3B359 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = Base; path = Base.lproj/InitialWindowController.xib; sourceTree = "<group>"; };
 		849581F71F03D55C00D3B359 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/InitialWindowController.strings"; sourceTree = "<group>"; };
 		8497A4831D2FF573005F504F /* iina-Bridging-Header.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = "iina-Bridging-Header.h"; sourceTree = "<group>"; };
 		84A09A0C1F2DF596000FF343 /* MiniPlayerWindowController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MiniPlayerWindowController.swift; sourceTree = "<group>"; };
@@ -1633,6 +1638,7 @@
 		E33C315D210701A100983986 /* zh-Hant */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hant"; path = "zh-Hant.lproj/PrefUtilsViewController.strings"; sourceTree = "<group>"; };
 		E33C315F210701C200983986 /* zh-Hant */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hant"; path = "zh-Hant.lproj/PreferenceWindowController.strings"; sourceTree = "<group>"; };
 		E33FEEB42229A44F00B59711 /* JavascriptAPIUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JavascriptAPIUtils.swift; sourceTree = "<group>"; };
+		B5A6C7D8E9F0011223344556 /* BoundedProcessOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundedProcessOutput.swift; sourceTree = "<group>"; };
 		E342832E20B7149800139865 /* Logger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logger.swift; sourceTree = "<group>"; };
 		E34A0E022053F93A00B50097 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = Base; path = Base.lproj/PrefOSCToolbarSettingsSheetController.xib; sourceTree = "<group>"; };
 		E34A0E052053F93E00B50097 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/PrefOSCToolbarSettingsSheetController.strings"; sourceTree = "<group>"; };
@@ -1845,7 +1851,6 @@
 			files = (
 				496B19921E2968530035AF10 /* PIP.framework in Frameworks */,
 				8403CEA72007CBD400645516 /* MediaPlayer.framework in Frameworks */,
-				B4E4470125CE3F930069F06E /* Sparkle in Frameworks */,
 				8451E6D92604AEFC009A15D7 /* Just in Frameworks */,
 				5196819A29EC963F00B05D55 /* CoreDisplay.framework in Frameworks */,
 				B4E446E825CB53920069F06E /* PromiseKit in Frameworks */,
@@ -2151,7 +2156,7 @@
 				84C6D3651EB2A427009BF721 /* HistoryWindowController.swift */,
 				846352571EEEE11A0043F0CC /* ThumbnailPeekView.swift */,
 				849581EF1F02728700D3B359 /* InitialWindowController.swift */,
-				849581F51F03D55A00D3B359 /* InitialWindowController.xib */,
+				849581F51F03D55A00D3B359 /* InitialWindowController.strings */,
 				84A09A0C1F2DF596000FF343 /* MiniPlayerWindowController.swift */,
 				8F49C370213EFB7E0076C4F9 /* MiniPlayerWindowController.xib */,
 				E36E8D7A24F6052F00B8C097 /* GuideWindowController.swift */,
@@ -2245,9 +2250,12 @@
 		84A886E21E24F2D3008755BB /* Sub */ = {
 			isa = PBXGroup;
 			children = (
+				A3E2D44D81584AF491EC0702 /* SubDLSearchResultParser.swift */,
+				D9B1767F0CB34787AF5B4B02 /* SpeechCaptionResultStore.swift */,
 				E96DA2816B5A4253BB63AA35 /* SubtitleAudioMatcher.swift */,
 				7E28504B65A44CBCAA1D4048 /* SubDLSubtitle.swift */,
 				7E28504B65A44CBCAA1D4050 /* AppleLiveCaptions.swift */,
+				7E28504B65A44CBCAA1D4052 /* AirPlayAudioRoutePicker.swift */,
 				84A886E31E24F37D008755BB /* ShooterSubtitle.swift */,
 				840AF5831E73CE3900F4AF92 /* OpenSubSubtitle.swift */,
 				E33BA5C3204315740069A0F6 /* AssrtSubtitle.swift */,
@@ -2478,6 +2486,7 @@
 				E3CB258A2222885E00A62C47 /* JavascriptAPIOverlay.swift */,
 				84E5221223FF3D080006FDA1 /* JavascriptAPIPlaylist.swift */,
 				E33FEEB42229A44F00B59711 /* JavascriptAPIUtils.swift */,
+				B5A6C7D8E9F0011223344556 /* BoundedProcessOutput.swift */,
 				E3366AF9224A039500EF3C32 /* JavascriptAPIPreferences.swift */,
 				E337D5E5241EF60400B5729A /* JavascriptAPISubtitle.swift */,
 				E3839C5824FFF817007D0AB4 /* JavascriptAPIStandaloneWindow.swift */,
@@ -2649,7 +2658,6 @@
 				B4E446E725CB53920069F06E /* PromiseKit */,
 				7118E23746884C528117280D /* whisper */,
 				B4E446F625CB54EF0069F06E /* Mustache */,
-				B4E4470025CE3F930069F06E /* Sparkle */,
 				8451E6D82604AEFC009A15D7 /* Just */,
 			);
 			productName = mpvx;
@@ -2770,7 +2778,6 @@
 			packageReferences = (
 				B4E446E625CB53920069F06E /* XCRemoteSwiftPackageReference "PromiseKit" */,
 				B4E446F525CB54EF0069F06E /* XCRemoteSwiftPackageReference "GRMustache" */,
-				B4E446FF25CE3F930069F06E /* XCRemoteSwiftPackageReference "Sparkle" */,
 				8451E6D72604AEFC009A15D7 /* XCRemoteSwiftPackageReference "Just" */,
 				D8BD4AAE52EC448A9D58855A /* XCLocalSwiftPackageReference "IINAWhisper" */,
 			);
@@ -2833,7 +2840,7 @@
 				8400D5D21E1AB312006785F5 /* InspectorWindowController.xib in Resources */,
 				8400D5ED1E1AB33F006785F5 /* PrefAdvancedViewController.xib in Resources */,
 				6100FF2B1EDF9806002CF0FB /* dsa_pub.pem in Resources */,
-				849581F31F03D55A00D3B359 /* InitialWindowController.xib in Resources */,
+				849581F31F03D55A00D3B359 /* InitialWindowController.strings in Resources */,
 				E34C13F23064ECCB00096D56 /* iina.icon in Resources */,
 				845AC09C1E1AE6C10080B614 /* Localizable.strings in Resources */,
 				8400D5F61E1AB34D006785F5 /* PrefNetworkViewController.xib in Resources */,
@@ -3051,6 +3058,7 @@
 				E39A11FD240F176E00A67F9F /* StringEncodingName.swift in Sources */,
 				5125117D2E89B2ED00CDAE9F /* Display.swift in Sources */,
 				E33FEEB52229A44F00B59711 /* JavascriptAPIUtils.swift in Sources */,
+				F4A1B2C3D4E5F60718293A4B /* BoundedProcessOutput.swift in Sources */,
 				84C6D3671EB2A427009BF721 /* HistoryWindowController.swift in Sources */,
 				9E47DAC01E3CFA6D00457420 /* DurationDisplayTextField.swift in Sources */,
 				E35306F62147F7AF008FE492 /* JavascriptAPIMpv.swift in Sources */,
@@ -3062,9 +3070,12 @@
 				84ED99FF1E009C8100A5159B /* PrefAdvancedViewController.swift in Sources */,
 				51CA83E22E35AD6300A44B22 /* MPVAudioDevice.swift in Sources */,
 				840AF5841E73CE3900F4AF92 /* OpenSubSubtitle.swift in Sources */,
+				A3E2D44D81584AF491EC0701 /* SubDLSearchResultParser.swift in Sources */,
+				D9B1767F0CB34787AF5B4B01 /* SpeechCaptionResultStore.swift in Sources */,
 				3EB9DF44DD05478D9CBE77EF /* SubtitleAudioMatcher.swift in Sources */,
 				7E28504B65A44CBCAA1D4047 /* SubDLSubtitle.swift in Sources */,
 				7E28504B65A44CBCAA1D4049 /* AppleLiveCaptions.swift in Sources */,
+				7E28504B65A44CBCAA1D4051 /* AirPlayAudioRoutePicker.swift in Sources */,
 				E32B157D21BC27B100CDBCEA /* JavascriptAPIMenu.swift in Sources */,
 				84AABE8B1DBF634600D138FD /* CharEncoding.swift in Sources */,
 				8488D6DC1E1167EF00D5B952 /* FloatingPointByteCountFormatter.swift in Sources */,
@@ -3887,10 +3898,9 @@
 			name = Localizable.strings;
 			sourceTree = "<group>";
 		};
-		849581F51F03D55A00D3B359 /* InitialWindowController.xib */ = {
+		849581F51F03D55A00D3B359 /* InitialWindowController.strings */ = {
 			isa = PBXVariantGroup;
 			children = (
-				849581F41F03D55A00D3B359 /* Base */,
 				849581F71F03D55C00D3B359 /* zh-Hans */,
 				6DC77D371F1439A700E96176 /* uk */,
 				C7DBA5EB1F07C5FD00C2B416 /* ko */,
@@ -3923,7 +3933,7 @@
 				34F294522C0A1BDF00F14962 /* id */,
 				34ACAD692C16917000F871A0 /* hr */,
 			);
-			name = InitialWindowController.xib;
+			name = InitialWindowController.strings;
 			sourceTree = "<group>";
 		};
 		84A0BA931D2F9E9600BC8DA1 /* MainMenu.xib */ = {
@@ -4342,7 +4352,6 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 67CQ77V27R;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 			};
@@ -4390,7 +4399,6 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 67CQ77V27R;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 			};
@@ -4438,7 +4446,6 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 67CQ77V27R;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 			};
@@ -4451,7 +4458,6 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 67CQ77V27R;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 			};
@@ -4841,14 +4847,6 @@
 				minimumVersion = 4.2.0;
 			};
 		};
-		B4E446FF25CE3F930069F06E /* XCRemoteSwiftPackageReference "Sparkle" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/sparkle-project/Sparkle/";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.7.0;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -4871,11 +4869,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B4E446F525CB54EF0069F06E /* XCRemoteSwiftPackageReference "GRMustache" */;
 			productName = Mustache;
-		};
-		B4E4470025CE3F930069F06E /* Sparkle */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = B4E446FF25CE3F930069F06E /* XCRemoteSwiftPackageReference "Sparkle" */;
-			productName = Sparkle;
 		};
 		E38558902A486E060083772D /* Mustache */ = {
 			isa = XCSwiftPackageProductDependency;

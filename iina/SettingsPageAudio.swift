@@ -62,6 +62,7 @@ class SettingsPageAudio: SettingsPage {
       SettingsList {
         SettingsItem.General(title: .preferredAudioDeviceLabel)
           .image(name: "hifispeaker.and.homepod")
+          .hasDescription(content: .preferredAudioDeviceDesc)
           .withDetailView(audioOutputDeviceView)
         SettingsItem.General(title: .text_SPDIFOutput)
           .image(name: "audio.jack.stereo")

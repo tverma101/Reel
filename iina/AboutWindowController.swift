@@ -127,7 +127,7 @@ class AboutWindowController: NSWindowController {
 
   @objc func openCommitLink() {
     guard let commitSHA = InfoDictionary.shared.buildCommit else { return }
-    NSWorkspace.shared.open(.init(string: "https://github.com/iina/iina/commit/\(commitSHA)")!)
+    NSWorkspace.shared.open(.init(string: "https://github.com/tverma101/Reel/commit/\(commitSHA)")!)
   }
 
   @IBAction func sectionBtnAction(_ sender: NSButton) {
@@ -163,7 +163,7 @@ extension AboutWindowController: NSCollectionViewDataSource {
   private func getContributors() -> [Contributor] {
     // This method will be called only once when `self.contributors` is needed,
     // i.e. when `contributorsCollectionView` is being initialized.
-    loadContributors(from: "https://api.github.com/repos/iina/iina/contributors")
+    loadContributors(from: "https://api.github.com/repos/tverma101/Reel/contributors")
     return []
   }
 

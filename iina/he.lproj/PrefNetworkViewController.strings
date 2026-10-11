@@ -23,10 +23,10 @@
 "LNk-io-MM7.title" = "מטמון:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "RwW-JS-iTv"; */
-"RwW-JS-iTv.title" = "נדרשת הפעלה מחדש של IINA כדי ששינוי ההגדרה ישפיע.";
+"RwW-JS-iTv.title" = "נדרשת הפעלה מחדש של Reel כדי ששינוי ההגדרה ישפיע.";
 
 /* Class = "NSTextFieldCell"; title = "IINA will search youtube-dl in this folder. Restart needed."; ObjectID = "YqE-yV-BvQ"; */
-"YqE-yV-BvQ.title" = "‏IINA תחפש את youtube-dl בתקייה הזאת. נדרשת הפעלה מחדש של האפליקציה.";
+"YqE-yV-BvQ.title" = "‏Reel תחפש את youtube-dl בתקייה הזאת. נדרשת הפעלה מחדש של האפליקציה.";
 
 /* Class = "NSMenuItem"; title = "Auto"; ObjectID = "aNr-lv-K0r"; */
 "aNr-lv-K0r.title" = "אוטומטי";

@@ -881,6 +881,13 @@ class MPVController: NSObject {
     return data
   }
 
+  /// Like `getDouble`, but `nil` when mpv cannot provide the property right now.
+  func getDoubleIfAvailable(_ name: String) -> Double? {
+    var data = Double()
+    guard mpv_get_property(mpv, name, MPV_FORMAT_DOUBLE, &data) >= 0, data.isFinite else { return nil }
+    return data
+  }
+
   func getFlag(_ name: String) -> Bool {
     var data = Int32()
     mpv_get_property(mpv, name, MPV_FORMAT_FLAG, &data)
@@ -1286,7 +1293,7 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.secondarySidChanged(Int(id)) }
 
     case MPVOption.PlaybackControl.pause:
-      guard let paused = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee else {
+      guard let paused = flagValue(from: property) else {
         logPropertyValueError(MPVOption.PlaybackControl.pause, property.format)
         break
       }
@@ -1318,7 +1325,7 @@ class MPVController: NSObject {
       }
 
     case MPVOption.Video.deinterlace:
-      guard let data = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee else {
+      guard let data = flagValue(from: property) else {
         logPropertyValueError(MPVOption.Video.deinterlace, property.format)
         break
       }
@@ -1332,7 +1339,10 @@ class MPVController: NSObject {
       }
 
     case MPVOption.Video.hwdec:
-      let data = String(cString: property.data.assumingMemoryBound(to: UnsafePointer<UInt8>.self).pointee)
+      guard let data = stringValue(from: property) else {
+        logPropertyValueError(MPVOption.Video.hwdec, property.format)
+        break
+      }
       DispatchQueue.main.async { [self] in
         if player.info.hwdec != data {
           player.info.hwdec = data
@@ -1350,7 +1360,7 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.info.rotation = intData }
 
     case MPVOption.Audio.mute:
-      guard let data = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee else {
+      guard let data = flagValue(from: property) else {
         logPropertyValueError(MPVOption.Audio.mute, property.format)
         break
       }
@@ -1383,14 +1393,14 @@ class MPVController: NSObject {
       }
 
     case MPVOption.Subtitles.subVisibility:
-      if let visible = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee {
+      if let visible = flagValue(from: property) {
         DispatchQueue.main.async {
           self.player.subVisibilityChanged(visible)
         }
       }
 
     case MPVOption.Subtitles.secondarySubVisibility:
-      if let visible = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee {
+      if let visible = flagValue(from: property) {
         DispatchQueue.main.async {
           self.player.secondSubVisibilityChanged(visible)
         }
@@ -1523,7 +1533,7 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.mediaTitleChanged() }
 
     case MPVProperty.idleActive:
-      guard let idleActive = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee else {
+      guard let idleActive = flagValue(from: property) else {
         logPropertyValueError(MPVProperty.idleActive, property.format)
         break
       }
@@ -1538,6 +1548,10 @@ class MPVController: NSObject {
       break
     }
 
+    // mpv owns property.data only until the next call to mpv_wait_event. Copy the primitive value
+    // while still on the event queue; the main-queue plugin callback must not capture the C pointer.
+    let eventData = copyPropertyValue(property)
+
     // This code is running in the com.colliderli.iina.controller dispatch queue. We must not run
     // plugins from a task in this queue. Accessing EventController data from a thread in this queue
     // results in data races that can cause a crash. See issue 3986.
@@ -1545,21 +1559,41 @@ class MPVController: NSObject {
       let eventName = EventController.Name("mpv.\(name).changed")
       if player.events.hasListener(for: eventName) {
         // FIXME: better convert to JSValue before passing to call()
-        let data: Any
-        switch property.format {
-        case MPV_FORMAT_FLAG:
-          data = property.data.bindMemory(to: Bool.self, capacity: 1).pointee
-        case MPV_FORMAT_INT64:
-          data = property.data.bindMemory(to: Int64.self, capacity: 1).pointee
-        case MPV_FORMAT_DOUBLE:
-          data = property.data.bindMemory(to: Double.self, capacity: 1).pointee
-        case MPV_FORMAT_STRING:
-          data = property.data.bindMemory(to: String.self, capacity: 1).pointee
-        default:
-          data = 0
-        }
-        player.events.emit(eventName, data: data)
+        player.events.emit(eventName, data: eventData)
       }
+    }
+  }
+
+  /// mpv represents `MPV_FORMAT_FLAG` as a C `int`, not a Swift `Bool`.
+  private func flagValue(from property: mpv_event_property) -> Bool? {
+    guard property.format == MPV_FORMAT_FLAG,
+          let data = property.data else { return nil }
+    return data.assumingMemoryBound(to: Int32.self).pointee != 0
+  }
+
+  /// `MPV_FORMAT_STRING` stores a `char *` at `property.data` (so the event field is `char **`).
+  private func stringValue(from property: mpv_event_property) -> String? {
+    guard property.format == MPV_FORMAT_STRING,
+          let data = property.data,
+          let value = data.assumingMemoryBound(to: UnsafePointer<CChar>?.self).pointee else { return nil }
+    return String(cString: value)
+  }
+
+  /// Copy a supported property into Swift-owned storage before mpv advances its event queue.
+  private func copyPropertyValue(_ property: mpv_event_property) -> Any {
+    guard let data = property.data else { return 0 }
+    switch property.format {
+    case MPV_FORMAT_FLAG:
+      return data.assumingMemoryBound(to: Int32.self).pointee != 0
+    case MPV_FORMAT_INT64:
+      return data.assumingMemoryBound(to: Int64.self).pointee
+    case MPV_FORMAT_DOUBLE:
+      return data.assumingMemoryBound(to: Double.self).pointee
+    case MPV_FORMAT_STRING:
+      guard let value = data.assumingMemoryBound(to: UnsafePointer<CChar>?.self).pointee else { return 0 }
+      return String(cString: value)
+    default:
+      return 0
     }
   }
 
