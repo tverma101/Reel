@@ -20,6 +20,56 @@ enum BuiltinSubtitleResponseLimit {
   static let subtitleBytes = 10 * 1024 * 1024
 }
 
+/// URL policies for the built-in providers. Provider responses can contain download links, so
+/// every request and redirect must stay within the provider's documented origin.
+enum BuiltinSubtitleProviderURLPolicy {
+  static func allowsAssrtAPI(_ url: URL) -> Bool {
+    guard let components = validatedComponents(url, schemes: ["https"]),
+          components.host?.lowercased() == "api.assrt.net" else { return false }
+    return true
+  }
+
+  /// Assrt documents file0.assrt.net links using HTTP and that host does not negotiate TLS.
+  /// Restrict the legacy cleartext path to Assrt's numbered file servers and same-provider redirects.
+  static func allowsAssrtDownload(_ url: URL) -> Bool {
+    guard let components = validatedComponents(url, schemes: ["http", "https"]),
+          let host = components.host?.lowercased(),
+          host.hasSuffix(".assrt.net") else { return false }
+    let server = host.dropLast(".assrt.net".count)
+    guard server.hasPrefix("file") else { return false }
+    let shard = server.dropFirst("file".count)
+    return !shard.isEmpty && shard.allSatisfy { $0 >= "0" && $0 <= "9" }
+  }
+
+  /// Shooter returns an absolute URL for the same HTTPS API endpoint used for search.
+  static func shooterDownloadURL(_ url: URL) -> URL? {
+    guard var components = validatedComponents(url, schemes: ["http", "https"]),
+          components.host?.lowercased() == "www.shooter.cn",
+          components.path == "/api/subapi.php" else { return nil }
+    components.scheme = "https"
+    components.port = nil
+    return components.url
+  }
+
+  static func allowsShooter(_ url: URL) -> Bool {
+    guard let components = validatedComponents(url, schemes: ["https"]),
+          components.host?.lowercased() == "www.shooter.cn",
+          components.path == "/api/subapi.php" else { return false }
+    return true
+  }
+
+  private static func validatedComponents(_ url: URL, schemes: Set<String>) -> URLComponents? {
+    guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          let scheme = components.scheme?.lowercased(), schemes.contains(scheme),
+          let host = components.host, !host.isEmpty, !host.hasSuffix("."),
+          components.user == nil, components.password == nil else { return nil }
+    let defaultPort = scheme == "https" ? 443 : 80
+    guard components.port == nil || components.port == defaultPort else { return nil }
+    components.host = host.lowercased()
+    return components
+  }
+}
+
 enum BuiltinSubtitleTransferError: Error {
   case invalidResponse
   case responseTooLarge(maximumBytes: Int)
@@ -50,7 +100,7 @@ final class BuiltinSubtitleHTTPTransfer: NSObject, URLSessionDataDelegate {
        maximumBytes: Int,
        cancellation: SubtitleAudioMatcher.Cancellation,
        configuration: URLSessionConfiguration = .ephemeral,
-       allowsURL: @escaping (URL) -> Bool = { _ in true },
+       allowsURL: @escaping (URL) -> Bool = { _ in false },
        completion: @escaping Completion) {
     self.request = request
     self.maximumBytes = maximumBytes

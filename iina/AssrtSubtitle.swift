@@ -97,11 +97,15 @@ class Assrt {
     private func downloadFile(_ remoteURL: URL, fileName: String,
                               cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<URL> {
       guard !cancellation.isCancelled else { return Promise(error: CancellationError()) }
+      guard BuiltinSubtitleProviderURLPolicy.allowsAssrtDownload(remoteURL) else {
+        return Promise(error: OnlineSubtitle.CommonError.networkError(nil))
+      }
       let request = URLRequest(url: remoteURL)
       return Promise { resolver in
         let transfer = BuiltinSubtitleHTTPTransfer(request: request,
                                                   maximumBytes: BuiltinSubtitleResponseLimit.subtitleBytes,
-                                                  cancellation: cancellation) { result in
+                                                  cancellation: cancellation,
+                                                  allowsURL: { BuiltinSubtitleProviderURLPolicy.allowsAssrtDownload($0) }) { result in
           guard !cancellation.isCancelled else {
             resolver.reject(OnlineSubtitle.CommonError.dismissed)
             return
@@ -269,7 +273,8 @@ class Assrt {
       return Promise { resolver in
         let transfer = BuiltinSubtitleHTTPTransfer(request: request,
                                                   maximumBytes: BuiltinSubtitleResponseLimit.searchBytes,
-                                                  cancellation: cancellation) { result in
+                                                  cancellation: cancellation,
+                                                  allowsURL: { BuiltinSubtitleProviderURLPolicy.allowsAssrtAPI($0) }) { result in
           guard !cancellation.isCancelled else {
             resolver.reject(OnlineSubtitle.CommonError.dismissed)
             return
@@ -353,7 +358,8 @@ class Assrt {
       return Promise { resolver in
         let transfer = BuiltinSubtitleHTTPTransfer(request: request,
                                                   maximumBytes: BuiltinSubtitleResponseLimit.detailBytes,
-                                                  cancellation: cancellation) { result in
+                                                  cancellation: cancellation,
+                                                  allowsURL: { BuiltinSubtitleProviderURLPolicy.allowsAssrtAPI($0) }) { result in
           guard !cancellation.isCancelled else {
             resolver.reject(OnlineSubtitle.CommonError.dismissed)
             return

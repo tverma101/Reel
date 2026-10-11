@@ -38,7 +38,8 @@ class Shooter {
         return Promise(error: cancellation.isCancelled ? OnlineSubtitle.CommonError.dismissed :
                          OnlineSubtitle.CommonError.networkError(nil))
       }
-      guard let remoteURL = URL(string: file.path) else {
+      guard let rawRemoteURL = URL(string: file.path),
+            let remoteURL = BuiltinSubtitleProviderURLPolicy.shooterDownloadURL(rawRemoteURL) else {
         return Promise(error: OnlineSubtitle.CommonError.networkError(nil))
       }
       var request = URLRequest(url: remoteURL)
@@ -46,7 +47,8 @@ class Shooter {
       return Promise { resolver in
         let transfer = BuiltinSubtitleHTTPTransfer(request: request,
                                                   maximumBytes: BuiltinSubtitleResponseLimit.subtitleBytes,
-                                                  cancellation: cancellation) { result in
+                                                  cancellation: cancellation,
+                                                  allowsURL: { BuiltinSubtitleProviderURLPolicy.allowsShooter($0) }) { result in
           guard !cancellation.isCancelled else {
             self.discardCachedDownload()
             resolver.reject(OnlineSubtitle.CommonError.dismissed)
@@ -181,7 +183,8 @@ class Shooter {
       return Promise { resolver in
         let transfer = BuiltinSubtitleHTTPTransfer(request: request,
                                                   maximumBytes: BuiltinSubtitleResponseLimit.searchBytes,
-                                                  cancellation: cancellation) { result in
+                                                  cancellation: cancellation,
+                                                  allowsURL: { BuiltinSubtitleProviderURLPolicy.allowsShooter($0) }) { result in
           guard !cancellation.isCancelled else {
             resolver.reject(OnlineSubtitle.CommonError.dismissed)
             return

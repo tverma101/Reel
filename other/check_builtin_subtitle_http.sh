@@ -103,6 +103,37 @@ fi
 grep -Fq 'private static var sessionLeases' "$SOURCE"
 echo 'subtitle cache lease bookkeeping retains only one sentinel descriptor per root'
 
+check_provider_policy_wiring() {
+  local provider="$1"
+  local expected_transfers="$2"
+  local provider_source="$ROOT/iina/$provider.swift"
+  local transfer_count
+  transfer_count="$(grep -c 'let transfer = BuiltinSubtitleHTTPTransfer' "$provider_source" || true)"
+  if [ "$transfer_count" -ne "$expected_transfers" ]; then
+    echo "FAIL: unexpected $provider transfer count: $transfer_count" >&2
+    exit 1
+  fi
+  shift 2
+  while [ "$#" -gt 0 ]; do
+    local policy="$1"
+    local expected_count="$2"
+    local actual_count
+    actual_count="$(grep -F -c "$policy" "$provider_source" || true)"
+    if [ "$actual_count" -ne "$expected_count" ]; then
+      echo "FAIL: $provider must use '$policy' $expected_count time(s), got $actual_count" >&2
+      exit 1
+    fi
+    shift 2
+  done
+}
+
+check_provider_policy_wiring AssrtSubtitle 3 \
+  'allowsAssrtDownload($0)' 1 'allowsAssrtAPI($0)' 2
+check_provider_policy_wiring ShooterSubtitle 2 'allowsShooter($0)' 2
+check_provider_policy_wiring SubDLSubtitle 2 \
+  'host: "dl.subdl.com"' 1 'host: "api.subdl.com"' 1
+echo 'all built-in transfers use their expected provider URL policies'
+
 HANDOFF_BLOCK="$(awk '
   /provider\.fetchSubtitles\(url: url, player: player, cancellation: cancellation\)\.done \{ urls in/ { active = 1 }
   active && /\.ensure \{/ { exit }

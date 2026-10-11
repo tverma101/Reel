@@ -38,8 +38,12 @@ or verification step from starting. Built-in HTTP requests are canceled as tasks
 that do not implement cancellation may finish their current request. If an OpenSubtitles quota
 response arrives after cancellation, Reel stops before fetching the candidate subtitle file.
 
-Built-in subtitle downloads use bounded responses and stop when their search is canceled. Failed or
-canceled downloads remove their temporary files; successful files stay available to the player.
+Built-in subtitle downloads use bounded responses and stop when their search is canceled. Assrt and
+Shooter links are checked against provider-specific hosts before requests and redirects; Shooter's
+legacy HTTP links are upgraded to HTTPS. Assrt's documented file server does not negotiate TLS, so
+its legacy HTTP download is limited to numbered `file*.assrt.net` hosts and redirects within that
+host family. Other hosts, credentials in URLs, and nonstandard ports are rejected. Failed or canceled
+downloads remove their temporary files; successful files stay available to the player.
 The provider cache has a 200 MiB aggregate limit. To make room, Reel removes only its own unleased
 provider-cache directories after 30 days. Subtitle paths leased to a player are preserved, including
 when a search is canceled after the result has been handed off; those leases last until the app exits

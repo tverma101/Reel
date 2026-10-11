@@ -153,7 +153,83 @@ struct BuiltinSubtitleHTTPChecks {
     return result
   }
 
+  private static func verifyProviderURLPolicies() {
+    func url(_ string: String) -> URL { URL(string: string)! }
+
+    check(BuiltinSubtitleProviderURLPolicy.allowsAssrtAPI(url("https://api.assrt.net/v1/sub/search")),
+          "Assrt API accepts its documented HTTPS origin")
+    check(!BuiltinSubtitleProviderURLPolicy.allowsAssrtAPI(url("http://api.assrt.net/v1/sub/search")),
+          "Assrt API rejects cleartext requests")
+    check(!BuiltinSubtitleProviderURLPolicy.allowsAssrtAPI(url("https://api.assrt.net.evil.test/v1/sub/search")),
+          "Assrt API rejects lookalike hosts")
+    check(!BuiltinSubtitleProviderURLPolicy.allowsAssrtAPI(url("https://user@api.assrt.net/v1/sub/search")),
+          "Assrt API rejects URLs with embedded credentials")
+    check(!BuiltinSubtitleProviderURLPolicy.allowsAssrtAPI(url("https://api.assrt.net:8443/v1/sub/search")),
+          "Assrt API rejects nonstandard ports")
+
+    check(BuiltinSubtitleProviderURLPolicy.allowsAssrtDownload(url("http://file0.assrt.net/download/1")),
+          "Assrt accepts its documented legacy HTTP file host")
+    check(BuiltinSubtitleProviderURLPolicy.allowsAssrtDownload(url("https://file12.assrt.net/onthefly/1")),
+          "Assrt accepts numbered file hosts over HTTPS")
+    check(!BuiltinSubtitleProviderURLPolicy.allowsAssrtDownload(url("http://api.assrt.net/download/1")),
+          "Assrt download links cannot target its API host")
+    check(!BuiltinSubtitleProviderURLPolicy.allowsAssrtDownload(url("http://file0.assrt.net.evil.test/download/1")),
+          "Assrt download links reject lookalike hosts")
+    check(!BuiltinSubtitleProviderURLPolicy.allowsAssrtDownload(url("http://file0.assrt.net:8080/download/1")),
+          "Assrt download links reject nonstandard ports")
+    check(!BuiltinSubtitleProviderURLPolicy.allowsAssrtDownload(url("http://user@file0.assrt.net/download/1")),
+          "Assrt download links reject embedded credentials")
+
+    check(BuiltinSubtitleProviderURLPolicy.allowsShooter(url("https://www.shooter.cn/api/subapi.php?fetch=sample")),
+          "Shooter accepts its documented HTTPS API and download endpoint")
+    let upgradedShooter = BuiltinSubtitleProviderURLPolicy.shooterDownloadURL(
+      url("http://www.shooter.cn/api/subapi.php?fetch=sample"))
+    check(upgradedShooter?.scheme == "https" && upgradedShooter?.query == "fetch=sample",
+          "Shooter legacy HTTP links are upgraded without changing their query")
+    check(BuiltinSubtitleProviderURLPolicy.shooterDownloadURL(
+      url("https://www.shooter.cn.evil.test/api/subapi.php?fetch=sample")) == nil,
+          "Shooter rejects lookalike download hosts")
+    check(BuiltinSubtitleProviderURLPolicy.shooterDownloadURL(
+      url("https://www.shooter.cn:8443/api/subapi.php?fetch=sample")) == nil,
+          "Shooter rejects nonstandard download ports")
+    check(BuiltinSubtitleProviderURLPolicy.shooterDownloadURL(
+      url("https://user@www.shooter.cn/api/subapi.php?fetch=sample")) == nil,
+          "Shooter rejects embedded credentials")
+
+    BuiltinSubtitleURLProtocol.configure { _ in
+      .response(status: 200, headers: [:], chunks: [Data([1])])
+    }
+    var defaultDenied = false
+    BuiltinSubtitleHTTPTransfer(request: request("/private", host: "127.0.0.1"),
+                                maximumBytes: 8,
+                                cancellation: .init(),
+                                configuration: configuration()) { result in
+      if case .failure = result { defaultDenied = true }
+    }.start()
+    check(defaultDenied && BuiltinSubtitleURLProtocol.paths.isEmpty,
+          "the transfer default denies unspecified URLs before making a request")
+
+    let redirectFinished = DispatchSemaphore(value: 0)
+    var unsafeShooterRedirectFailed = false
+    BuiltinSubtitleURLProtocol.configure { _ in
+      .redirect(url("https://127.0.0.1/private"))
+    }
+    BuiltinSubtitleHTTPTransfer(request: URLRequest(url: url("https://www.shooter.cn/api/subapi.php")),
+                                maximumBytes: 8,
+                                cancellation: .init(),
+                                configuration: configuration(),
+                                allowsURL: BuiltinSubtitleProviderURLPolicy.allowsShooter) { result in
+      if case .failure = result { unsafeShooterRedirectFailed = true }
+      redirectFinished.signal()
+    }.start()
+    check(redirectFinished.wait(timeout: .now() + 5) == .success &&
+          unsafeShooterRedirectFailed && BuiltinSubtitleURLProtocol.paths == ["/api/subapi.php"],
+          "the Shooter provider policy blocks a redirect to a private-network address")
+  }
+
   static func main() {
+    verifyProviderURLPolicies()
+
     BuiltinSubtitleURLProtocol.configure { _ in
       .response(status: 200, headers: ["Content-Type": "text/plain"],
                 chunks: [Data([1, 2]), Data([3, 4, 5])])
