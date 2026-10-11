@@ -42,6 +42,17 @@ def make_app(path, *, version, build, commit):
     return info
 
 
+def make_open_in_extension(app):
+    extension = app / "Contents/PlugIns/OpenInIINA.appex"
+    info_path = extension / "Contents/Info.plist"
+    info_path.parent.mkdir(parents=True)
+    info_path.write_bytes(plistlib.dumps({
+        "CFBundleIdentifier": manage.IDENTIFIER + ".OpenInIINA",
+        "CFBundleVersion": "172",
+    }))
+    return extension
+
+
 def set_fixture_xattr(path, name, value):
     """Set only synthetic fixture metadata through the system xattr utility."""
     tool = "/usr/bin/xattr"
@@ -1541,6 +1552,7 @@ with module.installation_lock(Path(sys.argv[2])):
             live_plugin = extra / "Contents/PlugIns/OpenInReel.appex"
             make_app(installed, version="1.5.0-beta2", build="172", commit="a" * 40)
             make_app(extra, version="1.4.0", build="100", commit="c" * 40)
+            installed_plugin = make_open_in_extension(installed)
             live_plugin.mkdir(parents=True)
 
             calls = []
@@ -1558,7 +1570,7 @@ with module.installation_lock(Path(sys.argv[2])):
                         {installed, missing_app}, {installed, extra}, {installed, extra},
                     ]), \
                     mock.patch.object(manage, "registered_plugins", side_effect=[
-                        {missing_plugin, live_plugin}, {live_plugin},
+                        {missing_plugin, live_plugin}, {live_plugin, installed_plugin},
                     ]), \
                     mock.patch.object(manage, "discoverable_copies", side_effect=[
                         [installed, extra], [installed, extra], [installed, extra],
@@ -1573,6 +1585,7 @@ with module.installation_lock(Path(sys.argv[2])):
             self.assertTrue(result["registrationClean"])
             self.assertFalse(result["destructiveChanges"])
             self.assertIn(("/usr/bin/pluginkit", "-r", str(missing_plugin)), calls)
+            self.assertIn(("/usr/bin/pluginkit", "-a", str(installed_plugin)), calls)
             self.assertIn((manage.LSREGISTER, "-u", str(missing_app)), calls)
             self.assertNotIn(("/usr/bin/pluginkit", "-r", str(live_plugin)), calls)
             self.assertNotIn((manage.LSREGISTER, "-u", str(extra)), calls)
@@ -1698,13 +1711,18 @@ with module.installation_lock(Path(sys.argv[2])):
             installed, source, commit = self._install_fixture(root)
             (installed / "previous-build-marker").write_text("old")
             (source / "previous-build-marker").write_text("candidate")
+            restored_plugin = make_open_in_extension(installed)
+            make_open_in_extension(source)
             audits = [
                 {"running": []},
                 {"running": []},
                 {"running": [], "preferred": str(source), "copies": [str(source)]},
             ]
 
+            calls = []
+
             def fake_run(*args):
+                calls.append(args)
                 if args[0] == "/usr/bin/ditto":
                     shutil.copytree(args[1], args[2], symlinks=True)
                 return ""
@@ -1730,6 +1748,11 @@ with module.installation_lock(Path(sys.argv[2])):
 
             self.assertEqual((installed / "previous-build-marker").read_text(), "old")
             self.assertTrue(source.exists())
+            extension_path = str(installed / "Contents/PlugIns/OpenInIINA.appex")
+            self.assertEqual(calls.count(("/usr/bin/pluginkit", "-a", extension_path)), 2)
+            self.assertIn(("/usr/bin/pluginkit", "-r", extension_path), calls)
+            self.assertIn((manage.LSREGISTER, "-f", str(installed)), calls)
+            self.assertTrue(restored_plugin.is_dir())
 
 
 if __name__ == "__main__":

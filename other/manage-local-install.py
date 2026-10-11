@@ -1590,6 +1590,32 @@ def registered_plugins():
     return {Path(match) for match in re.findall(r"\t(/[^\n]+)$", output, re.M)}
 
 
+def embedded_open_in_extension(app):
+    return Path(app) / "Contents/PlugIns/OpenInIINA.appex"
+
+
+def register_embedded_open_in_extension(app):
+    extension = embedded_open_in_extension(app)
+    try:
+        info = extension.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"Embedded Open In extension is not a real directory: {extension}")
+    run("/usr/bin/pluginkit", "-a", str(extension))
+
+
+def unregister_embedded_open_in_extension(app):
+    extension = embedded_open_in_extension(app)
+    try:
+        info = extension.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"Embedded Open In extension is not a real directory: {extension}")
+    run("/usr/bin/pluginkit", "-r", str(extension))
+
+
 def repair_plan():
     before = audit()
     if before["running"]:
@@ -2448,6 +2474,7 @@ def _repair_locked(support):
     for app in sorted(stale_apps):
         run(LSREGISTER, "-u", str(app))
     run(LSREGISTER, "-f", str(INSTALLED))
+    register_embedded_open_in_extension(INSTALLED)
     after = audit()
     after["registered"] = [str(p) for p in registrations()]
     after["registeredPlugins"] = sorted(str(p) for p in registered_plugins())
@@ -2622,6 +2649,7 @@ def _install_locked(source, support):
                     or installed_info.get("CFBundleShortVersionString") != staged_info.get("CFBundleShortVersionString")):
                 raise RuntimeError("Installed Reel does not match the verified staged build.")
             run(LSREGISTER, "-f", str(INSTALLED))
+            register_embedded_open_in_extension(INSTALLED)
             after = audit()
             after["registered"] = [str(path) for path in registrations()]
             after["registeredPlugins"] = sorted(str(path) for path in registered_plugins())
@@ -2656,6 +2684,10 @@ def _install_locked(source, support):
             rollback_errors = []
             if swapped:
                 try:
+                    unregister_embedded_open_in_extension(INSTALLED)
+                except Exception as rollback_error:
+                    rollback_errors.append(f"unregistering the candidate Open In extension failed: {rollback_error}")
+                try:
                     run(LSREGISTER, "-u", str(INSTALLED))
                 except Exception as rollback_error:
                     rollback_errors.append(f"unregistering the candidate app failed: {rollback_error}")
@@ -2663,10 +2695,22 @@ def _install_locked(source, support):
                     atomic_swap_paths(stage, INSTALLED)
                     swapped = False
                     fsync_directory(INSTALLED.parent)
-                    run(LSREGISTER, "-f", str(INSTALLED))
                 except Exception as rollback_error:
                     rollback_errors.append(f"atomically restoring the previous app failed: {rollback_error}")
+                if not swapped:
+                    try:
+                        run(LSREGISTER, "-f", str(INSTALLED))
+                    except Exception as rollback_error:
+                        rollback_errors.append(f"re-registering the restored app failed: {rollback_error}")
+                    try:
+                        register_embedded_open_in_extension(INSTALLED)
+                    except Exception as rollback_error:
+                        rollback_errors.append(f"re-registering the restored Open In extension failed: {rollback_error}")
             elif new_created and INSTALLED.exists():
+                try:
+                    unregister_embedded_open_in_extension(INSTALLED)
+                except Exception as rollback_error:
+                    rollback_errors.append(f"unregistering the initial Open In extension failed: {rollback_error}")
                 try:
                     run(LSREGISTER, "-u", str(INSTALLED))
                 except Exception as rollback_error:
