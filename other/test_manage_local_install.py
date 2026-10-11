@@ -200,6 +200,77 @@ class LocalInstallFixtures(unittest.TestCase):
                     info[f"com.colliderli.iina.build.{field}"],
                 )
 
+    def test_staged_signing_uses_runtime_and_each_targets_entitlements(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            app = root / "Reel.app"
+            extension = make_open_in_extension(app)
+            app_entitlements = root / "app.entitlements"
+            extension_entitlements = root / "extension.entitlements"
+            app_values = {
+                "com.apple.security.cs.allow-unsigned-executable-memory": True,
+                "com.apple.security.cs.disable-library-validation": True,
+            }
+            extension_values = {
+                "com.apple.security.app-sandbox": True,
+                "com.apple.security.files.user-selected.read-only": True,
+            }
+            app_entitlements.write_bytes(plistlib.dumps(app_values))
+            extension_entitlements.write_bytes(plistlib.dumps(extension_values))
+            calls = []
+
+            def fake_run(*args):
+                calls.append(args)
+                if args[:4] == ("/usr/bin/codesign", "-d", "--entitlements", ":-"):
+                    values = extension_values if Path(args[-1]) == extension else app_values
+                    return plistlib.dumps(values).decode("utf-8")
+                return ""
+
+            with mock.patch.object(manage, "APP_ENTITLEMENTS", app_entitlements), \
+                    mock.patch.object(manage, "OPEN_IN_EXTENSION_ENTITLEMENTS", extension_entitlements), \
+                    mock.patch.object(manage, "run", side_effect=fake_run):
+                manage.sign_staged_bundle(app)
+
+            signing_calls = [call for call in calls if call[0] == "/usr/bin/codesign" and "--sign" in call]
+            self.assertEqual(signing_calls, [
+                ("/usr/bin/codesign", "--force", "--deep", "--options", "runtime", "--sign", "-", str(app)),
+                ("/usr/bin/codesign", "--force", "--options", "runtime", "--entitlements",
+                 str(extension_entitlements), "--sign", "-", str(extension)),
+                ("/usr/bin/codesign", "--force", "--options", "runtime", "--entitlements",
+                 str(app_entitlements), "--sign", "-", str(app)),
+            ])
+            self.assertIn(("/usr/bin/codesign", "--verify", "--strict", str(extension)), calls)
+            self.assertIn(("/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)), calls)
+
+    def test_staged_signing_fails_closed_when_extension_loses_sandbox_entitlement(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            app = root / "Reel.app"
+            extension = make_open_in_extension(app)
+            app_entitlements = root / "app.entitlements"
+            extension_entitlements = root / "extension.entitlements"
+            app_values = {"com.apple.security.cs.disable-library-validation": True}
+            expected_extension_values = {"com.apple.security.app-sandbox": True}
+            app_entitlements.write_bytes(plistlib.dumps(app_values))
+            extension_entitlements.write_bytes(plistlib.dumps(expected_extension_values))
+            calls = []
+
+            def fake_run(*args):
+                calls.append(args)
+                if args[:4] == ("/usr/bin/codesign", "-d", "--entitlements", ":-"):
+                    values = {} if Path(args[-1]) == extension else app_values
+                    return plistlib.dumps(values).decode("utf-8")
+                return ""
+
+            with mock.patch.object(manage, "APP_ENTITLEMENTS", app_entitlements), \
+                    mock.patch.object(manage, "OPEN_IN_EXTENSION_ENTITLEMENTS", extension_entitlements), \
+                    mock.patch.object(manage, "run", side_effect=fake_run):
+                with self.assertRaisesRegex(RuntimeError, "does not preserve target entitlements"):
+                    manage.sign_staged_bundle(app)
+
+            self.assertFalse(any(call[0] == "/usr/bin/codesign" and "--entitlements" in call
+                                 and str(call[-1]) == str(app) for call in calls))
+
     def test_identity_rejects_symlink_fifo_oversized_and_malformed_info_plists(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -1632,6 +1703,7 @@ with module.installation_lock(Path(sys.argv[2])):
                     mock.patch.object(manage, "current_checkout_commit", return_value=commit), \
                     mock.patch.object(manage, "ensure_clean_checkout"), \
                     mock.patch.object(manage, "is_ancestor", return_value=True), \
+                    mock.patch.object(manage, "sign_staged_bundle"), \
                     mock.patch.object(manage, "run", side_effect=fake_run), \
                     mock.patch.object(manage, "audit", side_effect=audits), \
                     mock.patch.object(manage, "archive", return_value={"archive": "fixture.zip"}), \
@@ -1693,6 +1765,7 @@ with module.installation_lock(Path(sys.argv[2])):
                     mock.patch.object(manage, "current_checkout_commit", return_value=commit), \
                     mock.patch.object(manage, "ensure_clean_checkout"), \
                     mock.patch.object(manage, "is_ancestor", return_value=True), \
+                    mock.patch.object(manage, "sign_staged_bundle"), \
                     mock.patch.object(manage, "run", side_effect=fake_run), \
                     mock.patch.object(manage, "audit", side_effect=audits), \
                     mock.patch.object(manage, "registrations", return_value=[installed]), \
@@ -1737,6 +1810,7 @@ with module.installation_lock(Path(sys.argv[2])):
             with mock.patch.object(manage, "INSTALLED", installed), \
                     mock.patch.object(manage, "current_checkout_commit", return_value=commit), \
                     mock.patch.object(manage, "ensure_clean_checkout"), \
+                    mock.patch.object(manage, "sign_staged_bundle"), \
                     mock.patch.object(manage, "atomic_swap_paths", side_effect=fake_swap), \
                     mock.patch.object(manage, "run", side_effect=fake_run), \
                     mock.patch.object(manage, "audit", side_effect=audits), \
