@@ -1744,9 +1744,11 @@ with module.installation_lock(Path(sys.argv[2])):
                     mock.patch.object(manage, "registered_plugins", return_value=[]), \
                     mock.patch.object(manage, "discoverable_copies", return_value=[source]), \
                     mock.patch.object(manage, "archive", return_value={"archive": "fixture.zip"}):
-                with self.assertRaisesRegex(RuntimeError, "restoring the previous bundle"):
+                with self.assertRaisesRegex(RuntimeError, "restoring the previous bundle") as error:
                     manage.install(source, root / "Support")
 
+            self.assertIn('"canonicalAppRegistered": false', str(error.exception))
+            self.assertIn('"openExtensionRegistered": false', str(error.exception))
             self.assertEqual((installed / "previous-build-marker").read_text(), "old")
             self.assertTrue(source.exists())
             extension_path = str(installed / "Contents/PlugIns/OpenInIINA.appex")
