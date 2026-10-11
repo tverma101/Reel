@@ -19,10 +19,11 @@ checkout is `~/Projects/iina`, and local support files live at `~/Documents/IINA
 
 Build from a committed, canonical Reel checkout, increasing `CURRENT_PROJECT_VERSION` for each
 published build and keeping it monotonic across marketing-version changes. The app embeds the
-checked-out commit, version, and build number; the installer
-rejects stale metadata, downgrades, reused build numbers for a new commit, and commits that are not
-descendants of the installed build. Close every Reel copy before installing. Install and repair
-serialize through a private lock next to `/Applications/Reel.app`; they also take the same private
+checked-out commit, version, build number, and Xcode configuration; the installer
+rejects stale metadata, non-Release products, downgrades, reused build numbers for a new commit,
+and commits that are not descendants of the installed build. Close every Reel copy before
+installing. Install and repair serialize through a private lock next to `/Applications/Reel.app`;
+they also take the same private
 launch-transition lock under `~/Library/Caches` that the Desktop command holds through its final
 bundle verification, profile migration, LaunchServices request, and bounded startup check. A
 durable `~/Library/Caches/.reel-launch-handoff.json` record is published before the open
@@ -83,7 +84,7 @@ mkdir -p "$HOME/Documents/IINA/Validation"
 xcodebuild -project iina.xcodeproj -scheme iina -configuration Release \
   -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath "$HOME/Documents/IINA/Build.noindex" \
-  ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO -quiet build \
+    ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO build \
   > "$HOME/Documents/IINA/Validation/build.log" 2>&1
 ```
 

@@ -1391,5 +1391,17 @@
 	<string>$(SDK_VERSION)</string>
 	<key>com.colliderli.iina.build.xcode</key>
 	<string>$(XCODE_VERSION_ACTUAL)</string>
+	<key>io.github.tverma101.reel.build.branch</key>
+	<string>IINA_BUILD_BRANCH</string>
+	<key>io.github.tverma101.reel.build.commit</key>
+	<string>IINA_BUILD_COMMIT</string>
+	<key>io.github.tverma101.reel.build.configuration</key>
+	<string>$(CONFIGURATION)</string>
+	<key>io.github.tverma101.reel.build.date</key>
+	<string>IINA_BUILD_DATE</string>
+	<key>io.github.tverma101.reel.build.sdk</key>
+	<string>$(SDK_VERSION)</string>
+	<key>io.github.tverma101.reel.build.xcode</key>
+	<string>$(XCODE_VERSION_ACTUAL)</string>
 </dict>
 </plist>

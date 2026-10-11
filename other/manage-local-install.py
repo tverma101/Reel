@@ -27,6 +27,7 @@ import zlib
 
 IDENTIFIER = "io.github.tverma101.reel"
 BUILD_COMMIT_KEY = "com.colliderli.iina.build.commit"
+BUILD_CONFIGURATION_KEY = "com.colliderli.iina.build.configuration"
 INSTALLED = Path("/Applications/Reel.app")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 REEL_LAUNCH_LOCK = Path.home() / "Library/Caches/.reel-install-transition.lock"
@@ -1688,6 +1689,12 @@ def validate_candidate(candidate_info, installed_info=None, *, checkout_commit=N
         raise RuntimeError(
             "Build product is stale: its embedded commit "
             f"{candidate_commit[:12]} does not match this checkout at {checkout_commit[:12]}. Rebuild first."
+        )
+    candidate_configuration = candidate_info.get(BUILD_CONFIGURATION_KEY)
+    if candidate_configuration != "Release":
+        raise RuntimeError(
+            "Build product is not a Release configuration: "
+            f"{candidate_configuration!r}. Rebuild with -configuration Release."
         )
     candidate_version = _release_key(candidate_info.get("CFBundleShortVersionString"), "CFBundleShortVersionString")
     candidate_build = _build_key(candidate_info.get("CFBundleVersion"))

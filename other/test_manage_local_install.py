@@ -36,6 +36,7 @@ def make_app(path, *, version, build, commit):
         "CFBundleShortVersionString": version,
         "CFBundleVersion": build,
         manage.BUILD_COMMIT_KEY: commit,
+        manage.BUILD_CONFIGURATION_KEY: "Release",
     }
     (contents / "Info.plist").write_bytes(plistlib.dumps(info))
     return info
@@ -177,6 +178,17 @@ def archive_manifest_record(archive_path=None):
 
 
 class LocalInstallFixtures(unittest.TestCase):
+    def test_info_plist_exposes_build_metadata_under_reel_bundle_identifier(self):
+        info_path = SCRIPT.parent.parent / "iina/Info.plist"
+        info = plistlib.loads(info_path.read_bytes())
+        for field in ("branch", "commit", "configuration", "date", "sdk", "xcode"):
+            with self.subTest(field=field):
+                self.assertIn(f"{manage.IDENTIFIER}.build.{field}", info)
+                self.assertEqual(
+                    info[f"{manage.IDENTIFIER}.build.{field}"],
+                    info[f"com.colliderli.iina.build.{field}"],
+                )
+
     def test_identity_rejects_symlink_fifo_oversized_and_malformed_info_plists(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -1461,6 +1473,7 @@ with module.installation_lock(Path(sys.argv[2])):
             "CFBundleShortVersionString": configured["MARKETING_VERSION"],
             "CFBundleVersion": configured["CURRENT_PROJECT_VERSION"],
             manage.BUILD_COMMIT_KEY: commit,
+            manage.BUILD_CONFIGURATION_KEY: "Release",
         }
         installed = dict(candidate)
         installed["CFBundleShortVersionString"] = "99.0"
@@ -1496,6 +1509,11 @@ with module.installation_lock(Path(sys.argv[2])):
         with self.assertRaisesRegex(RuntimeError, "Build product is stale"):
             manage.validate_candidate(stale, checkout_commit=commit)
 
+        debug_build = dict(candidate)
+        debug_build[manage.BUILD_CONFIGURATION_KEY] = "Debug"
+        with self.assertRaisesRegex(RuntimeError, "not a Release configuration"):
+            manage.validate_candidate(debug_build, checkout_commit=commit)
+
     def test_candidate_commit_must_follow_installed_commit(self):
         configured = manage.configured_build_metadata()
         commit = manage.current_checkout_commit()
@@ -1503,6 +1521,7 @@ with module.installation_lock(Path(sys.argv[2])):
             "CFBundleShortVersionString": configured["MARKETING_VERSION"],
             "CFBundleVersion": configured["CURRENT_PROJECT_VERSION"],
             manage.BUILD_COMMIT_KEY: commit,
+            manage.BUILD_CONFIGURATION_KEY: "Release",
         }
         installed = {
             "CFBundleShortVersionString": "1.4.0",
