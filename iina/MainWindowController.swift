@@ -916,7 +916,7 @@ class MainWindowController: PlayerWindowController {
     let liveTextEnabled = Preference.bool(for: .enableLiveText)
     for buttonType in effectiveButtons {
       if buttonType == .airPlay {
-        // Apple's route picker presents the AirPlay speaker list itself.
+        // Route this Reel player's audio through mpv's active output driver.
         if airPlay == nil { airPlay = AirPlayAudioRoutePicker(player: player) }
         let picker = airPlay!.makePickerView()
         picker.translatesAutoresizingMaskIntoConstraints = false

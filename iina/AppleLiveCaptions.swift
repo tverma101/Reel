@@ -13,6 +13,39 @@ import CoreAudio
 import Cocoa
 import Speech
 
+/// Keeps a cancelled SpeechAnalyzer session alive until Speech has finished releasing it. A new
+/// chunk must not start while the previous analyzer is still draining its input and results.
+@available(macOS 26, *)
+private final class SpeechAnalyzerCancellation: @unchecked Sendable {
+  private let analyzer: SpeechAnalyzer
+  private let lock = NSLock()
+  private var cancellationRequested = false
+  private var cancellationTask: Task<Void, Never>?
+
+  init(analyzer: SpeechAnalyzer) {
+    self.analyzer = analyzer
+  }
+
+  func cancel() {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !cancellationRequested else { return }
+    cancellationRequested = true
+    let analyzer = analyzer
+    cancellationTask = Task { await analyzer.cancelAndFinishNow() }
+  }
+
+  func waitUntilCancelled() async {
+    await currentCancellationTask()?.value
+  }
+
+  private func currentCancellationTask() -> Task<Void, Never>? {
+    lock.lock()
+    defer { lock.unlock() }
+    return cancellationTask
+  }
+}
+
 private struct LiveCaptionAppearance {
   let font: NSFont
   let textColor: NSColor
@@ -648,7 +681,6 @@ final class AppleLiveCaptions: @unchecked Sendable {
     task?.cancel()
     task = nil
     analyzerTask?.cancel()
-    analyzerTask = nil
     speechLocaleCheckTask?.cancel()
     speechLocaleCheckTask = nil
     recognizer = nil
@@ -669,7 +701,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
   }
 
   private func startTimer() {
-    timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+    timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
       self?.tick()
     }
   }
@@ -694,7 +726,6 @@ final class AppleLiveCaptions: @unchecked Sendable {
       task?.cancel()
       task = nil
       analyzerTask?.cancel()
-      analyzerTask = nil
       inFlight = false
       recognitionStartedAt = nil
       requestedStart = nil
@@ -724,7 +755,6 @@ final class AppleLiveCaptions: @unchecked Sendable {
       task?.cancel()
       task = nil
       analyzerTask?.cancel()
-      analyzerTask = nil
       inFlight = false
       recognitionStartedAt = nil
       requestedStart = nil
@@ -753,7 +783,6 @@ final class AppleLiveCaptions: @unchecked Sendable {
       task?.cancel()
       task = nil
       analyzerTask?.cancel()
-      analyzerTask = nil
       inFlight = false
       self.recognitionStartedAt = nil
     }
@@ -769,7 +798,6 @@ final class AppleLiveCaptions: @unchecked Sendable {
       task?.cancel()
       task = nil
       analyzerTask?.cancel()
-      analyzerTask = nil
       inFlight = false
       recognitionStartedAt = nil
       self.requestedStart = nil
@@ -788,7 +816,8 @@ final class AppleLiveCaptions: @unchecked Sendable {
     // Captions wait for final text, so the next chunk starts well before it is needed; a stream
     // starts earlier still in case its connection has to be reopened.
     let lookahead: Double = url.isFileURL ? 4 : 6
-    if !inFlight && (requestedStart == nil || position >= requestedStart! + chunkDuration - lookahead) {
+    if !inFlight, analyzerTask == nil,
+       requestedStart == nil || position >= requestedStart! + chunkDuration - lookahead {
       let start = requestedStart.map { $0 + chunkDuration } ?? floor(position / chunkDuration) * chunkDuration
       transcribe(url: url, start: start)
     }
@@ -965,12 +994,20 @@ final class AppleLiveCaptions: @unchecked Sendable {
     let localeID = canonicalLocaleID(locale)
     analyzerTask = Task { [weak self] in
       guard let captions = self else { return }
+      defer {
+        Task { @MainActor [weak captions] in
+          captions?.speechAnalyzerDidFinish(generation: token)
+        }
+      }
       do {
+        try Task.checkCancellation()
         // Final results only: chunks are transcribed ahead of playback, so the text does not need to
         // be shown as a draft and rewritten on screen. Word timings place each caption line.
         let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [],
                                             attributeOptions: [.audioTimeRange])
-        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+        let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
+        try Task.checkCancellation()
+        guard let format else {
           Logger.log("Apple live captions have no installed on-device model for \(locale.identifier)",
                      level: .warning, subsystem: Logger.Sub.onlinesub)
           await MainActor.run {
@@ -986,6 +1023,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
           }
           return
         }
+        try Task.checkCancellation()
         guard let converter = AVAudioConverter(from: buffer.format, to: format),
               let converted = AVAudioPCMBuffer(pcmFormat: format,
                                                frameCapacity: AVAudioFrameCount(Double(buffer.frameLength) *
@@ -1006,6 +1044,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
         writer.yield(AnalyzerInput(buffer: converted))
         writer.finish()
         let analyzer = SpeechAnalyzer(modules: [transcriber])
+        let cancellation = SpeechAnalyzerCancellation(analyzer: analyzer)
         let results = Task {
           for try await result in transcriber.results {
             guard !Task.isCancelled else { break }
@@ -1024,10 +1063,11 @@ final class AppleLiveCaptions: @unchecked Sendable {
               let text = String(result.text.characters)
               words = [.init(text: text, start: start + result.range.start.seconds, end: start + result.range.end.seconds)]
             }
+            let finalWords = words
             await MainActor.run {
               guard captions.generation == token, captions.player?.info.currentURL == url else { return }
-              captions.captionResults.applyFinalResult(chunkStart: start, words: words)
-              Logger.log("Apple live captions: \(words.count) words at \(words.first?.start ?? -1)s for chunk \(start)s",
+              captions.captionResults.applyFinalResult(chunkStart: start, words: finalWords)
+              Logger.log("Apple live captions: \(finalWords.count) words at \(finalWords.first?.start ?? -1)s for chunk \(start)s",
                          level: .debug, subsystem: Logger.Sub.onlinesub)
             }
           }
@@ -1035,13 +1075,22 @@ final class AppleLiveCaptions: @unchecked Sendable {
         // This is an unstructured task. Always stop its result consumer when this chunk exits,
         // including cancellation and timeout paths, so it cannot outlive the analyzer session.
         defer { results.cancel() }
-        do {
-          let last = try await analyzer.analyzeSequence(stream)
-          if let last { try await analyzer.finalizeAndFinish(through: last) }
-          try await results.value
-        } catch {
-          results.cancel()
-          throw error
+        try await withTaskCancellationHandler {
+          do {
+            try Task.checkCancellation()
+            let last = try await analyzer.analyzeSequence(stream)
+            try Task.checkCancellation()
+            if let last { try await analyzer.finalizeAndFinish(through: last) }
+            try await results.value
+          } catch {
+            results.cancel()
+            cancellation.cancel()
+            await cancellation.waitUntilCancelled()
+            try? await results.value
+            throw error
+          }
+        } onCancel: {
+          cancellation.cancel()
         }
       } catch {
         if !Task.isCancelled {
@@ -1049,13 +1098,15 @@ final class AppleLiveCaptions: @unchecked Sendable {
                      level: .warning, subsystem: Logger.Sub.onlinesub)
         }
       }
-      await MainActor.run {
-        guard captions.generation == token else { return }
-        captions.inFlight = false
-        captions.recognitionStartedAt = nil
-        captions.analyzerTask = nil
-      }
     }
+  }
+
+  @MainActor
+  private func speechAnalyzerDidFinish(generation token: Int) {
+    analyzerTask = nil
+    guard generation == token else { return }
+    inFlight = false
+    recognitionStartedAt = nil
   }
 
   private var selectedSpeechLocale: Locale {

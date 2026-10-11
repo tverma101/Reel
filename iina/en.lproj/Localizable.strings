@@ -1069,5 +1069,8 @@
 "osd.apple_live_captions_on" = "Apple Live Captions: On";
 "osd.apple_live_captions_off" = "Apple Live Captions: Off";
 "osc_toolbar.airplay" = "AirPlay";
+"osc_toolbar.airplay_output.heading" = "Reel Audio Output";
+"osc_toolbar.airplay_output.default" = "System Default";
+"osc_toolbar.airplay_output.empty" = "No audio outputs available";
 "osd.airplay_pinned_device" = "AirPlay speakers need Audio Device set to Auto";
 "osd.airplay_pinned_device_detail" = "Choose Audio > Audio Device > Auto, then pick speakers.";

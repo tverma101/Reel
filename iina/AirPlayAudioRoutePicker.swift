@@ -2,16 +2,13 @@
 //  AirPlayAudioRoutePicker.swift
 //  iina
 //
-//  The AirPlay button in the on-screen controller. It is Apple's route picker without a player, so
-//  it lists the system audio routes (this Mac and any AirPlay speakers, several at once for
-//  multi-room). Choosing speakers changes the system output, and mpv follows it as long as the
-//  Audio Device setting is Auto. Video keeps playing in the window.
+//  The on-screen AirPlay button selects an output for this Reel player through mpv. This keeps
+//  routing attached to Reel's CoreAudio output instead of relying on an AVPlayer route picker.
 //
 
-import AVKit
 import Cocoa
 
-final class AirPlayAudioRoutePicker: NSObject, AVRoutePickerViewDelegate {
+final class AirPlayAudioRoutePicker: NSObject {
   private weak var player: PlayerCore?
 
   init(player: PlayerCore) {
@@ -19,25 +16,61 @@ final class AirPlayAudioRoutePicker: NSObject, AVRoutePickerViewDelegate {
     super.init()
   }
 
-  func makePickerView() -> AVRoutePickerView {
-    let picker = AVRoutePickerView()
-    picker.delegate = self
-    picker.isRoutePickerButtonBordered = false
-    picker.setRoutePickerButtonColor(.labelColor, for: .normal)
-    picker.setRoutePickerButtonColor(.secondaryLabelColor, for: .normalHighlighted)
-    picker.setRoutePickerButtonColor(.controlAccentColor, for: .active)
-    picker.setRoutePickerButtonColor(.controlAccentColor, for: .activeHighlighted)
-    picker.toolTip = Preference.ToolBarButton.airPlay.localizedDescription()
-    return picker
+  func makePickerView() -> NSButton {
+    let button = NSButton()
+    button.image = Preference.ToolBarButton.airPlay.image()
+    button.imagePosition = .imageOnly
+    button.isBordered = false
+    button.target = self
+    button.action = #selector(presentAudioOutputs(_:))
+    button.toolTip = NSLocalizedString("osc_toolbar.airplay", comment: "AirPlay")
+    button.setAccessibilityLabel(button.toolTip ?? "AirPlay")
+    return button
   }
 
-  func routePickerViewWillBeginPresentingRoutes(_ routePickerView: AVRoutePickerView) {
-    // A device chosen under Audio > Audio Device bypasses the system output, so the speakers picked
-    // here would not be heard from this player.
-    guard let player, let device = player.mpv.getString(MPVProperty.audioDevice), device != "auto" else { return }
-    player.log("AirPlay picker opened while audio-device is pinned to \(device)")
-    player.sendOSD(.customWithDetail(
-      NSLocalizedString("osd.airplay_pinned_device", comment: "AirPlay needs Audio Device set to Auto"),
-      NSLocalizedString("osd.airplay_pinned_device_detail", comment: "How to switch to Auto")))
+  @objc private func presentAudioOutputs(_ sender: NSButton) {
+    guard let player else { return }
+    let menu = NSMenu()
+    menu.autoenablesItems = false
+
+    let heading = NSMenuItem(title: NSLocalizedString("osc_toolbar.airplay_output.heading",
+                                                      comment: "Heading for Reel's audio output menu"),
+                             action: nil, keyEquivalent: "")
+    heading.isEnabled = false
+    menu.addItem(heading)
+
+    let currentDevice = player.mpv.getString(MPVProperty.audioDevice) ?? "auto"
+    let automatic = NSMenuItem(title: NSLocalizedString("osc_toolbar.airplay_output.default",
+                                                        comment: "Use the system default audio output"),
+                               action: #selector(selectAudioOutput(_:)), keyEquivalent: "")
+    automatic.target = self
+    automatic.representedObject = "auto"
+    automatic.state = currentDevice == "auto" ? .on : .off
+    menu.addItem(automatic)
+
+    let devices = player.getAudioDevices().filter { $0.name != "auto" }
+    if devices.isEmpty {
+      let empty = NSMenuItem(title: NSLocalizedString("osc_toolbar.airplay_output.empty",
+                                                      comment: "No audio output devices are available"),
+                             action: nil, keyEquivalent: "")
+      empty.isEnabled = false
+      menu.addItem(empty)
+    } else {
+      menu.addItem(.separator())
+      for device in devices {
+        let item = NSMenuItem(title: device.desc, action: #selector(selectAudioOutput(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = device.name
+        item.state = device.name == currentDevice ? .on : .off
+        menu.addItem(item)
+      }
+    }
+
+    menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height), in: sender)
+  }
+
+  @objc private func selectAudioOutput(_ sender: NSMenuItem) {
+    guard let player, let name = sender.representedObject as? String else { return }
+    player.setAudioDevice(name)
   }
 }

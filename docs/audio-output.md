@@ -20,11 +20,11 @@ the next launch goes back to whatever Settings still has.
 
 ## AirPlay button
 
-The AirPlay button in the on-screen controller opens Apple's speaker picker. It lists this Mac and
-the AirPlay speakers on the network, and several can be ticked at once. A choice there changes the
-Mac's sound output, not only Reel's, and Reel follows it while the audio device is `auto`. If Reel
-is pinned to a specific device, opening the picker shows a reminder to switch Audio → Audio Device
-back to Auto. The video stays in the Reel window.
+The AirPlay button in the on-screen controller opens Reel's audio-output menu. It lists the devices
+available through the active mpv output driver, including AirPlay destinations when macOS and that
+driver expose them. Choosing a named device changes Reel's output only; other Mac apps keep their
+current output. **System Default** selects `auto` and follows the macOS default. The video stays in
+the Reel window. The same current-session choice is available from **Audio → Audio Device**.
 
 AirPlay speakers add delay. If the sound runs behind the picture, adjust it with the audio delay
 controls in the Audio sidebar; a resumed file remembers its delay.
@@ -50,10 +50,9 @@ not there.
 
 mpv exposes the selection through its
 [`--audio-device`](https://mpv.io/manual/stable/#options-audio-device) option
-and the matching `audio-device` property. Apart from the AirPlay button above,
-which hands the choice to macOS, Reel never calls CoreAudio or AirPlay APIs itself. When macOS exposes an AirPlay destination as an audio
-output device, mpv can select it like another output. Device discovery can vary
-with the macOS version, network, and active mpv output driver.
+and the matching `audio-device` property. Reel applies the selected output to its mpv player; it does
+not change the system-wide output. Device discovery can vary with the macOS version, network, and
+active mpv output driver.
 
 Reel also chooses the mpv audio output driver, and mpv ties each listed device
 to one driver. The list is filtered to the active driver so that selecting a

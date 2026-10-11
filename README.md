@@ -95,8 +95,8 @@ see [Local macOS installation](docs/local-installation.md).
 ## Audio output
 
 Reel selects its own audio output device through mpv, so you can send playback to an AirPlay
-device without changing what the rest of the Mac does. The AirPlay button in the on-screen
-controller opens the system speaker picker instead. See
+device without changing what the rest of the Mac does. Use the AirPlay button in the on-screen
+controller or **Audio → Audio Device** to choose an output for the current session. See
 [Audio output devices](docs/audio-output.md).
 
 For video casting to an Apple TV while Reel remains the remote, see
