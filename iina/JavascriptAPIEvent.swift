@@ -174,10 +174,10 @@ class JavascriptAPIEventCallback: EventCallable {
   }
 
   private func invoke(withArguments args: [Any]) -> JSValue? {
-    guard playerCanReceiveCallbacks else { return nil }
-    callback?.call(withArguments: args.map { arg in
+    guard playerCanReceiveCallbacks, let callback else { return nil }
+    return callback.call(withArguments: args.map { arg in
       if let rect = arg as? CGRect {
-        return JSValue(rect: rect, in: callback!.context)!
+        return JSValue(rect: rect, in: callback.context)!
       } else {
         return arg
       }

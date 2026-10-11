@@ -1058,14 +1058,42 @@ with module.installation_lock(Path(sys.argv[2])):
         with self.assertRaisesRegex(RuntimeError, "uncommitted tracked changes"):
             manage.ensure_clean_checkout(" M iina/PlayerCore.swift\n")
 
-    def test_registration_parser_uses_reel_bundle_identity(self):
-        separator = "-" * 80
-        listing = separator.join([
-            "\nidentifier: com.colliderli.iina\npath: /Applications/IINA.app (0x100)",
-            "\nidentifier: io.github.tverma101.reel\npath: /Applications/Reel.app (0x101)",
-        ])
-        with mock.patch.object(manage, "run", return_value=listing):
-            self.assertEqual(manage.registrations(), [Path("/Applications/Reel.app")])
+    def test_registration_parser_streams_above_generic_subprocess_limit(self):
+        with tempfile.TemporaryDirectory(prefix="reel-lsregister-stream-") as folder:
+            fixture = Path(folder) / "lsregister-fixture"
+            fixture.write_text(
+                f"#!{sys.executable}\n"
+                "import sys\n"
+                "stream = sys.stdout.buffer\n"
+                "chunk = b'x' * 4096 + b'\\n'\n"
+                "for _ in range(2300): stream.write(chunk)\n"
+                "separator = b'-' * 80 + b'\\n'\n"
+                "stream.write(separator)\n"
+                "stream.write(b'identifier: com.colliderli.iina\\n')\n"
+                "stream.write(b'path: /Applications/IINA.app (0x100)\\n')\n"
+                "stream.write(separator)\n"
+                "stream.write(b'identifier: io.github.tverma101.reel\\n')\n"
+                "stream.write(b'path: /Applications/Reel.app (0x101)\\n')\n",
+                encoding="utf-8",
+            )
+            fixture.chmod(0o755)
+            with mock.patch.object(manage, "LSREGISTER", str(fixture)):
+                self.assertEqual(manage.registrations(), [Path("/Applications/Reel.app")])
+
+    def test_registration_parser_enforces_streamed_dump_size_limit(self):
+        with tempfile.TemporaryDirectory(prefix="reel-lsregister-limit-") as folder:
+            fixture = Path(folder) / "lsregister-fixture"
+            fixture.write_text(
+                f"#!{sys.executable}\n"
+                "import sys\n"
+                "sys.stdout.buffer.write(b'x' * 4096 + b'\\n')\n",
+                encoding="utf-8",
+            )
+            fixture.chmod(0o755)
+            with mock.patch.object(manage, "LSREGISTER", str(fixture)), \
+                    mock.patch.object(manage, "MAX_LSREGISTER_DUMP_BYTES", 1024):
+                with self.assertRaisesRegex(RuntimeError, "output limit"):
+                    manage.registrations()
 
     def test_subprocess_output_is_capped_across_stdout_and_stderr(self):
         script = "import sys; sys.stdout.write('o' * 50); sys.stderr.write('e' * 50)"

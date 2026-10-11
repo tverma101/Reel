@@ -157,7 +157,7 @@ private func subtitleModelStagingLeaseNeedsTransfer(_ stagingLease: SubtitleMode
 /// Streams a pinned model into its staging file and cancels before retaining more than the bound.
 /// A URLSession download task would write an unbounded response to its temporary file first.
 private final class BoundedSubtitleModelTransfer: NSObject, URLSessionDataDelegate {
-  typealias Completion = (Result<URL, Error>) -> Void
+  typealias Completion = (Swift.Result<URL, Error>) -> Void
 
   private let lock = NSLock()
   private let request: URLRequest
@@ -287,7 +287,7 @@ private final class BoundedSubtitleModelTransfer: NSObject, URLSessionDataDelega
     }
   }
 
-  private func finish(_ result: Result<URL, Error>) {
+  private func finish(_ result: Swift.Result<URL, Error>) {
     lock.lock()
     guard !finished else {
       lock.unlock()

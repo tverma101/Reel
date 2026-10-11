@@ -134,23 +134,32 @@ patch --silent --batch --forward -F 0 -p1 -d "$WORK/source" < "$PATCH_FILE"
 # labels. Apply them to the source before comparing and installing it so the
 # package cannot silently drift from either input or lose its Reel branding on
 # a future rebuild.
-python3 - "$WORK/source/plugin/main.js" <<'PY'
+python3 - "$WORK/source/plugin/main.js" "$WORK/source/plugin/tests/runtime.test.mjs" <<'PY'
 import pathlib
 import sys
 
-path = pathlib.Path(sys.argv[1])
-source = path.read_text(encoding="utf-8")
-replacements = {
-    "reinstall the plugin through IINA (Settings → Plugins → Install)":
-        ("reinstall the plugin through Reel (Settings → Plugins → Install)", 1),
-    "cannot determine IINA process id": ("cannot determine Reel process id", 2),
-}
-for old, (new, expected) in replacements.items():
-    count = source.count(old)
-    if count != expected:
-        raise SystemExit(f"Expected {expected} occurrence(s) of {old!r}, found {count}")
-    source = source.replace(old, new)
-path.write_text(source, encoding="utf-8")
+updates = (
+    (
+        pathlib.Path(sys.argv[1]),
+        {
+            "reinstall the plugin through IINA (Settings → Plugins → Install)":
+                ("reinstall the plugin through Reel (Settings → Plugins → Install)", 1),
+            "cannot determine IINA process id": ("cannot determine Reel process id", 2),
+        },
+    ),
+    (
+        pathlib.Path(sys.argv[2]),
+        {"assert.match(s.msg, /IINA/);": ("assert.match(s.msg, /Reel/);", 1)},
+    ),
+)
+for path, replacements in updates:
+    source = path.read_text(encoding="utf-8")
+    for old, (new, expected) in replacements.items():
+        count = source.count(old)
+        if count != expected:
+            raise SystemExit(f"Expected {expected} occurrence(s) of {old!r} in {path}, found {count}")
+        source = source.replace(old, new)
+    path.write_text(source, encoding="utf-8")
 PY
 
 (

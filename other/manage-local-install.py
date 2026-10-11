@@ -33,6 +33,9 @@ REEL_LAUNCH_LOCK = Path.home() / "Library/Caches/.reel-install-transition.lock"
 REEL_LAUNCH_HANDOFF = REEL_LAUNCH_LOCK.with_name(".reel-launch-handoff.json")
 MAX_LAUNCH_HANDOFF_BYTES = 1024
 MAX_PROCESS_OUTPUT_BYTES = 8 * 1024 * 1024
+MAX_LSREGISTER_DUMP_BYTES = 64 * 1024 * 1024
+MAX_LSREGISTER_DUMP_LINE_BYTES = 64 * 1024
+MAX_REGISTERED_APP_PATHS = 4096
 RENAME_SWAP = 0x00000002
 LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 AUDIT_SWIFT = '''import AppKit
@@ -1471,15 +1474,109 @@ def audit():
 
 
 def registrations():
-    dump = run(LSREGISTER, "-dump")
+    process = subprocess.Popen(
+        [LSREGISTER, "-dump"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    stderr = bytearray()
+    stderr_exceeded = threading.Event()
+    stream_errors = []
     paths = []
-    for block in dump.split("--------------------------------------------------------------------------------"):
-        identifier_pattern = rf"^identifier:\s+{re.escape(IDENTIFIER)}\s*$"
-        if re.search(identifier_pattern, block, re.M):
-            match = re.search(r"^path:\s+(.*?) \(0x", block, re.M)
-            if match:
-                paths.append(Path(match[1]))
-    return list(dict.fromkeys(paths))
+    seen = set()
+
+    def drain_stderr():
+        while True:
+            try:
+                chunk = process.stderr.read(64 * 1024)
+            except (OSError, ValueError):
+                return
+            if not chunk:
+                return
+            remaining = MAX_PROCESS_OUTPUT_BYTES - len(stderr)
+            if remaining > 0:
+                stderr.extend(chunk[:remaining])
+            if len(chunk) > max(remaining, 0):
+                stderr_exceeded.set()
+
+    def commit_block(identifier_matches, path):
+        if not identifier_matches or path is None or path in seen:
+            return
+        if len(paths) >= MAX_REGISTERED_APP_PATHS:
+            raise RuntimeError(
+                f"Launch Services dump contains more than {MAX_REGISTERED_APP_PATHS} Reel registrations.")
+        seen.add(path)
+        paths.append(path)
+
+    def parse_stdout():
+        total_bytes = 0
+        identifier_matches = False
+        path = None
+        separator = b"-" * 80
+        encoding = locale.getpreferredencoding(False) or "utf-8"
+        try:
+            while True:
+                raw_line = process.stdout.readline(MAX_LSREGISTER_DUMP_LINE_BYTES + 1)
+                if not raw_line:
+                    break
+                if len(raw_line) > MAX_LSREGISTER_DUMP_LINE_BYTES:
+                    raise RuntimeError(
+                        f"Launch Services dump contains a line larger than "
+                        f"{MAX_LSREGISTER_DUMP_LINE_BYTES} bytes.")
+                total_bytes += len(raw_line)
+                if total_bytes > MAX_LSREGISTER_DUMP_BYTES:
+                    raise RuntimeError(
+                        f"Launch Services dump exceeded the {MAX_LSREGISTER_DUMP_BYTES}-byte output limit.")
+                if raw_line.rstrip(b"\r\n") == separator:
+                    commit_block(identifier_matches, path)
+                    identifier_matches = False
+                    path = None
+                    continue
+                line = raw_line.decode(encoding, errors="replace")
+                if line.startswith("identifier:"):
+                    identifier_matches = line.partition(":")[2].strip() == IDENTIFIER
+                elif path is None and line.startswith("path:"):
+                    match = re.match(r"^path:\s+(.*?) \(0x", line)
+                    if match:
+                        path = Path(match[1])
+            commit_block(identifier_matches, path)
+        except Exception as error:
+            stream_errors.append(error)
+            try:
+                process.kill()
+            except OSError:
+                pass
+
+    readers = [
+        threading.Thread(target=parse_stdout, name="lsregister-parser", daemon=True),
+        threading.Thread(target=drain_stderr, name="lsregister-stderr", daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        returncode = process.wait(timeout=120)
+    except subprocess.TimeoutExpired as error:
+        process.kill()
+        process.wait()
+        for reader in readers:
+            reader.join(timeout=1)
+        process.stdout.close()
+        process.stderr.close()
+        raise RuntimeError(f"{LSREGISTER} timed out after 120 seconds.") from error
+    for reader in readers:
+        reader.join(timeout=5)
+    if any(reader.is_alive() for reader in readers):
+        process.stdout.close()
+        process.stderr.close()
+        raise RuntimeError(f"{LSREGISTER} did not close its output streams after exiting.")
+    process.stdout.close()
+    process.stderr.close()
+    if stream_errors:
+        raise stream_errors[0]
+    if stderr_exceeded.is_set():
+        raise RuntimeError(f"{LSREGISTER} exceeded the {MAX_PROCESS_OUTPUT_BYTES}-byte stderr limit.")
+    encoding = locale.getpreferredencoding(False) or "utf-8"
+    stderr_text = stderr.decode(encoding, errors="replace").strip()
+    if returncode:
+        raise RuntimeError(f"{LSREGISTER} failed ({returncode}): {stderr_text}")
+    return paths
 
 
 def discoverable_copies():
