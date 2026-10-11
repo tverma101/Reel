@@ -22,6 +22,8 @@
 # as "Reel", so a directory named `iina` is not assumed), so the root is found
 # by walking up from this script until a real marker of the repository appears.
 PROJECT_NAME='iina.xcodeproj'
+SCHEME='iina'
+OUTPUT_DIR=''
 
 # Colors for output
 RED='\033[0;31m'
@@ -35,35 +37,45 @@ printUsageHelp() {
   echo -e "${BLUE}Usage:${NC}"
   echo -e "    ${GREEN}$0 -h:${NC}        Displays this help message"
   echo -e "    ${GREEN}$0 -v:${NC}        Show details during disk image creation"
+  echo -e "    ${GREEN}$0 -s [scheme]${NC}   Build with the specified Xcode scheme"
+  echo -e "    ${GREEN}$0 -o [output_dir]${NC}  Write the generated DMG to the specified directory"
   echo
 }
 
-args=`getopt hv $*`
-if [ $? -ne 0 ]; then
-  printUsageHelp
-  echo -e "${RED}Failed parsing options.${NC}" >&2
-  exit 1
-fi
-set -- $args
-
 VERBOSE=1
-while true; do
-  case "$1" in
-  -h)
+while getopts ":hvs:o:" opt; do
+  case "$opt" in
+  h)
     printUsageHelp
     exit 0
     ;;
-  -v)
+  v)
     VERBOSE=0
-    shift
     ;;
-  --)
-    shift
-    break
+  s)
+    SCHEME="$OPTARG"
     ;;
-  *) break ;;
+  o)
+    OUTPUT_DIR="$OPTARG"
+    ;;
+  :)
+    echo -e "${RED}Missing argument for -$OPTARG.${NC}" >&2
+    printUsageHelp
+    exit 1
+    ;;
+  \?)
+    echo -e "${RED}Unknown option: -$OPTARG${NC}" >&2
+    printUsageHelp
+    exit 1
+    ;;
   esac
 done
+shift $((OPTIND - 1))
+if [ "$#" -gt 0 ]; then
+  echo -e "${RED}Unexpected positional argument: $1${NC}" >&2
+  printUsageHelp
+  exit 1
+fi
 
 echo -e "${BLUE}Starting disk image generation…${NC}"
 
@@ -122,7 +134,7 @@ echo -e "${YELLOW}Obtaining Xcode build settings…${NC}"
 
 SETTINGS=$(xcodebuild \
   -workspace ${ROOT_PATH}/iina.xcodeproj/project.xcworkspace \
-  -scheme iina -destination 'generic/platform=macOS,name=Any Mac' \
+  -scheme "$SCHEME" -destination 'generic/platform=macOS,name=Any Mac' \
   -showBuildSettings)
 
 echo -e "${GREEN}Obtained Xcode build settings${NC}"
@@ -215,7 +227,12 @@ if [ -z  "$MARKETING_VERSION" ]; then
   echo -e "${RED}Unable to find the marketing version in Xcode build settings.${NC}" >&2
   exit 1
 fi
-DISK_IMAGE_PATH="$TARGET_BUILD_DIR/Reel.v"$MARKETING_VERSION".dmg"
+if [ -z "$OUTPUT_DIR" ]; then
+  OUTPUT_DIR="$TARGET_BUILD_DIR"
+else
+  mkdir -p "$OUTPUT_DIR"
+fi
+DISK_IMAGE_PATH="$OUTPUT_DIR/Reel.v${MARKETING_VERSION}.dmg"
 
 # If the disk image file already exists it must be removed or create-dmg will fail.
 if [ -e "$DISK_IMAGE_PATH" ]; then
@@ -237,11 +254,44 @@ fi
 
 if ! create-dmg $QUITE --volname Reel --volicon "$VOL_ICON_PATH" --background "$DMG_BACKGROUND_PATH" \
     --window-pos 200 120 --window-size $WIDTH $HEIGHT --icon-size 128 \
-    --icon "Reel.app" 140 230 --app-drop-link 400 230 \
+    --icon "Reel.app" 140 230 --app-drop-link 400 230 --no-internet-enable \
     "$DISK_IMAGE_PATH" "$APP_PATH"; then
   echo -e "${RED}Failed to create disk image.${NC}" >&2
   exit 1
 fi
 
 echo -e "${GREEN}Generated disk image: ${DISK_IMAGE_PATH}${NC}"
+
+echo -e "${YELLOW}Setting a Finder icon on the disk image…${NC}"
+if ! swift - "$VOL_ICON_PATH" "$DISK_IMAGE_PATH" <<'EOF'
+import AppKit
+
+guard CommandLine.arguments.count >= 3 else {
+  fputs("Must pass the icon and disk image paths\n", stderr)
+  exit(1)
+}
+let icon = CommandLine.arguments[1]
+let dmg = CommandLine.arguments[2]
+guard FileManager.default.fileExists(atPath: icon) else {
+  fputs("Icon does not exist: \(icon)\n", stderr)
+  exit(1)
+}
+guard FileManager.default.fileExists(atPath: dmg) else {
+  fputs("Disk image does not exist: \(dmg)\n", stderr)
+  exit(1)
+}
+guard let image = NSImage(contentsOfFile: icon) else {
+  fputs("Failed to create an NSImage from: \(icon)\n", stderr)
+  exit(1)
+}
+guard NSWorkspace.shared.setIcon(image, forFile: dmg) else {
+  fputs("Failed to set icon on: \(dmg)\n", stderr)
+  exit(1)
+}
+EOF
+then
+  echo -e "${RED}Failed to set a Finder icon on the disk image.${NC}" >&2
+  exit 1
+fi
+echo -e "${GREEN}Successfully set a Finder icon on the DMG file.${NC}"
 echo -e "${GREEN}Successfully generated DMG file.${NC}"
