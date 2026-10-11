@@ -213,9 +213,10 @@ Keep backups compressed during normal use and prune them only after confirming t
 longer needed.
 
 The registration check uses Apple's [NSWorkspace](https://developer.apple.com/documentation/appkit/nsworkspace)
-application lookup APIs. The installer registers the app with `lsregister` and explicitly adds the
-embedded Open In Safari extension with `pluginkit -a`, then verifies that PlugInKit resolves the
-extension under `/Applications/Reel.app`. Repair performs the same registration step. If installation
-fails after the swap, rollback unregisters the candidate extension and re-registers the restored app
-and extension before returning the error. Targeted cleanup removes only registrations for missing
-paths; it does not reset the entire Launch Services or PlugInKit database or remove existing builds.
+application lookup APIs. The installer registers the app with Xcode's recursive trusted
+`lsregister -f -R -trusted` mode and explicitly adds the embedded Open In Safari extension with
+`pluginkit -a`, then verifies that PlugInKit resolves the extension under `/Applications/Reel.app`.
+Repair performs the same registration step. If installation fails after the swap, rollback
+unregisters the candidate extension and re-registers the restored app and extension before returning
+the error. Targeted cleanup removes only registrations for missing paths; it does not reset the
+entire Launch Services or PlugInKit database or remove existing builds.
