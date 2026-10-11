@@ -30,6 +30,8 @@ BUILD_COMMIT_KEY = "com.colliderli.iina.build.commit"
 BUILD_CONFIGURATION_KEY = "com.colliderli.iina.build.configuration"
 INSTALLED = Path("/Applications/Reel.app")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+APP_ENTITLEMENTS = REPOSITORY_ROOT / "iina/IINA.entitlements"
+OPEN_IN_EXTENSION_ENTITLEMENTS = REPOSITORY_ROOT / "OpenInIINA/OpenInIINA.entitlements"
 REEL_LAUNCH_LOCK = Path.home() / "Library/Caches/.reel-install-transition.lock"
 REEL_LAUNCH_HANDOFF = REEL_LAUNCH_LOCK.with_name(".reel-launch-handoff.json")
 MAX_LAUNCH_HANDOFF_BYTES = 1024
@@ -1616,6 +1618,63 @@ def unregister_embedded_open_in_extension(app):
     run("/usr/bin/pluginkit", "-r", str(extension))
 
 
+def signed_entitlements(bundle):
+    """Read the entitlements actually sealed into a code signature."""
+    output = run("/usr/bin/codesign", "-d", "--entitlements", ":-", str(bundle))
+    try:
+        value = plistlib.loads(output.encode("utf-8"))
+    except (ValueError, plistlib.InvalidFileException) as error:
+        raise RuntimeError(f"Could not read signed entitlements for {bundle}.") from error
+    if not isinstance(value, dict):
+        raise RuntimeError(f"Signed entitlements are not a property list dictionary: {bundle}")
+    return value
+
+
+def verify_signed_entitlements(bundle, entitlement_file):
+    """Require the signature to preserve the target's source entitlements exactly."""
+    entitlement_file = Path(entitlement_file)
+    try:
+        expected = plistlib.loads(entitlement_file.read_bytes())
+    except (OSError, ValueError, plistlib.InvalidFileException) as error:
+        raise RuntimeError(f"Could not read target entitlements {entitlement_file}.") from error
+    actual = signed_entitlements(bundle)
+    if actual != expected:
+        raise RuntimeError(
+            f"The staged signature does not preserve target entitlements from {entitlement_file}."
+        )
+
+
+def sign_staged_bundle(app):
+    """Ad-hoc sign a Release bundle with hardened runtime and target entitlements."""
+    app = Path(app)
+    extension = embedded_open_in_extension(app)
+
+    # The build product is linker-signed. First sign nested code so the copy has
+    # complete signatures, then re-sign the extension and app separately: their
+    # sandbox and plug-in entitlements differ, and the outer app must be sealed last.
+    run("/usr/bin/codesign", "--force", "--deep", "--options", "runtime", "--sign", "-", str(app))
+    try:
+        extension_info = extension.lstat()
+    except FileNotFoundError:
+        extension_info = None
+    if extension_info is not None:
+        if not stat.S_ISDIR(extension_info.st_mode):
+            raise RuntimeError(f"Embedded Open In extension is not a real directory: {extension}")
+        run(
+            "/usr/bin/codesign", "--force", "--options", "runtime",
+            "--entitlements", str(OPEN_IN_EXTENSION_ENTITLEMENTS), "--sign", "-", str(extension),
+        )
+        run("/usr/bin/codesign", "--verify", "--strict", str(extension))
+        verify_signed_entitlements(extension, OPEN_IN_EXTENSION_ENTITLEMENTS)
+
+    run(
+        "/usr/bin/codesign", "--force", "--options", "runtime",
+        "--entitlements", str(APP_ENTITLEMENTS), "--sign", "-", str(app),
+    )
+    verify_signed_entitlements(app, APP_ENTITLEMENTS)
+    run("/usr/bin/codesign", "--verify", "--deep", "--strict", str(app))
+
+
 def repair_plan():
     before = audit()
     if before["running"]:
@@ -2604,8 +2663,7 @@ def _install_locked(source, support):
         )
         if copied_executable_hash != source_executable_hash:
             raise RuntimeError("Copied Reel executable differs from the bounded build-source inventory.")
-        run("/usr/bin/codesign", "--force", "--deep", "--sign", "-", str(stage))
-        run("/usr/bin/codesign", "--verify", "--deep", "--strict", str(stage))
+        sign_staged_bundle(stage)
         staged_info = identity(stage, allow_stage=True)
         staged_inventory = bundle_inventory(stage)
         validate_candidate(staged_info, installed_info, checkout_commit=candidate_commit)

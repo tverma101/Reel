@@ -62,10 +62,12 @@ running or cannot be ruled out, the record changes, or lock/process inspection f
 system clock for a future timestamp. Investigate any refusal or corrupt/unsafe record; do not delete
 the handoff file manually to unblock an update.
 Target validation and rollback remain inside both locks. The installer
-verifies the bundle identity, signs the staged bundle ad hoc, archives the current
-`/Applications/Reel.app`, and rechecks that Reel is not running immediately before the swap. It
-preserves the build product, source files, dependency caches, and other applications. It never
-deletes another `.app` copy automatically.
+verifies the bundle identity, ad-hoc signs nested code with the hardened runtime, then signs the
+embedded Open In extension and outer Reel app separately with their target-specific entitlements.
+It verifies the signed entitlement dictionaries and the complete nested code signature before it
+archives the current `/Applications/Reel.app`. It rechecks that Reel is not running immediately
+before the swap. It preserves the build product, source files, dependency caches, and other
+applications. It never deletes another `.app` copy automatically.
 
 The normal error path attempts an atomic rollback if verification or registration fails. A forced
 process kill or power loss after the directory swap can bypass that rollback: the canonical app may
