@@ -104,8 +104,8 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
     case PK.maxVolume.rawValue:
       if let newValue = change[.newKey] as? Int {
         volumeSlider.maxValue = Double(newValue)
-        if player.mpv.getDouble(MPVOption.Audio.volume) > Double(newValue) {
-          player.mpv.setDouble(MPVOption.Audio.volume, Double(newValue))
+        if player.info.volume > Double(newValue) {
+          player.setVolume(Double(newValue))
         }
       }
     case PK.useExactSeek.rawValue:
@@ -286,6 +286,15 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
 
   @discardableResult
   func handleKeyBinding(_ keyBinding: KeyMapping) -> Bool {
+    if player.airPlayPlayback.isPreparing {
+      player.airPlayPlayback.fallbackToMPV(reason: "keyboard command during AirPlay preparation")
+    }
+    if player.airPlayPlayback.isActive, !keyBinding.isIINACommand {
+      if handleNativeAirPlayKeyBinding(keyBinding) {
+        return true
+      }
+      player.airPlayPlayback.fallbackToMPV(reason: "keyboard command")
+    }
     if keyBinding.isIINACommand {
       // - IINA command
       if let iinaCommand = IINACommand(rawValue: keyBinding.rawAction) {
@@ -330,6 +339,70 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
         log("Return value \(returnValue) when executing key command \(keyBinding.rawAction)", level: .error)
         return false
       }
+    }
+  }
+
+  private func handleNativeAirPlayKeyBinding(_ keyBinding: KeyMapping) -> Bool {
+    let action = keyBinding.action
+    guard let command = action.first else { return false }
+    let arguments = Array(action.dropFirst())
+
+    func booleanValue(_ value: String) -> Bool? {
+      switch value.lowercased() {
+      case "yes", "true", "1": return true
+      case "no", "false", "0": return false
+      default: return nil
+      }
+    }
+
+    switch command {
+    case MPVCommand.cycle.rawValue where arguments == ["pause"]:
+      player.togglePause()
+      return true
+    case MPVCommand.cycle.rawValue where arguments == ["mute"]:
+      player.toggleMute()
+      return true
+    case MPVCommand.set.rawValue where arguments.count == 2 && arguments[0] == "pause":
+      guard let paused = booleanValue(arguments[1]) else { return false }
+      paused ? player.pause() : player.resume()
+      return true
+    case MPVCommand.set.rawValue where arguments.count == 2 && arguments[0] == "mute":
+      guard let muted = booleanValue(arguments[1]) else { return false }
+      player.toggleMute(muted)
+      return true
+    case MPVCommand.set.rawValue where arguments.count == 2 && arguments[0] == "volume":
+      guard let volume = Double(arguments[1]) else { return false }
+      player.setVolume(volume)
+      return true
+    case MPVCommand.set.rawValue where arguments.count == 2 && arguments[0] == "speed":
+      guard let speed = Double(arguments[1]) else { return false }
+      player.setSpeed(speed)
+      return true
+    case MPVCommand.seek.rawValue where !arguments.isEmpty:
+      guard let target = Double(arguments[0]), arguments.count <= 2 else { return false }
+      let mode = arguments.count == 2 ? arguments[1] : "relative"
+      if mode.hasPrefix("absolute") {
+        player.seek(absoluteSecond: target)
+      } else if mode.hasPrefix("relative") {
+        player.seek(relativeSecond: target, option: .relative)
+      } else {
+        return false
+      }
+      return true
+    case MPVCommand.add.rawValue where arguments.count == 2 && arguments[0] == "volume":
+      guard let delta = Double(arguments[1]) else { return false }
+      player.setVolume(player.info.volume + delta)
+      return true
+    case MPVCommand.add.rawValue where arguments.count == 2 && arguments[0] == "speed":
+      guard let delta = Double(arguments[1]) else { return false }
+      player.setSpeed(player.info.playSpeed + delta)
+      return true
+    case MPVCommand.multiply.rawValue where arguments.count == 2 && arguments[0] == "speed":
+      guard let multiplier = Double(arguments[1]) else { return false }
+      player.setSpeed(player.info.playSpeed * multiplier)
+      return true
+    default:
+      return false
     }
   }
 

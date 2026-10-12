@@ -191,11 +191,11 @@ extension MainMenuActionHandler {
   }
 
   @objc func menuNextChapter(_ sender: NSMenuItem) {
-    player.mpv.command(.add, args: ["chapter", "1"], checkError: false)
+    player.stepChapter(by: 1)
   }
 
   @objc func menuPreviousChapter(_ sender: NSMenuItem) {
-    player.mpv.command(.add, args: ["chapter", "-1"], checkError: false)
+    player.stepChapter(by: -1)
   }
 }
 
@@ -475,6 +475,7 @@ extension MainMenuActionHandler {
   }
 
   @objc func menuCycleTrack(_ sender: NSMenuItem) {
+    player.airPlayPlayback.fallbackToMPV(reason: "track selection")
     switch sender.tag {
     case 0: player.mpv.command(.cycle, args: ["video"])
     case 1: player.mpv.command(.cycle, args: ["audio"])

@@ -7,6 +7,7 @@
 //
 
 import Cocoa
+import AVKit
 import Mustache
 import WebKit
 
@@ -120,8 +121,7 @@ class MainWindowController: PlayerWindowController {
 
   lazy var liveText = LiveTextController(mainWindow: self)
   lazy var liveCaptions = AppleLiveCaptions(player: player)
-  /// Created when the AirPlay button is first added to the on-screen controller.
-  private(set) var airPlay: AirPlayAudioRoutePicker?
+  private var airPlayPlayerView: AVPlayerView?
   lazy var interactiveMode = InteractiveModeController(mainWindow: self)
   var pipStatus = PIPStatus.notInPIP
   var isVideoLoaded: Bool = false
@@ -860,6 +860,37 @@ class MainWindowController: PlayerWindowController {
     layoutSides.forEach { videoViewConstraints[$0]?.isActive = true }
   }
 
+  func showAirPlayPlayback(player avPlayer: AVPlayer) {
+    let playerView: AVPlayerView
+    if let airPlayPlayerView {
+      playerView = airPlayPlayerView
+    } else {
+      playerView = AVPlayerView()
+      playerView.controlsStyle = .none
+      playerView.allowsPictureInPicturePlayback = false
+      playerView.videoGravity = .resizeAspect
+      playerView.translatesAutoresizingMaskIntoConstraints = false
+      videoViewContainer.addSubview(playerView, positioned: .above, relativeTo: videoView)
+      NSLayoutConstraint.activate([
+        playerView.leadingAnchor.constraint(equalTo: videoViewContainer.leadingAnchor),
+        playerView.trailingAnchor.constraint(equalTo: videoViewContainer.trailingAnchor),
+        playerView.topAnchor.constraint(equalTo: videoViewContainer.topAnchor),
+        playerView.bottomAnchor.constraint(equalTo: videoViewContainer.bottomAnchor)
+      ])
+      airPlayPlayerView = playerView
+    }
+    playerView.player = avPlayer
+    playerView.isHidden = false
+    videoView.isHidden = true
+  }
+
+  func hideAirPlayPlayback() {
+    guard let airPlayPlayerView else { return }
+    airPlayPlayerView.player = nil
+    airPlayPlayerView.isHidden = true
+    videoView.isHidden = false
+  }
+
   func updateVideoViewConstraints(_ constraints: [NSLayoutConstraint.Attribute: CGFloat]) {
     for (attr, value) in constraints {
       videoViewConstraints[attr]?.constant = value
@@ -912,13 +943,15 @@ class MainWindowController: PlayerWindowController {
 
   private func setupOSCToolbarButtons(_ buttons: [Preference.ToolBarButton]) {
     let effectiveButtons = buttons.filter { $0 != .liveText || Preference.isLiveTextEnabled }
+    if !effectiveButtons.contains(.airPlay) {
+      player.airPlayPlayback.fallbackToMPV(reason: "AirPlay toolbar control removed")
+    }
     oscToolbarView.views.forEach { oscToolbarView.removeView($0) }
     let liveTextEnabled = Preference.bool(for: .enableLiveText)
     for buttonType in effectiveButtons {
       if buttonType == .airPlay {
-        // Route this Reel player's audio through mpv's active output driver.
-        if airPlay == nil { airPlay = AirPlayAudioRoutePicker(player: player) }
-        let picker = airPlay!.makePickerView()
+        // This native picker is hidden until it is bound to Reel's own AVPlayer.
+        let picker = player.airPlayPlayback.makePickerView()
         picker.translatesAutoresizingMaskIntoConstraints = false
         picker.size(width: Preference.ToolBarButton.frameSize, height: Preference.ToolBarButton.frameSize)
         oscToolbarView.addView(picker, in: .trailing)
@@ -3026,9 +3059,10 @@ class MainWindowController: PlayerWindowController {
     case .plugins:
       sidebars.show(sidebar: .plugins)
     case .liveText:
+      player.airPlayPlayback.fallbackToMPV(reason: "Live Text")
       Preference.set(!Preference.bool(for: .enableLiveText), for: .enableLiveText)
     case .airPlay:
-      break  // An AVRoutePickerView handles its own clicks.
+      break  // The AirPlay toolbar control is created and handled in setupOSCToolbarButtons.
     }
   }
 
@@ -3128,6 +3162,7 @@ class MainWindowController: PlayerWindowController {
 extension MainWindowController: PIPViewControllerDelegate {
 
   func enterPIP() {
+    player.airPlayPlayback.fallbackToMPV(reason: "Picture in Picture")
     guard pipStatus != .inPIP else { return }
     pipStatus = .inPIP
     liveText.clearAnalysis()
