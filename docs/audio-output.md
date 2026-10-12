@@ -1,86 +1,56 @@
-# Audio output devices
+# Audio output
 
-Reel selects its own audio output device through mpv, the same way IINA does.
-Choosing a device in Reel changes where Reel's audio plays and nothing else:
-other applications on the Mac keep using whatever output macOS is configured
-for. If a HomePod or AirPlay destination appears in the device list, Reel can
-send a film there while a music app keeps playing to the built-in speakers.
+Reel has two playback paths. Apple playback is used for eligible local videos so the native AirPlay picker can control that Reel player. Reel keeps its full mpv player for files or features Apple playback cannot handle.
 
-## Where to change it
+## Apple AirPlay for supported local videos
 
-Use **Settings → Audio**, *Preferred audio device* under the Hardware section,
-for the persistent setting that is saved for future sessions. Use
-**Audio → Audio Device** in the menu bar for a switch that applies to the
-current session only.
+The on-screen AirPlay button is Apple's native route picker attached to Reel's own AVPlayer. Apple
+documents that the picker routes media from its attached player to nearby receivers. Reel disables
+external video playback so the picture stays in Reel's window. The intended HomePod behavior is to
+route only Reel's audio through that player without changing the Mac's system output or other apps'
+audio; verify this with a physical HomePod before relying on it. See Apple's documentation for
+[AVRoutePickerView](https://developer.apple.com/documentation/avkit/avroutepickerview), its
+[player property](https://developer.apple.com/documentation/avkit/avroutepickerview/player), and
+[AVPlayer.allowsExternalPlayback](https://developer.apple.com/documentation/avfoundation/avplayer/allowsexternalplayback).
 
-`auto` follows the system default; any other entry pins Reel to that specific
-device. Only the settings popup writes the saved preference. The menu bar
-switch changes what is playing right now and leaves the saved setting alone, so
-the next launch goes back to whatever Settings still has.
+When the AirPlay button is enabled, Reel automatically uses Apple's player for eligible files,
+even before a receiver is selected. The native path requires a local file Apple can play, exactly
+one video and one audio track, a single-item playlist, and no active subtitles, A-B loop, mpv
+filters or effects, audio passthrough, audio or subtitle delay, custom mpv options, Picture in
+Picture, mini player, Reel plugin, or Apple live captions. Files with more tracks, network streams,
+unsupported formats, or volume above 100 stay in mpv. Reel checks that the Apple player is ready
+before switching.
 
-## AirPlay button
+Controls that need mpv — for example subtitles, external tracks, audio delay, filters, chapters,
+A-B loop, playlist controls, or the Audio Device menu — return playback to mpv at the current
+position. That ends Reel's native route for the current file. Reel stays in mpv for that file;
+reopen it to use the native route again. Changing volume above 100% also returns to mpv.
 
-The AirPlay button in the on-screen controller opens Reel's audio-output menu. It lists the devices
-available through the active mpv output driver, including AirPlay destinations when macOS and that
-driver expose them. Choosing a named device changes Reel's output only; other Mac apps keep their
-current output. **System Default** selects `auto` and follows the macOS default. The video stays in
-the Reel window. The same current-session choice is available from **Audio → Audio Device**.
+The native picker is hidden when Reel cannot use Apple's player for the current file. Reel does not
+receive a confirmed device name from the picker, so a listed receiver is not proof that sound is
+playing through it. This code has not yet been verified with a physical HomePod; HomePod playback,
+pause/seek, disconnect/reconnect, and local video behavior still need a device check.
 
-AirPlay speakers add delay. If the sound runs behind the picture, adjust it with the audio delay
-controls in the Audio sidebar; a resumed file remembers its delay.
+## mpv audio devices
 
-## When a device goes away
+For files using the full mpv player, use **Settings → Audio**, *Preferred audio device* under
+Hardware, to save a device for future sessions. Use **Audio → Audio Device** for a current-session
+change. auto follows the Mac's configured output. A named device applies to Reel's mpv player, not
+the system output.
 
-If the selected device disappears — an AirPlay speaker goes off the network,
-say — Reel sets mpv back to `auto` once the device list changes and the
-selection is no longer present, so playback follows the system output instead of
-going silent. That check also runs after a file finishes loading, so a device
-that dropped off while the file was still loading is caught rather than leaving
-a dead selection behind.
+This device list comes from Reel's active mpv output driver. A HomePod or AirPlay receiver appears
+only if that driver exposes it; Apple's native route picker and mpv's device list are separate.
+When mpv exposes a receiver, selecting it routes only Reel's mpv audio. A successful menu action
+means mpv accepted the request, not that the receiver is playing sound.
 
-This reset changes what is playing, not what is saved. The saved preference
-still names the vanished device, and the settings popup shows it labelled
-`(missing)`. Pick a device again to clear that.
+If an mpv device disappears, Reel returns mpv to auto so playback can continue on the system
+output. That reset also runs after a file finishes loading. It does not change the saved
+preference; Settings labels a missing device until you choose another one. The paused mpv device
+list does not control Apple playback.
 
-Startup is handled the same way: if the saved device is not in the device list
-when Reel launches, playback starts on `auto` rather than on a device that is
-not there.
-
-## How it works
-
-mpv exposes the selection through its
-[`--audio-device`](https://mpv.io/manual/stable/#options-audio-device) option
-and the matching `audio-device` property. Reel applies the selected output to its mpv player; it does
-not change the system-wide output. Device discovery can vary with the macOS version, network, and
-active mpv output driver.
-
-The menu checkmark reflects the device Reel requested from mpv. mpv can fall back if that output
-cannot be opened, and its `audio-device` property does not confirm which physical endpoint is
-actually playing. A successful menu action means the request was accepted; listen for the result
-and switch back to **System Default** if the selected device stays silent.
-
-Reel also chooses the mpv audio output driver, and mpv ties each listed device
-to one driver. The list is filtered to the active driver so that selecting a
-device cannot silently fail by pairing a device with the wrong driver. If the
-driver changes underneath a saved selection, Reel maps the selection to the
-equivalent device for the new driver; if there is no equivalent, the device is
-shown as missing in the settings popup rather than silently pretending it is
-still usable.
-
-Audio-device output is separate from Reel's bundled AirPlay video-casting plugin.
-For casting the current video to an Apple TV while keeping Reel as the remote, see
-[AirPlay video casting](airplay-casting.md).
-
-## What has and has not been verified
-
-The behavior described above is what the code does. It has not been exercised
-against every HomePod generation, speaker, network configuration, or macOS
-release. Treat a specific device pairing as unverified until you have played
-through it yourself, and report the macOS version, the device, and the driver
-setting if it misbehaves.
+Reel's bundled AirPlay video-casting plugin is a separate feature. It sends a local video to a TV while Reel stays the remote; see [AirPlay video casting](airplay-casting.md).
 
 ## Related
 
-- [Subtitle setup](subtitle-setup.md) covers the audio decoding path used for
-  subtitle verification; it is separate from where the audio is sent.
-- Upstream's documentation of the underlying mpv options is linked above.
+- [Subtitle setup](subtitle-setup.md) describes Reel's caption and subtitle behavior, including the mpv audio clock used by its live-caption path.
+- [Local macOS installation](local-installation.md) describes how this fork is installed and launched.

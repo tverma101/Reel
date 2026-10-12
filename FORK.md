@@ -83,19 +83,27 @@ project; Reel ships under its own name, bundle identifier, and icon.
 
 ### Audio output
 
-- **AirPlay button** (`iina/AirPlayAudioRoutePicker.swift`): an on-screen
-  controller button, on by default, that opens Apple's `AVRoutePickerView`
-  speaker picker. Choosing speakers changes the Mac's output, which Reel
-  follows while `audio-device` is `auto`.
-- Device selection itself is inherited, not reimplemented: Settings → Audio,
-  *Preferred audio device*, and the Audio → Audio Device menu both set mpv's
-  `audio-device`, and selecting an AirPlay destination such as a HomePod routes
-  Reel's playback there while other Mac applications keep using macOS's
-  configured output. Reel documents this in
+- **AirPlay button** (`iina/AirPlayAudioRoutePicker.swift`): the native
+  `AVRoutePickerView` is bound to a Reel-owned `AVPlayer`. Eligible local video
+  files automatically use that player; its audio is intended to route to a HomePod while
+  `allowsExternalPlayback = false` keeps video in Reel's window. The route
+  belongs to this player and does not change macOS's system output. The native
+  path is limited to one video and one audio track, a single-item playlist, no
+  subtitles, A-B loop, audio passthrough, custom mpv options, mpv-only
+  filters/delays, PiP, mini player, plugins, or live captions.
+  An mpv-only action falls back at the current position and suppresses another
+  automatic switch for the rest of that file. Reopen the file to retry.
+- Settings → Audio, *Preferred audio device*, and Audio → Audio Device still
+  configure mpv for files using the full player. Their device list is separate
+  from Apple's native route picker; mpv exposes only devices available through
+  its active audio driver. A successful mpv property write is not proof that a
+  receiver is playing. Reel documents both paths in
   [docs/audio-output.md](docs/audio-output.md).
-- The upstream reset of a vanished device to mpv's `auto` now also runs when a
-  file finishes loading, so a speaker that dropped off the network during load
-  does not leave playback pointing at a device that cannot be used.
+- The mpv reset of a vanished device to `auto` still runs when a file finishes
+  loading. It is skipped while Apple playback is active because the paused mpv
+  device list does not control the native route.
+- HomePod routing, pause/seek, disconnect/reconnect, fallback, and the local
+  video picture have not yet been verified against a physical HomePod.
 
 ### Playback stability
 

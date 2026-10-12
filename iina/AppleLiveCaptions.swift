@@ -595,6 +595,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
 
   /// Turns live captions on or off from the player and confirms the change on screen.
   static func setEnabled(_ enabled: Bool, osdPlayer player: PlayerCore?) {
+    player?.airPlayPlayback.fallbackToMPV(reason: "Live Captions")
     Preference.set(enabled, for: .appleLiveCaptionsFallback)
     let key = enabled ? "osd.apple_live_captions_on" : "osd.apple_live_captions_off"
     player?.sendOSD(.custom(NSLocalizedString(key, comment: key)))
