@@ -524,6 +524,16 @@ private enum LiveCaptionVerticalBounds {
   }
 }
 
+/// While the AirPlay bridge carries Reel's audio, its player's time is the sound being heard. mpv's
+/// clock, held or corrected to follow the speaker, must never replace it.
+private enum LiveCaptionPlaybackClock {
+  /// The bridge's position, or the video position while it has none (during a seek).
+  static func nativePosition(_ position: Double?, videoPosition: Double) -> Double {
+    guard let position, position.isFinite, position >= 0 else { return videoPosition }
+    return position
+  }
+}
+
 /// Mutable state and AppKit objects are confined to the main thread; background decode and Speech
 /// tasks return to the main thread before reading or updating the instance.
 final class AppleLiveCaptions: @unchecked Sendable {
@@ -595,7 +605,6 @@ final class AppleLiveCaptions: @unchecked Sendable {
 
   /// Turns live captions on or off from the player and confirms the change on screen.
   static func setEnabled(_ enabled: Bool, osdPlayer player: PlayerCore?) {
-    player?.airPlayPlayback.fallbackToMPV(reason: "Live Captions")
     Preference.set(enabled, for: .appleLiveCaptionsFallback)
     let key = enabled ? "osd.apple_live_captions_on" : "osd.apple_live_captions_off"
     player?.sendOSD(.custom(NSLocalizedString(key, comment: key)))
@@ -1029,6 +1038,16 @@ final class AppleLiveCaptions: @unchecked Sendable {
     }
   }
 
+  /// A handoff changes the playback clock, not caption eligibility or the user's preference.
+  /// Keep the current transcript and decoder; retire only measurements from the previous output.
+  func playbackBackendChanged() {
+    audioOffset = nil
+    outputLatency = nil
+    playbackTimeline.reset()
+    if player?.info.state == .paused { pauseChanged(true) }
+    updateEligibility()
+  }
+
   func stop() {
     generation += 1
     cancelSpeechLocaleCheck()
@@ -1244,6 +1263,11 @@ final class AppleLiveCaptions: @unchecked Sendable {
   /// used when there is no audio.
   private func captionClock(videoPosition: Double) -> Double {
     guard let player, let aid = player.info.aid, aid > 0 else { return videoPosition }
+    if player.airPlayAudio.isCarrying {
+      // Reel's audio is playing through the AirPlay bridge; its player time is the sound being heard.
+      return LiveCaptionPlaybackClock.nativePosition(player.airPlayAudio.audiblePosition,
+                                                     videoPosition: videoPosition)
+    }
     return mpvAudioClock(videoPosition: videoPosition)
   }
 
@@ -1254,6 +1278,8 @@ final class AppleLiveCaptions: @unchecked Sendable {
   /// position. Only the displayed text uses it; the chunk scheduler stays on mpv's clock, so
   /// switching speakers does not look like a seek.
   private func uncountedOutputLatency(_ player: PlayerCore) -> Double {
+    // The AirPlay bridge's clock already accounts for the speaker. mpv's own output is silent then.
+    guard !player.airPlayAudio.isCarrying else { return 0 }
     guard let aid = player.info.aid, aid > 0 else { return 0 }
     if let outputLatency, Date().timeIntervalSince(outputLatency.checkedAt) < 1 { return outputLatency.value }
     // Until mpv has opened its audio output there is nothing to measure yet.

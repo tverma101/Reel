@@ -68,8 +68,8 @@ project; Reel ships under its own name, bundle identifier, and icon.
   `iina/FFmpegController.m`), and can be switched from the Subtitles menu and
   the Subtitles sidebar as well as Settings. Captions use final, word-timed
   results shown one line at a time, follow the audio clock (so audio delay
-  moves them with the sound) minus the AirPlay stream latency mpv does not
-  count, honor Subtitle Delay, and draw the outline behind the letters.
+  moves them with the sound), or the speaker's clock while Reel's audio is on
+  AirPlay, honor Subtitle Delay, and draw the outline behind the letters.
 
 ### AirPlay video casting
 
@@ -83,27 +83,24 @@ project; Reel ships under its own name, bundle identifier, and icon.
 
 ### Audio output
 
-- **AirPlay button** (`iina/AirPlayAudioRoutePicker.swift`): the native
-  `AVRoutePickerView` is bound to a Reel-owned `AVPlayer`. Eligible local video
-  files automatically use that player; its audio is intended to route to a HomePod while
-  `allowsExternalPlayback = false` keeps video in Reel's window. The route
-  belongs to this player and does not change macOS's system output. The native
-  path is limited to one video and one audio track, a single-item playlist, no
-  subtitles, A-B loop, audio passthrough, custom mpv options, mpv-only
-  filters/delays, PiP, mini player, plugins, or live captions.
-  An mpv-only action falls back at the current position and suppresses another
-  automatic switch for the rest of that file. Reopen the file to retry.
+- **AirPlay audio** (`iina/AirPlayAudioBridge.swift`): the native
+  `AVRoutePickerView` is bound to a hidden, Reel-owned `AVPlayer`, so a chosen
+  HomePod receives only Reel's audio and macOS's system output is unchanged.
+  `FFmpegPCMStreamReader` (`iina/FFmpegController.m`) decodes the selected
+  audio track to 48 kHz stereo PCM on mpv's timeline and the player streams
+  it as a WAV. mpv keeps the picture, subtitles, Live Text and live captions;
+  its own audio output is switched to `null` while the bridge plays. mpv waits
+  at a crawl until the speaker is playing, and a drift loop then keeps the
+  picture on the speaker's clock through mpv's audio delay. Audio delay, volume
+  and mute carry over; mpv audio filters, the equalizer and volume above 100%
+  do not. Unsupported sources and failures return the audio to the Mac with an
+  OSD message.
 - Settings → Audio, *Preferred audio device*, and Audio → Audio Device still
-  configure mpv for files using the full player. Their device list is separate
-  from Apple's native route picker; mpv exposes only devices available through
-  its active audio driver. A successful mpv property write is not proof that a
-  receiver is playing. Reel documents both paths in
-  [docs/audio-output.md](docs/audio-output.md).
+  configure mpv's own output, which applies whenever Reel's audio is on the
+  Mac. Their device list is separate from Apple's route picker. Reel documents
+  both in [docs/audio-output.md](docs/audio-output.md).
 - The mpv reset of a vanished device to `auto` still runs when a file finishes
-  loading. It is skipped while Apple playback is active because the paused mpv
-  device list does not control the native route.
-- HomePod routing, pause/seek, disconnect/reconnect, fallback, and the local
-  video picture have not yet been verified against a physical HomePod.
+  loading, except while the AirPlay bridge carries the audio.
 
 ### Playback stability
 

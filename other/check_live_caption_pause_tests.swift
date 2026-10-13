@@ -11,6 +11,13 @@ struct LiveCaptionPauseChecks {
   }
 
   static func main() {
+    check(LiveCaptionPlaybackClock.nativePosition(47, videoPosition: 30) == 47,
+          "AirPlay captions follow the bridge's player while mpv is held behind it")
+    check(LiveCaptionPlaybackClock.nativePosition(9, videoPosition: 47) == 9,
+          "a seek moves AirPlay captions to the new audio timeline")
+    check(LiveCaptionPlaybackClock.nativePosition(nil, videoPosition: 30) == 30 &&
+          LiveCaptionPlaybackClock.nativePosition(.nan, videoPosition: 30) == 30,
+          "a pending seek retains the known playhead instead of jumping captions to zero")
     let decodeQueue = DispatchQueue(label: "live-caption-pause-order-check")
     let decodeOrder = LiveCaptionDecodeQueueOrder(queue: decodeQueue)
     let readStarted = DispatchSemaphore(value: 0)

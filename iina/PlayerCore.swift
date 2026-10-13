@@ -487,7 +487,6 @@ class PlayerCore: NSObject {
     ///     to change the loop point will be ignored.
     /// - Note: The value of the A loop point is not required by mpv to be before the B loop point.
     set {
-      airPlayPlayback.fallbackToMPV(reason: "A-B loop")
       guard info.abLoopStatus == .aSet || info.abLoopStatus == .bSet else { return }
       mpv.setDouble(MPVOption.PlaybackControl.abLoopA, max(PlayerCore.minLoopPointTime, newValue))
     }
@@ -508,7 +507,6 @@ class PlayerCore: NSObject {
     ///     to change the loop point will be ignored.
     /// - Note: The value of the B loop point is not required by mpv to be after the A loop point.
     set {
-      airPlayPlayback.fallbackToMPV(reason: "A-B loop")
       guard info.abLoopStatus == .bSet else { return }
       mpv.setDouble(MPVOption.PlaybackControl.abLoopB, max(PlayerCore.minLoopPointTime, newValue))
     }
@@ -543,9 +541,8 @@ class PlayerCore: NSObject {
 
   let playerNumber: Int
 
-  /// One AVPlayer and native route picker per Reel player. The AVPlayer is used only for files
-  /// that pass the limited AirPlay eligibility checks; mpv remains the fallback.
-  lazy var airPlayPlayback = AirPlayAudioRoutePicker(player: self)
+  /// Sends this player's audio, and only this player's, to the AirPlay speaker chosen in its picker.
+  lazy var airPlayAudio = AirPlayAudioBridge(player: self)
 
   static var keyBindings: [String: KeyMapping] = [:]
 
@@ -629,9 +626,6 @@ class PlayerCore: NSObject {
   }
 
   func reloadPlugin(_ plugin: JavascriptPlugin, forced: Bool = false) {
-    if plugin.enabled {
-      airPlayPlayback.fallbackToMPV(reason: "plugin control")
-    }
     guard !isPluginRuntimeUnavailable else { return }
     let id = plugin.identifier
     if pluginMap[id] == nil, Self.pluginUnloadOperations.contains(id) {
@@ -800,10 +794,6 @@ class PlayerCore: NSObject {
   ///   - isNetwork: Whether the media must be streamed over the network.
   private func openMainWindow(path: String, url: URL, isNetwork: Bool) {
     log("Opening \(path) in main window")
-    if airPlayPlayback.isActive {
-      savePlaybackPosition()
-    }
-    airPlayPlayback.stopPlayback(resumeMPV: false)
     info.currentURL = url
     info.mpvMd5 = Utility.mpvWatchLaterMd5(url, ignorePathInWatchLaterConfig)
     info.isNetworkResource = isNetwork
@@ -979,10 +969,8 @@ class PlayerCore: NSObject {
   ///     task is still running this method only changes the player state. When the background task ends it will notice that shutting
   ///     down was in progress and will call this method again to continue the process of shutting down..
   func shutdown() {
-    if airPlayPlayback.isActive {
-      savePlaybackPosition()
-    }
-    airPlayPlayback.stopPlayback(resumeMPV: false)
+    // mpv writes its watch-later file on quit, so give it the user's own speed and audio delay.
+    airPlayAudio.stopPlayback()
     if !isPluginRuntimeUnavailable {
       // Quiesce plugin timers, event listeners, and hooks while the mpv APIs are still valid.
       // In particular, do not wait until the SHUTDOWN event to call JavascriptAPIMpv cleanup.
@@ -1101,7 +1089,6 @@ class PlayerCore: NSObject {
   /// 2) On user initiated button actions
   ///
   func switchToMiniPlayer(automatically: Bool = false, showMiniPlayer: Bool = true) {
-    airPlayPlayback.fallbackToMPV(reason: "mini player")
     log("Switch to mini player, automatically=\(automatically)")
     if !automatically {
       // Toggle manual override
@@ -1243,11 +1230,6 @@ class PlayerCore: NSObject {
   ///     [#4520](https://github.com/iina/iina/issues/4520)
   func pause() {
     guard info.state.active else { return }
-    if airPlayPlayback.isActive {
-      airPlayPlayback.pause()
-      sendOSD(.pause)
-      return
-    }
     log("Pausing playback")
     mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
   }
@@ -1256,11 +1238,6 @@ class PlayerCore: NSObject {
   /// - Important: Although primary responsibility for ensuring the display link is running when playback is in progress belongs to
   ///     the `pauseChanged` method, this method calls `displayActive` to provide more time for the display link to start up.
   func resume() {
-    if airPlayPlayback.isActive {
-      airPlayPlayback.resume()
-      sendOSD(.resume)
-      return
-    }
     log("Resuming playback")
     mainWindow.videoView.displayActive()
     // Restart playback when reached EOF
@@ -1290,7 +1267,7 @@ class PlayerCore: NSObject {
   func stop() {
     guard info.state != .shutDown else { return }
     savePlaybackPosition()
-    airPlayPlayback.stopPlayback(resumeMPV: false)
+    airPlayAudio.stopPlayback()
     if mainWindow.loaded { mainWindow.liveCaptions.stop() }
 
     // Any online subtitle search still waiting on the user is abandoned: the media it applies to is
@@ -1335,15 +1312,6 @@ class PlayerCore: NSObject {
   }
 
   func toggleMute(_ set: Bool? = nil) {
-    if airPlayPlayback.isActive {
-      let newState = set ?? !info.isMuted
-      airPlayPlayback.toggleMute(newState)
-      info.isMuted = newState
-      syncUI(.volume)
-      NowPlayingInfoManager.shared.updateInfo()
-      sendOSD(newState ? .mute : .unMute)
-      return
-    }
     let newState = set ?? !mpv.getFlag(MPVOption.Audio.mute)
     mpv.setFlag(MPVOption.Audio.mute, newState)
   }
@@ -1357,21 +1325,12 @@ class PlayerCore: NSObject {
       duration > 0 {
       percent = percent.clamped(to: 0..<100)
     }
-    if airPlayPlayback.isActive {
-      let duration = info.videoDuration?.second ?? 0
-      airPlayPlayback.seek(to: duration * percent / 100)
-      return
-    }
     let useExact = forceExact ? true : Preference.bool(for: .useExactSeek)
     let seekMode = useExact ? "absolute-percent+exact" : "absolute-percent"
     mpv.command(.seek, args: ["\(percent)", seekMode], checkError: false, level: .verbose)
   }
 
   func seek(relativeSecond: Double, option: Preference.SeekOption) {
-    if airPlayPlayback.isActive {
-      airPlayPlayback.seek(to: airPlayPlayback.currentTime + relativeSecond)
-      return
-    }
     switch option {
 
     case .relative:
@@ -1397,15 +1356,10 @@ class PlayerCore: NSObject {
   }
 
   func seek(absoluteSecond: Double) {
-    if airPlayPlayback.isActive {
-      airPlayPlayback.seek(to: absoluteSecond)
-      return
-    }
     mpv.command(.seek, args: ["\(absoluteSecond)", "absolute+exact"])
   }
 
   func frameStep(backwards: Bool) {
-    airPlayPlayback.fallbackToMPV(reason: "frame stepping")
     // When playback is paused the display link is stopped in order to avoid wasting energy on
     // It must be running when stepping to avoid slowdowns caused by mpv waiting for IINA to call
     // mpv_render_report_swap.
@@ -1438,7 +1392,6 @@ class PlayerCore: NSObject {
   /// `Preference.Key.screenshotIncludeSubtitle` to decide between `subtitles` or `video`.
   @discardableResult
   func screenshot(fromKeyBinding keyBinding: KeyMapping? = nil) -> Bool {
-    airPlayPlayback.fallbackToMPV(reason: "screenshot")
     let saveToFile = Preference.bool(for: .screenshotSaveToFile)
     let saveToClipboard = Preference.bool(for: .screenshotCopyToClipboard)
     guard saveToFile || saveToClipboard else {
@@ -1567,7 +1520,6 @@ class PlayerCore: NSObject {
   /// a second time it sets the B loop point to the timestamp of the current frame, activating looping and causing mpv to seek back to
   /// the A loop point. When the command is invoked again both loop points are cleared (set to zero) and looping stops.
   func abLoop() {
-    airPlayPlayback.fallbackToMPV(reason: "A-B loop")
     // may subject to change
     mpv.command(.abLoop)
     syncAbLoop()
@@ -1635,7 +1587,6 @@ class PlayerCore: NSObject {
   }
 
   func setLoopMode(_ newMode: LoopMode) {
-    airPlayPlayback.fallbackToMPV(reason: "loop mode")
     switch newMode {
     case .playlist:
       mpv.setString(MPVOption.PlaybackControl.loopPlaylist, "inf")
@@ -1653,7 +1604,6 @@ class PlayerCore: NSObject {
   }
 
   func toggleShuffle() {
-    airPlayPlayback.fallbackToMPV(reason: "shuffle")
     if info.isShuffled {
       mpv.command(.playlistUnshuffle)
       info.isShuffled = false
@@ -1670,19 +1620,7 @@ class PlayerCore: NSObject {
     let appliedVolume = constrain ? constrainedVolume : volume
     let shouldSendConstrainedVolumeOSD =
       constrain && volume != constrainedVolume && info.volume == appliedVolume
-    if airPlayPlayback.isActive && appliedVolume > 100 {
-      airPlayPlayback.fallbackToMPV(reason: "volume above 100 percent")
-    }
     info.volume = appliedVolume
-    if airPlayPlayback.isActive {
-      airPlayPlayback.setVolume(appliedVolume)
-      syncUI(.volume)
-      Preference.set(constrainedVolume, for: .softVolume)
-      if shouldSendConstrainedVolumeOSD {
-        sendOSD(.volume(constrainedVolume))
-      }
-      return
-    }
     mpv.setDouble(MPVOption.Audio.volume, appliedVolume, level: .verbose)
     Preference.set(constrainedVolume, for: .softVolume)
     if shouldSendConstrainedVolumeOSD {
@@ -1692,7 +1630,6 @@ class PlayerCore: NSObject {
   }
 
   func setTrack(_ index: Int, forType: MPVTrack.TrackType) {
-    airPlayPlayback.fallbackToMPV(reason: "track selection")
     let name: String
     switch forType {
     case .audio:
@@ -1710,18 +1647,10 @@ class PlayerCore: NSObject {
 
   func setSpeed(_ speed: Double) {
     let speed = max(AppData.mpvMinPlaybackSpeed, speed)
-    if airPlayPlayback.isActive {
-      info.playSpeed = speed
-      airPlayPlayback.setPlaybackSpeed(speed)
-      postNotification(.iinaSpeedChanged)
-      NowPlayingInfoManager.shared.updateInfo()
-      return
-    }
     mpv.setDouble(MPVOption.PlaybackControl.speed, speed)
   }
 
   func setVideoAspect(_ aspect: String) {
-    airPlayPlayback.fallbackToMPV(reason: "video aspect")
     if Regex.aspect.matches(aspect) {
       mpv.setString(MPVOption.Video.videoAspectOverride, aspect)
       info.unsureAspect = aspect
@@ -1733,7 +1662,6 @@ class PlayerCore: NSObject {
   }
 
   func setVideoRotate(_ degree: Int) {
-    airPlayPlayback.fallbackToMPV(reason: "video rotation")
     if AppData.rotations.firstIndex(of: degree)! >= 0 {
       mpv.setInt(MPVOption.Video.videoRotate, degree)
     }
@@ -1774,12 +1702,10 @@ class PlayerCore: NSObject {
   }
 
   func toggleDeinterlace(_ enable: Bool) {
-    airPlayPlayback.fallbackToMPV(reason: "deinterlacing")
     mpv.setFlag(MPVOption.Video.deinterlace, enable)
   }
 
   func toggleHardwareDecoding(_ enable: Bool) {
-    airPlayPlayback.fallbackToMPV(reason: "hardware decoder setting")
     let value = String(describing: Preference.enum(for: .hardwareDecoder) as
                        Preference.HardwareDecoderOption)
     mpv.setString(MPVOption.Video.hwdec, enable ? value : "no")
@@ -1790,7 +1716,6 @@ class PlayerCore: NSObject {
   }
 
   func setVideoEqualizer(forOption option: VideoEqualizerType, value: Int) {
-    airPlayPlayback.fallbackToMPV(reason: "video equalizer")
     let optionName: String
     switch option {
     case .brightness:
@@ -1808,7 +1733,6 @@ class PlayerCore: NSObject {
   }
 
   func loadExternalVideoFile(_ url: URL) {
-    airPlayPlayback.fallbackToMPV(reason: "external video track")
     mpv.command(.videoAdd, args: [url.mpvStr], checkError: false) { code in
       if code < 0 {
         self.log("Unsupported video: \(url.mpvStr)", level: .error)
@@ -1820,7 +1744,6 @@ class PlayerCore: NSObject {
   }
 
   func loadExternalAudioFile(_ url: URL) {
-    airPlayPlayback.fallbackToMPV(reason: "external audio track")
     mpv.command(.audioAdd, args: [url.mpvStr], checkError: false) { code in
       if code < 0 {
         self.log("Unsupported audio: \(url.mpvStr)", level: .error)
@@ -1843,19 +1766,16 @@ class PlayerCore: NSObject {
   }
 
   func toggleSubVisibility(_ set: Bool? = nil) {
-    airPlayPlayback.fallbackToMPV(reason: "subtitle visibility")
     let newState = set ?? !info.isSubVisible
     mpv.setFlag(MPVOption.Subtitles.subVisibility, newState)
   }
 
   func toggleSecondSubVisibility(_ set: Bool? = nil) {
-    airPlayPlayback.fallbackToMPV(reason: "second subtitle visibility")
     let newState = set ?? !info.isSecondSubVisible
     mpv.setFlag(MPVOption.Subtitles.secondarySubVisibility, newState)
   }
 
   func loadExternalSubFile(_ url: URL, delay: Bool = false, suppressError: Bool = false) {
-    airPlayPlayback.fallbackToMPV(reason: "external subtitle track")
     var track: MPVTrack?
     info.$subTracks.withLock { track = $0.first(where: { $0.externalFilename == url.mpvStr }) }
     if let track {
@@ -1883,7 +1803,6 @@ class PlayerCore: NSObject {
   }
 
   func reloadAllSubs() {
-    airPlayPlayback.fallbackToMPV(reason: "subtitle reload")
     let currentSubName = info.currentTrack(.sub)?.externalFilename
     info.$subTracks.withLock {
       for subTrack in $0 {
@@ -1903,18 +1822,16 @@ class PlayerCore: NSObject {
   }
 
   func setAudioDelay(_ delay: Double) {
-    airPlayPlayback.fallbackToMPV(reason: "audio delay")
-    mpv.setDouble(MPVOption.Audio.audioDelay, delay)
+    // While the AirPlay bridge carries the audio, mpv's delay also holds its sync correction.
+    mpv.setDouble(MPVOption.Audio.audioDelay, delay + airPlayAudio.audioDelayCorrection)
   }
 
   func setSubDelay(_ delay: Double, forPrimary: Bool = true) {
-    airPlayPlayback.fallbackToMPV(reason: "subtitle delay")
     let option = forPrimary ? MPVOption.Subtitles.subDelay : MPVOption.Subtitles.secondarySubDelay
     mpv.setDouble(option, delay)
   }
 
   func appendToPlaylist(_ path: String, silent: Bool = false) {
-    airPlayPlayback.fallbackToMPV(reason: "playlist change")
     mpv.playlistAppend(path)
     info.isShuffled = false
     if !silent {
@@ -1923,14 +1840,12 @@ class PlayerCore: NSObject {
   }
 
   func playlistMove(_ from: Int, to: Int) {
-    airPlayPlayback.fallbackToMPV(reason: "playlist change")
     mpv.playlistMove(from, to: to)
     info.isShuffled = false
     postNotification(.iinaPlaylistChanged)
   }
 
   func playlistReorder(newPlaylist: [MPVPlaylistItem]) {
-    airPlayPlayback.fallbackToMPV(reason: "playlist change")
     guard Set(info.playlist) == Set(newPlaylist) else { return }
     if info.playlist == newPlaylist { return }
     info.isShuffled = false
@@ -1953,7 +1868,6 @@ class PlayerCore: NSObject {
   }
 
   func addToPlaylist(paths: [String], at index: Int = -1) {
-    airPlayPlayback.fallbackToMPV(reason: "playlist change")
     getPlaylist()
     info.isShuffled = false
     for path in paths {
@@ -1969,14 +1883,12 @@ class PlayerCore: NSObject {
   }
 
   func playlistRemove(_ index: Int) {
-    airPlayPlayback.fallbackToMPV(reason: "playlist change")
     mpv.playlistRemove(index)
     info.isShuffled = false
     postNotification(.iinaPlaylistChanged)
   }
 
   func playlistRemove(_ indexSet: IndexSet) {
-    airPlayPlayback.fallbackToMPV(reason: "playlist change")
     guard !indexSet.isEmpty else { return }
     var count = 0
     for i in indexSet {
@@ -1988,7 +1900,6 @@ class PlayerCore: NSObject {
   }
 
   func clearPlaylist() {
-    airPlayPlayback.fallbackToMPV(reason: "playlist change")
     mpv.command(.playlistClear)
     info.isShuffled = false
     postNotification(.iinaPlaylistChanged)
@@ -2014,7 +1925,6 @@ class PlayerCore: NSObject {
   ///     clicking in the playlist on the entry that is currently playing reloads that entry.
   /// - Parameter pos: Position of the entry in the playlist to be played.
   func playFileInPlaylist(_ pos: Int) {
-    airPlayPlayback.fallbackToMPV(reason: "playlist navigation")
     mainWindow.videoView.displayActive()
     if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
       log("Pausing playback before playing entry at index \(pos) in the playlist")
@@ -2039,7 +1949,6 @@ class PlayerCore: NSObject {
   ///     resumes playback.
   /// - Parameter nextMedia: When `true` play the next entry in the playlist; otherwise play the previous entry.
   func navigateInPlaylist(nextMedia: Bool) {
-    airPlayPlayback.fallbackToMPV(reason: "playlist navigation")
     guard !mainWindow.interactiveMode.isActive else { return }
 
     if nextMedia == false && (info.playlist.first?.isPlaying) ?? false {
@@ -2056,7 +1965,6 @@ class PlayerCore: NSObject {
 
   @discardableResult
   func playChapter(_ pos: Int) -> MPVChapter? {
-    airPlayPlayback.fallbackToMPV(reason: "chapter navigation")
     log("Seeking to chapter \(pos)", level: .verbose)
     let chapters = info.chapters
     guard pos < chapters.count else {
@@ -2071,7 +1979,6 @@ class PlayerCore: NSObject {
   }
 
   func setCrop(fromString str: String) {
-    airPlayPlayback.fallbackToMPV(reason: "video crop")
     if let aspect = Aspect(string: str) {
       guard let vwidth = info.videoWidth, vwidth > 0,
             let vheight = info.videoHeight, vheight > 0 else {
@@ -2109,7 +2016,6 @@ class PlayerCore: NSObject {
   }
 
   func setAudioEq(fromGains gains: [Double]) {
-    airPlayPlayback.fallbackToMPV(reason: "audio equalizer")
     let freqList = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
     let paramString = freqList.enumerated().map { (index, freq) in
       "equalizer=f=\(freq):t=h:width=\(Double(freq) / 1.224744871):g=\(gains[index])"
@@ -2132,7 +2038,6 @@ class PlayerCore: NSObject {
   /// - Parameter filter: The filter to add.
   /// - Returns: `true` if the filter was successfully added, `false` otherwise.
   func addVideoFilter(_ filter: String) -> Bool {
-    airPlayPlayback.fallbackToMPV(reason: "video filter")
     log("Adding video filter \(filter)...")
     // check hwdec
     let askHwdec: (() -> Bool) = {
@@ -2204,7 +2109,6 @@ class PlayerCore: NSObject {
   /// - Parameter index: The index of the filter to be removed.
   /// - Returns: `true` if the filter was successfully removed, `false` otherwise.
   func removeVideoFilter(_ filter: String, _ index: Int) -> Bool {
-    airPlayPlayback.fallbackToMPV(reason: "video filter")
     log("Removing video filter \(filter)...")
     let result = mpv.removeFilter(MPVProperty.vf, index)
     logRemoveFilter(type: "video", result: result, name: filter)
@@ -2238,7 +2142,6 @@ class PlayerCore: NSObject {
   /// - Parameter filter: The filter to remove.
   /// - Returns: `true` if the filter was successfully removed, `false` otherwise.
   func removeVideoFilter(_ filter: String) -> Bool {
-    airPlayPlayback.fallbackToMPV(reason: "video filter")
     log("Removing video filter \(filter)...")
     var result = true
     mpv.command(.vf, args: ["remove", filter], checkError: false) { result = $0 >= 0 }
@@ -2257,7 +2160,6 @@ class PlayerCore: NSObject {
   /// - Returns: `true` if the filter was successfully added, `false` otherwise.
   @discardableResult
   func addAudioFilter(_ filter: String) -> Bool {
-    airPlayPlayback.fallbackToMPV(reason: "audio filter")
     log("Adding audio filter \(filter)...")
     var result = true
     mpv.command(.af, args: ["add", filter], checkError: false) { result = $0 >= 0 }
@@ -2286,7 +2188,6 @@ class PlayerCore: NSObject {
   /// - Parameter index: The index of the filter to be removed.
   /// - Returns: `true` if the filter was successfully removed, `false` otherwise.
   func removeAudioFilter(_ filter: String, _ index: Int) -> Bool {
-    airPlayPlayback.fallbackToMPV(reason: "audio filter")
     log("Removing audio filter \(filter)...")
     let result = mpv.removeFilter(MPVProperty.af, index)
     logRemoveFilter(type: "audio", result: result, name: filter)
@@ -2317,7 +2218,6 @@ class PlayerCore: NSObject {
   /// - Returns: `true` if the filter was successfully removed, `false` otherwise.
   @discardableResult
   func removeAudioFilter(_ filter: String) -> Bool {
-    airPlayPlayback.fallbackToMPV(reason: "audio filter")
     log("Removing audio filter \(filter)...")
     var result = true
     mpv.command(.af, args: ["remove", filter], checkError: false)  { result = $0 >= 0 }
@@ -2377,19 +2277,16 @@ class PlayerCore: NSObject {
 
   @discardableResult
   func setAudioDevice(_ name: String) -> Bool {
-    airPlayPlayback.fallbackToMPV(reason: "audio device menu")
     return mpv.setString(MPVProperty.audioDevice, name) >= 0
   }
 
   func stepChapter(by delta: Int) {
     guard delta != 0 else { return }
-    airPlayPlayback.fallbackToMPV(reason: "chapter navigation")
     mpv.command(.add, args: ["chapter", String(delta)], checkError: false)
   }
 
   /** Scale is a double value in [-100, -1] + [1, 100] */
   func setSubScale(_ scale: Double) {
-    airPlayPlayback.fallbackToMPV(reason: "subtitle styling")
     if scale > 0 {
       mpv.setDouble(MPVOption.Subtitles.subScale, scale, level: .verbose)
     } else {
@@ -2398,81 +2295,67 @@ class PlayerCore: NSObject {
   }
 
   func setSubPos(_ pos: Int, forPrimary: Bool = true) {
-    airPlayPlayback.fallbackToMPV(reason: "subtitle position")
     let option = forPrimary ? MPVOption.Subtitles.subPos : MPVOption.Subtitles.secondarySubPos
     mpv.setInt(option, pos, level: .verbose)
   }
 
   func setSubTextColor(_ colorString: String) {
-    airPlayPlayback.fallbackToMPV(reason: "subtitle styling")
     mpv.setString("options/" + MPVOption.Subtitles.subColor, colorString)
     info.subtitleStyleOverrides.textColor = colorString
     postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextSize(_ size: Double) {
-    airPlayPlayback.fallbackToMPV(reason: "subtitle styling")
     mpv.setDouble("options/" + MPVOption.Subtitles.subFontSize, size)
     info.subtitleStyleOverrides.size = size
     postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBold(_ bold: Bool) {
-    airPlayPlayback.fallbackToMPV(reason: "subtitle styling")
     mpv.setFlag("options/" + MPVOption.Subtitles.subBold, bold)
     info.subtitleStyleOverrides.bold = bold
     postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBorderColor(_ colorString: String) {
-    airPlayPlayback.fallbackToMPV(reason: "subtitle styling")
     mpv.setString("options/" + MPVOption.Subtitles.subOutlineColor, colorString)
     info.subtitleStyleOverrides.borderColor = colorString
     postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBorderSize(_ size: Double) {
-    airPlayPlayback.fallbackToMPV(reason: "subtitle styling")
     mpv.setDouble("options/" + MPVOption.Subtitles.subOutlineSize, size)
     info.subtitleStyleOverrides.borderSize = size
     postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBgColor(_ colorString: String) {
-    airPlayPlayback.fallbackToMPV(reason: "subtitle styling")
     mpv.setString("options/" + MPVOption.Subtitles.subBackColor, colorString)
     info.subtitleStyleOverrides.backgroundColor = colorString
     postNotification(.iinaSubStyleChanged)
   }
 
   func setSubEncoding(_ encoding: String) {
-    airPlayPlayback.fallbackToMPV(reason: "subtitle encoding")
     mpv.setString(MPVOption.Subtitles.subCodepage, encoding)
     info.subEncoding = encoding
   }
 
   func setSubFont(_ font: String) {
-    airPlayPlayback.fallbackToMPV(reason: "subtitle font")
     mpv.setString(MPVOption.Subtitles.subFont, font)
     info.subtitleStyleOverrides.font = font
     postNotification(.iinaSubStyleChanged)
   }
 
   func savePlaybackPosition() {
-    if airPlayPlayback.isActive {
-      airPlayPlayback.syncPosition()
-      if info.state.active, let position = info.videoPosition?.second {
-        // Keep mpv's existing watch-later format so saved progress remains compatible with Reel's
-        // established resume data and with files opened by the full-featured backend.
-        mpv.setDouble(MPVProperty.timePos, position, level: .verbose)
-      }
-    }
     guard mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) else { return }
 
     // The player must be active to be able to save the watch later configuration.
     if info.state.active {
       log("Write watch later config")
-      mpv.command(.writeWatchLaterConfig, level: .verbose)
+      // The AirPlay bridge briefly owns mpv's speed and audio delay; save the user's values instead.
+      airPlayAudio.withUserTiming {
+        mpv.command(.writeWatchLaterConfig, level: .verbose)
+      }
     }
     if let url = info.currentURL {
       Preference.set(url, for: .iinaLastPlayedFilePath)
@@ -2543,22 +2426,7 @@ class PlayerCore: NSObject {
   func fileStarted(path: String) {
     guard info.state.active else { return }
     log("File started")
-    airPlayPlayback.resetFallbackForNewFile()
-
-    // A direct mpv command can bypass openMainWindow. Preserve the old item's in-memory progress
-    // before replacing its URL; at FILE_STARTED mpv already refers to the new item, so do not write
-    // the old position into mpv's watch-later file here.
-    if airPlayPlayback.isActive || airPlayPlayback.isPreparing {
-      if airPlayPlayback.isActive {
-        airPlayPlayback.syncPosition()
-        if let url = info.currentURL {
-          info.setCachedVideoDurationAndProgress(url.path,
-                                                  (duration: info.videoDuration?.second,
-                                                   progress: info.videoPosition?.second))
-        }
-      }
-      airPlayPlayback.stopPlayback(resumeMPV: false)
-    }
+    airPlayAudio.fileStarted()
 
     // Opening another file in the same window does not necessarily go through `stop()`, so abandon
     // a search that was waiting on the chooser for the previous file — its chooser is stale now.
@@ -2646,8 +2514,6 @@ class PlayerCore: NSObject {
           stop()
         } else if info.state == .shuttingDown {
           shutdown()
-        } else {
-          prepareNativeAirPlayIfEligible()
         }
       }
     }
@@ -2757,6 +2623,7 @@ class PlayerCore: NSObject {
   }
 
   func fileEnded(_ dueToStopCommand: Bool) {
+    airPlayAudio.fileEnded()
     // if receive end-file when loading file, might be error
     // wait for idle
     if info.state == .loading || info.state == .starting {
@@ -2777,6 +2644,7 @@ class PlayerCore: NSObject {
   func aidChanged(_ id: Int) {
     guard info.state.active else { return }
     info.aid = id
+    airPlayAudio.audioTrackChanged()
     guard mainWindow.loaded else { return }
     mainWindow?.muteButton.isHidden = (info.aid == 0)
     mainWindow?.volumeSlider.isHidden = (info.aid == 0)
@@ -2797,7 +2665,8 @@ class PlayerCore: NSObject {
   func audioDeviceListChanged() {
     // The initial notification can arrive during an mpv loading hook. Do not synchronously query
     // mpv from the main thread until the file has finished loading.
-    guard info.state.loaded, !airPlayPlayback.isActive, !airPlayPlayback.isPreparing else { return }
+    // mpv's own output is switched off while the AirPlay bridge carries the audio.
+    guard info.state.loaded, !airPlayAudio.isEngaged else { return }
     let devices = getAudioDevices()
     let device = mpv.getString(MPVProperty.audioDevice)
     guard !devices.contains(where: {$0.name == device}) else { return }
@@ -2813,27 +2682,12 @@ class PlayerCore: NSObject {
     postNotification(.iinaMediaTitleChanged)
   }
 
-  /// Keep Reel's chapter indicators aligned with the AVPlayer clock while native playback is
-  /// active. mpv is intentionally paused in that mode, so its chapter property no longer advances.
-  func chapterChanged(atVideoTime time: VideoTime) {
-    guard info.state.loaded else { return }
-    let chapter = info.getChapter(forVideoTime: time)?.index ?? -1
-    guard info.chapter != chapter else { return }
-    info.chapter = chapter
-    postNotification(.iinaChapterListChanged)
-    postNotification(.iinaMediaTitleChanged)
-    DispatchQueue.main.async { [weak self] in
-      guard let self, PlayerCore.lastActive == self else { return }
-      NowPlayingInfoManager.shared.updateInfo()
-    }
-  }
-
   /// The mpv [current-ao](https://mpv.io/manual/stable/#command-interface-current-ao) property changed.
   ///
   /// When the audio output driver changes it may cause the currently selected audio device to be invalid because a mpv audio device
   /// is tied to a specific audio output driver. Attempt to find and configure the same audio device with the current audio output driver.
   func currentAoChanged() {
-    guard info.state.loaded, !airPlayPlayback.isActive, !airPlayPlayback.isPreparing else { return }
+    guard info.state.loaded, !airPlayAudio.isEngaged else { return }
     guard let currentAo = mpv.getString(MPVProperty.currentAo),
           let audioDevice = mpv.getString(MPVProperty.audioDevice) else { return }
     let device = MPVAudioDevice(desc: "", name: audioDevice)
@@ -2866,17 +2720,6 @@ class PlayerCore: NSObject {
   }
 
   func idleActiveChanged() {
-    if airPlayPlayback.isActive || airPlayPlayback.isPreparing {
-      if airPlayPlayback.isActive {
-        airPlayPlayback.syncPosition()
-        if let url = info.currentURL {
-          info.setCachedVideoDurationAndProgress(url.path,
-                                                  (duration: info.videoDuration?.second,
-                                                   progress: info.videoPosition?.second))
-        }
-      }
-      airPlayPlayback.stopPlayback(resumeMPV: false)
-    }
     if receivedEndFileWhileLoading && info.state == .starting {
       DispatchQueue.main.async { [unowned self] in
         currentController.close()
@@ -2923,8 +2766,8 @@ class PlayerCore: NSObject {
   }
 
   func pauseChanged(_ paused: Bool) {
-    guard !airPlayPlayback.isActive else { return }
     guard mainWindow.loaded, info.state.loaded else { return }
+    airPlayAudio.pauseChanged(paused)
     if (info.state == .paused) != paused {
       sendOSD(paused ? .pause : .resume)
       // The NowPlayingInfoManager is notified when playback is paused or resumed. The video
@@ -2962,6 +2805,7 @@ class PlayerCore: NSObject {
     // Important to synchronize the time as mpv may slightly alter the playback position during a
     // restart even while paused. See issue #5337.
     syncUI(.time)
+    airPlayAudio.playbackRestarted()
     reloadSavedIINAfilters()
 
     // The new video's size is guaranteed to be available. Reset the flags used for window resizing.
@@ -3323,7 +3167,7 @@ class PlayerCore: NSObject {
         mainWindow.toggleWindowFullScreen()
       }
     }
-    prepareNativeAirPlayIfEligible()
+    airPlayAudio.fileLoaded()
   }
 
   /// Synchronize the video position cached in the `info.videoPosition` property.
@@ -3336,10 +3180,6 @@ class PlayerCore: NSObject {
   ///     milliseconds. Due to this behavior of the `time-pos` property, this method checks to see of the end of the video has been
   ///     reached and if so, sets `videoPosition` to match `videoDuration`.
   private func syncPosition() {
-    if airPlayPlayback.isActive {
-      airPlayPlayback.syncPosition()
-      return
-    }
     if info.isNetworkResource {
       info.videoDuration?.second = mpv.getDouble(MPVProperty.duration)
     }
@@ -3391,11 +3231,9 @@ class PlayerCore: NSObject {
     case .time:
       let isNetworkStream = info.isNetworkResource
       syncPosition()
-      if !airPlayPlayback.isActive {
-        info.videoRemaining?.second = Preference.bool(for: .scaleRemainingTime) ?
-        mpv.getDouble(MPVProperty.playtimeRemainingFull) :
-        mpv.getDouble(MPVProperty.timeRemainingFull)
-      }
+      info.videoRemaining?.second = Preference.bool(for: .scaleRemainingTime) ?
+      mpv.getDouble(MPVProperty.playtimeRemainingFull) :
+      mpv.getDouble(MPVProperty.timeRemainingFull)
       if isNetworkStream {
         // Update cache info
         info.pausedForCache = mpv.getFlag(MPVProperty.pausedForCache)
@@ -3581,66 +3419,6 @@ class PlayerCore: NSObject {
         playlist.append(playlistItem)
       }
     }
-  }
-
-  /// Apple playback is deliberately limited to a single local video/audio pair with no mpv-only
-  /// state attached. Everything else stays in the full-featured mpv player.
-  func canStartNativeAirPlay(for url: URL) -> Bool {
-    let toolbarButtons = Preference.array(for: .controlBarToolbarButtons) as? [Int] ?? []
-    let customMPVOptions = Preference.value(for: .userOptions) as? [[String]] ?? []
-    let hasCustomMPVConfiguration = Preference.bool(for: .enableAdvancedSettings) &&
-      (Preference.bool(for: .useUserDefinedConfDir) || !customMPVOptions.isEmpty)
-    let hasMPVPassthrough = [PK.spdifAC3, PK.spdifDTS, PK.spdifDTSHD, PK.spdifEAC3, PK.spdifTRUEHD]
-      .contains { Preference.bool(for: $0) }
-    let aspectOverride = mpv.getString(MPVOption.Video.videoAspectOverride)
-    let videoCrop = mpv.getString(MPVOption.Video.videoCrop)
-    guard url.isFileURL, info.currentURL == url, !info.isNetworkResource,
-          toolbarButtons.contains(Preference.ToolBarButton.airPlay.rawValue),
-          !hasCustomMPVConfiguration, !hasMPVPassthrough,
-          (info.state == .playing || info.state == .paused),
-          !isInMiniPlayer, mainWindow.pipStatus == .notInPIP,
-          !backgroundTaskInUse, pluginMap.isEmpty,
-          !Preference.bool(for: .appleLiveCaptionsFallback),
-          !Preference.isLiveTextEnabled,
-          (Preference.string(for: .audioDevice) ?? "auto") == "auto",
-          (mpv.getString(MPVProperty.audioDevice) ?? "auto") == "auto",
-          info.playlist.count == 1, !info.isShuffled,
-          getLoopMode() == .off,
-          info.abLoopStatus == .cleared, abLoopA == 0, abLoopB == 0,
-          info.videoTracks.filter({ !$0.isAlbumart }).count == 1,
-          info.audioTracks.count == 1, info.volume <= 100,
-          info.vid != nil, info.vid != 0, info.aid != nil, info.aid != 0,
-          info.subTracks.isEmpty,
-          info.audioDelay == 0, mpv.getDouble(MPVOption.Audio.audioDelay) == 0,
-          info.subDelay == 0, info.secondarySubDelay == 0,
-          mpv.getDouble(MPVOption.Subtitles.subDelay) == 0,
-          mpv.getDouble(MPVOption.Subtitles.secondarySubDelay) == 0,
-          mpv.getFilters(MPVProperty.vf).isEmpty, mpv.getFilters(MPVProperty.af).isEmpty,
-          info.cropFilter == nil, info.flipFilter == nil, info.mirrorFilter == nil,
-          info.audioEqFilter == nil, info.delogoFilter == nil,
-          info.brightness == 0, info.contrast == 0, info.saturation == 0,
-          mpv.getDouble(MPVOption.Equalizer.brightness) == 0,
-          mpv.getDouble(MPVOption.Equalizer.contrast) == 0,
-          mpv.getDouble(MPVOption.Equalizer.saturation) == 0,
-          mpv.getDouble(MPVOption.Equalizer.gamma) == 0,
-          mpv.getDouble(MPVOption.Equalizer.hue) == 0,
-          info.gamma == 0, info.hue == 0, !info.deinterlace,
-          !mpv.getFlag(MPVOption.Video.deinterlace), mpv.getInt(MPVOption.Video.videoRotate) == 0,
-          (aspectOverride == nil || aspectOverride == "-1" || aspectOverride == "no"),
-          (videoCrop?.isEmpty != false || videoCrop == "no"),
-          mpv.getDouble(MPVOption.Video.videoZoom) == 0,
-          mpv.getDouble(MPVOption.Video.videoPanX) == 0,
-          mpv.getDouble(MPVOption.Video.videoPanY) == 0,
-          info.unsureAspect == "Default", info.unsureCrop == "None" else {
-      return false
-    }
-    return true
-  }
-
-  private func prepareNativeAirPlayIfEligible() {
-    guard !backgroundTaskInUse, let url = info.currentURL,
-          canStartNativeAirPlay(for: url) else { return }
-    airPlayPlayback.prepare(url: url)
   }
 
   func getChapters() {

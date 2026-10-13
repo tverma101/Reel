@@ -120,7 +120,6 @@ class FilterWindowController: NSWindowController, NSWindowDelegate {
   }
 
   func setFilters() {
-    PlayerCore.lastActive.airPlayPlayback.fallbackToMPV(reason: "filter settings")
     PlayerCore.lastActive.mpv.setFilters(filterType, filters: filters)
   }
 
