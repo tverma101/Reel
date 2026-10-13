@@ -475,7 +475,6 @@ extension MainMenuActionHandler {
   }
 
   @objc func menuCycleTrack(_ sender: NSMenuItem) {
-    player.airPlayPlayback.fallbackToMPV(reason: "track selection")
     switch sender.tag {
     case 0: player.mpv.command(.cycle, args: ["video"])
     case 1: player.mpv.command(.cycle, args: ["audio"])

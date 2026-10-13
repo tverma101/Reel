@@ -1,35 +1,47 @@
 # Audio output
 
-Reel has two playback paths. Apple playback is used for eligible local videos so the native AirPlay picker can control that Reel player. Reel keeps its full mpv player for files or features Apple playback cannot handle.
+Reel plays through mpv. Its AirPlay control can send Reel's sound alone to an AirPlay speaker while
+the picture stays on the Mac.
 
-## Apple AirPlay for supported local videos
+## AirPlay audio
 
-The on-screen AirPlay button is Apple's native route picker attached to Reel's own AVPlayer. Apple
-documents that the picker routes media from its attached player to nearby receivers. Reel disables
-external video playback so the picture stays in Reel's window. The intended HomePod behavior is to
-route only Reel's audio through that player without changing the Mac's system output or other apps'
-audio; verify this with a physical HomePod before relying on it. See Apple's documentation for
-[AVRoutePickerView](https://developer.apple.com/documentation/avkit/avroutepickerview), its
-[player property](https://developer.apple.com/documentation/avkit/avroutepickerview/player), and
-[AVPlayer.allowsExternalPlayback](https://developer.apple.com/documentation/avfoundation/avplayer/allowsexternalplayback).
+Click **AirPlay Audio** in the on-screen controller and choose a speaker in Apple's list. Only Reel's
+audio moves; other apps and the Mac's default output are unchanged. Choose the Mac in the same list
+to bring Reel's audio back. The OSD confirms the change with "Reel audio: <speaker>" or
+"Reel audio: this Mac".
 
-When the AirPlay button is enabled, Reel automatically uses Apple's player for eligible files,
-even before a receiver is selected. The native path requires a local file Apple can play, exactly
-one video and one audio track, a single-item playlist, and no active subtitles, A-B loop, mpv
-filters or effects, audio passthrough, audio or subtitle delay, custom mpv options, Picture in
-Picture, mini player, Reel plugin, or Apple live captions. Files with more tracks, network streams,
-unsupported formats, or volume above 100 stay in mpv. Reel checks that the Apple player is ready
-before switching.
+macOS routes one app's audio only through an AVPlayer bound to an
+[AVRoutePickerView](https://developer.apple.com/documentation/avkit/avroutepickerview), and AVPlayer
+cannot open most files mpv plays. While a speaker is selected, Reel therefore decodes the selected
+audio track with FFmpeg (to 48 kHz stereo) and plays it in a hidden AVPlayer. mpv keeps the
+picture, subtitles, Live Text and live captions; its own audio output is switched to `null`.
 
-Controls that need mpv — for example subtitles, external tracks, audio delay, filters, chapters,
-A-B loop, playlist controls, or the Audio Device menu — return playback to mpv at the current
-position. That ends Reel's native route for the current file. Reel stays in mpv for that file;
-reopen it to use the native route again. Changing volume above 100% also returns to mpv.
+- **Starting, resuming and seeking.** The picture waits, at mpv's slowest speed, until the speaker is
+  playing the matching sound. The speaker's buffering (about two seconds on AirPlay 2) shows as a
+  short wait instead of a lip-sync offset.
+- **Keeping sync.** Four times a second Reel compares the picture with AVPlayer's clock. When they
+  drift more than 45 ms apart, it adjusts mpv's audio delay, which moves the picture.
+- **What carries over.** Pause, seek, speed, audio-track changes, **Audio Delay**, mute and volume all
+  apply to the speaker. Watch-later files keep your own speed and audio delay.
+- **Supported sources.** Local files, external audio tracks and direct http(s) streams, with any
+  audio codec FFmpeg decodes.
 
-The native picker is hidden when Reel cannot use Apple's player for the current file. Reel does not
-receive a confirmed device name from the picker, so a listed receiver is not proof that sound is
-playing through it. This code has not yet been verified with a physical HomePod; HomePod playback,
-pause/seek, disconnect/reconnect, and local video behavior still need a device check.
+Limits:
+
+- mpv audio filters and the equalizer are not applied to AirPlay audio.
+- Volume above 100% plays at 100%.
+- Other sources play on the Mac, with a message. These include ytdl pages, EDL and other protocols.
+- A file also falls back to the Mac until the next file if its audio cannot be decoded, or if the
+  speaker does not start within 10 seconds.
+- An external audio file that starts later than its own timeline's zero may be misaligned.
+- One file's AirPlay audio is limited to about six hours.
+
+Diagnostics are logged with the prefix `AirPlay audio:`. To check sync without a speaker, launch Reel
+with the argument `-ReelAirPlayBridgeLocalTest YES`, which runs the same path on the Mac's own
+output. If a receiver's latency is not included in AVPlayer's clock,
+`-ReelAirPlayBridgeLatencyCompensation <seconds>` subtracts it. The decoder's alignment with mpv's
+timeline is checked by `python3 other/test_pcm_stream_reader.py`. Audible routing, other apps'
+output and speaker disconnects need a real receiver.
 
 ## mpv audio devices
 
@@ -45,8 +57,8 @@ means mpv accepted the request, not that the receiver is playing sound.
 
 If an mpv device disappears, Reel returns mpv to auto so playback can continue on the system
 output. That reset also runs after a file finishes loading. It does not change the saved
-preference; Settings labels a missing device until you choose another one. The paused mpv device
-list does not control Apple playback.
+preference; Settings labels a missing device until you choose another one. While AirPlay audio
+is on, mpv's output is off; a device chosen here applies once Reel's audio returns to the Mac.
 
 Reel's bundled AirPlay video-casting plugin is a separate feature. It sends a local video to a TV while Reel stays the remote; see [AirPlay video casting](airplay-casting.md).
 

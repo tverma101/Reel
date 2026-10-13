@@ -69,8 +69,9 @@ public integration contract was not verified, so they are not part of the automa
 
 When a video has no subtitle track, **Caption video when no subtitles are available** uses
 Apple's Speech framework to transcribe short audio chunks on device and shows the text over the
-video at playback time. It needs mpv's decoded audio, so enabling this feature returns the current
-file to Reel's full mpv player and ends native AVPlayer AirPlay for that file. Pausing cancels the
+video at playback time. Captions decode the selected source audio independently of the audio
+output. While AirPlay audio is on they follow the speaker's clock; otherwise they follow mpv's
+audio clock. Pausing cancels the
 current decode/recognition request and retires its
 generation, so a late result cannot appear; resuming retries the excerpt that covers the current
 playhead. macOS 26 and later uses `SpeechTranscriber` without the older Speech

@@ -78,10 +78,7 @@ class PrefCodecViewController: PreferenceViewController, PreferenceWindowEmbedda
     if spdifDTSBtn.state == .on { spdif.append("dts") }
     if spdifDTSHDBtn.state == .on { spdif.append("dts-hd") }
     let spdifString = spdif.joined(separator: ",")
-    PlayerCore.playerCores.forEach {
-      $0.airPlayPlayback.fallbackToMPV(reason: "audio output settings")
-      $0.mpv.setString(MPVOption.Audio.audioSpdif, spdifString)
-    }
+    PlayerCore.playerCores.forEach { $0.mpv.setString(MPVOption.Audio.audioSpdif, spdifString) }
   }
 
   @IBAction func hwdecAction(_ sender: AnyObject) {

@@ -1307,7 +1307,12 @@ class MPVController: NSObject {
         logPropertyValueError(MPVOption.PlaybackControl.speed, property.format)
         break
       }
-      DispatchQueue.main.async { self.player.speedChanged(speed) }
+      DispatchQueue.main.async {
+        // The AirPlay bridge holds the picture with a near-zero speed while the speaker starts.
+        guard !self.player.airPlayAudio.consumeInternalSpeed(speed) else { return }
+        self.player.speedChanged(speed)
+        self.player.airPlayAudio.userSpeedChanged()
+      }
 
     case MPVOption.PlaybackControl.loopPlaylist, MPVOption.PlaybackControl.loopFile:
       DispatchQueue.main.async { [self] in
@@ -1366,6 +1371,7 @@ class MPVController: NSObject {
       }
       DispatchQueue.main.async { [self] in
         player.info.isMuted = data
+        player.airPlayAudio.volumeChanged()
         player.syncUI(.volume)
         player.sendOSD(data ? OSDMessage.mute : OSDMessage.unMute)
       }
@@ -1377,6 +1383,7 @@ class MPVController: NSObject {
       }
       DispatchQueue.main.async { [self] in
         player.info.volume = data
+        player.airPlayAudio.volumeChanged()
         player.syncUI(.volume)
         player.sendOSD(.volume(data))
       }
@@ -1387,8 +1394,10 @@ class MPVController: NSObject {
         break
       }
       DispatchQueue.main.async { [self] in
-        player.info.audioDelay = data
-        player.sendOSD(.audioDelay(data))
+        // While the AirPlay bridge carries the audio, part of mpv's delay is its sync correction.
+        guard let delay = player.airPlayAudio.userAudioDelay(fromMPV: data) else { return }
+        player.info.audioDelay = delay
+        player.sendOSD(.audioDelay(delay))
         player.postNotification(.iinaAudioDelayChanged)
       }
 
