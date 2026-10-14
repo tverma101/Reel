@@ -49,6 +49,12 @@ class OpenSub {
       subtitle.attributes.files.first?.fileName
     }
 
+    /// OpenSubtitles reports its own catalog code, which can carry a region (`pt-br`).
+    /// `SubtitleLanguagePreference` reduces it to a language subtag.
+    override var languageHint: String? {
+      subtitle.attributes.language
+    }
+
     /// Clean provider-only labels for display. This does not affect `releaseName`: the uploader's
     /// original filename remains the input to conservative matching, and provider metadata is not
     /// proof that a subtitle's dialogue matches the media.
@@ -230,13 +236,12 @@ class OpenSub {
 
     private let subChooseViewController = SubChooseViewController()
 
-    private var languages: [String] = {
-      guard let preferredLanguages = Preference.string(for: .subLang) else {
-        Utility.showAlert("sub_lang_not_set")
-        return ["en"]
-      }
-      return preferredLanguages.components(separatedBy: ",")
-    }()
+    /// The languages a search asks this provider for, read from the *Preferred language* setting
+    /// the first time a search uses this fetcher. A `Fetcher` is created per search
+    /// (`Provider.getFetcher()`), so a changed setting takes effect on the next search, and
+    /// filtering below never rewrites the stored preference.
+    private lazy var languages: [String] = SubtitleLanguagePreference.providerCodes(
+      from: Preference.string(for: .subLang), supportedCodes: Fetcher.supportedLanguages)
 
     /// The new OpenSubtitle API only supports a fixed set of language codes.
     /// Here we cache the result so `obtainLanguageCodes()` only needs to be called once.
@@ -446,26 +451,20 @@ class OpenSub {
     /// from subtitle sites. As a result it may contain language codes not supported by Open Subtitles. When logging is enabled this
     /// method will log the language codes in the setting that are not supported by Open Subtitles and will be ignored. This is only
     /// done for ease of debugging.
+    ///
+    /// The user's region is retained when OpenSubtitles supports that exact code. A broad language
+    /// preference expands to every supported regional code instead of choosing the first catalog
+    /// entry.
     func filterLanguageCodes() -> Promise<Void> {
       let supportedCodes = Fetcher.supportedLanguages
       log("Preferred languages: \(languages.sorted().joined(separator: ","))")
       log("Supported languages: \(supportedCodes.sorted().joined(separator: ","))")
 
-      var ignoredCodes: [String] = []
-      var filteredCodes: [String] = []
-      for language in languages {
-        if supportedCodes.contains(language) {
-          filteredCodes.append(language)
-        } else {
-          ignoredCodes.append(language)
-        }
-      }
+      var filteredCodes = languages.filter { supportedCodes.contains($0) }
 
       if filteredCodes.isEmpty {
-        log("None of the preferred languages are supported: \(ignoredCodes); using en", level: .warning)
+        log("None of the preferred languages are supported; using en", level: .warning)
         filteredCodes = ["en"]
-      } else if !ignoredCodes.isEmpty {
-        log("The following preferred languages will be ignored: \(ignoredCodes)")
       } else {
         log("All preferred languages are supported")
       }

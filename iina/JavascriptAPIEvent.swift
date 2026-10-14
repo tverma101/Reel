@@ -19,6 +19,7 @@ import JavaScriptCore
 // event.on("mpv.fullscreen.changed")
 // event.on("iina.window-resized")
 // event.on("iina.pip.changed")
+// event.on("iina.plugin-will-unload") is also emitted synchronously before normal player shutdown.
 
 class JavascriptAPIEvent: JavascriptAPI, JavascriptAPIEventExportable {
   private var addedListeners: [(String, EventController.Name)] = []

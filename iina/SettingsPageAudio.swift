@@ -144,6 +144,7 @@ class SettingsPageAudio: SettingsPage {
           .withDetailView(
             SettingsAccessory.LanguageSelector()
               .bind(to: .audioLanguage)
+              .hasDescription()
           )
       }
     }

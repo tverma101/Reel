@@ -2,7 +2,8 @@
 
 Automatic exact-match selection is opt-in under Settings → Subtitles → Online Subtitles. When it is
 off, search results open in the chooser. Reel preserves the provider's result order and preselects
-the strongest eligible result when it can identify one.
+the strongest eligible result when it can identify one. Preferred language breaks ties between
+similarly scoring results; a weak language match does not displace a stronger title match.
 
 ## Exact-match rules
 
@@ -11,8 +12,16 @@ all of these conditions:
 
 - The normalized titles match token for token.
 - Both names contain the same year or episode marker, and at least one such identity anchor exists.
-- Exactly one result qualifies; ties stay in the chooser.
+- Exactly one result qualifies after the preferred language is applied; ties stay in the chooser.
 - The provider opts in based on evidence beyond a filename alone.
+
+When several results qualify, the *Preferred language* setting (Settings → Subtitles → Online
+Subtitles) decides between them: the first preferred language that any qualifying result is in wins,
+and only when exactly one result is in that language. Languages are compared by identity, not by
+spelling, so `eng`, `en`, and `English` are one language and OpenSubtitles' `pt-br` matches `pt`.
+When no qualifying result is in a preferred language the setting says nothing and the single-exact-
+match rule above decides, so a result whose language no provider could identify is still selected on
+its release name alone. With the setting left empty, English is preferred.
 
 SubDL opts in only when its `match_score` is at least `0.8`. OpenSubtitles opts in only after an
 opt-in, same-language dialogue comparison against locally decoded audio. Other providers default
@@ -67,7 +76,10 @@ WebVTT, and ASS; unsupported, oversized, or malformed files remain unverified.
 ## Developer checks
 
 Run `bash other/check_subtitle_matcher.sh` for the exact-title, anchor, tie, adversarial-name, and
-pathological-input checks. Run `bash other/check_subtitle_audio_parser.sh` for bounded WebVTT/ASS
+pathological-input checks. Run `bash other/check_subtitle_language_preference.sh` for the language
+recognition (codes, names, regional codes, Chinese descriptions), preference ordering, and selection
+rule checks, including a source guard that the providers report their language and OpenSubtitles
+compares canonical languages. Run `bash other/check_subtitle_audio_parser.sh` for bounded WebVTT/ASS
 and SRT parsing checks, `bash other/check_opensub_bounded_download.sh` for streamed response caps
 and cancellation, and `bash other/check_subdl_search_parser.sh` for SubDL response-schema,
 URL-origin, filename, and provider-score checks. The app target has no unit-test target.

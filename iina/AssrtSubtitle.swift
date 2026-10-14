@@ -56,6 +56,12 @@ class Assrt {
       nativeName == Self.untitledPlaceholder ? nil : nativeName
     }
 
+    /// assrt.net describes the language in its own Chinese vocabulary (`简体`, `英文`), which
+    /// `SubtitleLanguagePreference` maps to a language subtag where the description names exactly
+    /// one language. This provider is not filtered server-side, so the language only orders and
+    /// preselects its results.
+    override var languageHint: String? { subLang }
+
     override func download() -> Promise<[URL]> {
       download(cancellation: SubtitleAudioMatcher.Cancellation())
     }

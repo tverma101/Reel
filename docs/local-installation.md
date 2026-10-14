@@ -165,7 +165,9 @@ The Desktop `Total Drama Player.command` opens the canonical `/Applications/Reel
 playlist cache, validated metadata cache, resume ledger, and immutable launch snapshots in
 `~/Library/Caches/TotalDramaPlayer`. Valid metadata is reused for up to six hours; after that, the
 launcher refreshes it and falls back to the last valid playlist if the network or metadata response
-fails. After the final signed-bundle check, the launcher can import only an eligible per-URL playback
+fails. It retains immutable playlist snapshots for seven days, with limits of 64 snapshots and 16 MiB;
+when either limit is reached, it preserves existing snapshots and refuses another open. After the
+final signed-bundle check, the launcher can import only an eligible per-URL playback
 position from the separate upstream-IINA `watch_later` directory. It leaves original IINA saves in
 place, does not copy IINA preferences or plugins, and never overwrites an existing Reel playback
 position. A private ledger records consumed legacy save identities so the same unchanged save is not
@@ -178,8 +180,14 @@ use lowercase MD5 names, with read-only compatibility checks for uppercase names
 launcher candidates.
 The import and playlist cache scans have fixed byte and entry limits; if a save, playlist, or cache
 cannot be validated within those limits, the command refuses the unsafe migration or stale-URL
-resume. The Reel application updater is intentionally manual, so installing a later build at the same
-canonical path keeps the Desktop command and Reel profile pointing at the updated app.
+resume. mpv removes a watch-later save after successfully loading its media; Reel writes the current
+position back when playback stops or the app quits cleanly. Close the player window or quit Reel
+normally before restarting or replacing it. An abrupt termination before a new save is written can
+lose the last resume point. Legacy IINA source saves remain in place, but a Reel-only save has no
+second copy in the source profile. The launch acknowledgement proves that Reel accepted the playlist,
+not that mpv loaded it or durably saved a new position. The Reel application updater is intentionally
+manual, so installing a later build at the same canonical path keeps the Desktop command and Reel
+profile pointing at the updated app.
 
 ## Check or repair registration
 
@@ -217,8 +225,12 @@ longer needed.
 The registration check uses Apple's [NSWorkspace](https://developer.apple.com/documentation/appkit/nsworkspace)
 application lookup APIs. The installer registers the app with Xcode's recursive trusted
 `lsregister -f -R -trusted` mode and explicitly adds the embedded Open In Safari extension with
-`pluginkit -a`, then verifies that PlugInKit resolves the extension under `/Applications/Reel.app`.
-Repair performs the same registration step. If installation fails after the swap, rollback
+`pluginkit -a`. It verifies that Launch Services prefers `/Applications/Reel.app`, that the
+extension appears in PlugInKit's normal reduced match and full registration inventory, and that
+every reported extension path exists. The reduced match uses PlugInKit's normal version and instance
+reduction and accepts only its default or explicit `use` election; ignored, debugger-only,
+superseded, and unknown-election matches do not count. This check does not model host-specific
+extension delivery restrictions. Repair performs the same registration checks. If installation fails after the swap, rollback
 unregisters the candidate extension and re-registers the restored app and extension before returning
 the error. Targeted cleanup removes only registrations for missing paths; it does not reset the
 entire Launch Services or PlugInKit database or remove existing builds.

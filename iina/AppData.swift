@@ -134,6 +134,7 @@ extension Notification.Name {
   static let iinaMainWindowChanged = Notification.Name("IINAMainWindowChanged")
   static let iinaMusicModeChanged = Notification.Name("IINAMusicModeChanged")
   static let iinaPlaylistChanged = Notification.Name("IINAPlaylistChanged")
+  static let iinaPlaylistPlaybackStatusChanged = Notification.Name("IINAPlaylistPlaybackStatusChanged")
   static let iinaChapterListChanged = Notification.Name("IINAChapterListChanged")
   static let iinaTracklistChanged = Notification.Name("IINATracklistChanged")
   static let iinaLoopStatusChanged = Notification.Name("iinaLoopStatusChanged")

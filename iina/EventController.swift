@@ -131,6 +131,15 @@ class EventController {
     }
   }
 
+  /// Invoke only one plugin's synchronous listeners. Used during player shutdown to let a bundled
+  /// plugin flush state without running arbitrary callbacks from every installed plugin.
+  func emitToPlugin(_ eventName: Name, identifier: String, data: [Any]) {
+    let snapshot = (listeners[eventName] ?? [:]).values.filter { $0.ownerIdentifier == identifier }
+    for listener in snapshot {
+      listener.call(withArguments: data)
+    }
+  }
+
   /// Emits an event to all listeners, but waits for Promise results from one plugin's listeners.
   /// This is used before an enabled plugin is disabled, reloaded, or replaced so a plugin can
   /// finish bounded external-process cleanup while its JavaScript context is still live.
@@ -286,5 +295,22 @@ final class PluginContextStartupGate {
     continuations.removeAll()
     lock.unlock()
     pending.forEach { $0() }
+  }
+}
+
+/// Marks plugin work that the application intentionally canceled as part of Quit.
+enum PluginOperationCancellationError: Error {
+  case applicationTerminating
+}
+
+/// Avoid presenting a plugin installation error for work that Quit intentionally canceled.
+enum PluginOperationErrorPolicy {
+  static func shouldShowInstallationError(_ error: Error, whileTerminating isTerminating: Bool) -> Bool {
+    guard isTerminating,
+          let cancellation = error as? PluginOperationCancellationError else { return true }
+    switch cancellation {
+    case .applicationTerminating:
+      return false
+    }
   }
 }

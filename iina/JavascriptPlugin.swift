@@ -127,6 +127,13 @@ class JavascriptPlugin: NSObject {
         let callbacks = self.pendingEnabledCallbacks
         self.pendingEnabledCallbacks.removeAll()
         self.pendingEnabledTarget = nil
+        guard !AppDelegate.shared.isApplicationTerminating else {
+          if case .success(let permit) = result {
+            permit.release(reloadDeferredContexts: false)
+          }
+          callbacks.forEach { $0(.failure(CancellationError())) }
+          return
+        }
         switch result {
         case .success(let permit):
           self.commitEnabledState(enabled)

@@ -10,13 +10,59 @@ guard arguments.count == 4, let streamIndex = Int(arguments[2]), let duration = 
   print("usage: loader <media> <ffIndex> <duration>")
   exit(2)
 }
-let frames = Int64((duration + 2) * AirPlayPCMResourceLoader.sampleRate)
+precondition(AirPlayPCMResourceLoader.frameCount(for: .nan) == AirPlayPCMResourceLoader.maximumFrames)
+precondition(AirPlayPCMResourceLoader.frameCount(for: .infinity) == AirPlayPCMResourceLoader.maximumFrames)
+precondition(AirPlayPCMResourceLoader.frameCount(for: Double.greatestFiniteMagnitude) == AirPlayPCMResourceLoader.maximumFrames)
+precondition(!AirPlayPCMResourceLoader.audioClockHasAdvanced(from: nil, to: 2))
+precondition(AirPlayPCMResourceLoader.audioClockHasAdvanced(from: 2, to: 2.2),
+             "audio-clock movement is detected while a low-fps video may repeat its displayed frame")
+precondition(!AirPlayPCMResourceLoader.audioClockHasAdvanced(from: 2, to: .nan))
+var speakerClock = AirPlaySpeakerClock()
+let speakerClockStart = Date(timeIntervalSince1970: 2_000)
+speakerClock.reset(position: 0)
+speakerClock.observe(position: 0, at: speakerClockStart)
+precondition(!speakerClock.hasAdvanced, "a stationary AVPlayer clock is not playback progress")
+precondition(!speakerClock.hasStalled(at: speakerClockStart.addingTimeInterval(3),
+                                     stallTimeout: 1, startupTimeout: 4))
+precondition(speakerClock.hasStalled(at: speakerClockStart.addingTimeInterval(4.1),
+                                    stallTimeout: 1, startupTimeout: 4),
+             "a route that reports playing without starting its clock must fail over")
+speakerClock.reset(position: 10)
+speakerClock.observe(position: 9.99, at: speakerClockStart.addingTimeInterval(5))
+precondition(!speakerClock.hasAdvanced, "a backwards clock correction is not playback progress")
+speakerClock.observe(position: 10.1, at: speakerClockStart.addingTimeInterval(5.1))
+precondition(speakerClock.hasAdvanced)
+precondition(!speakerClock.hasStalled(at: speakerClockStart.addingTimeInterval(5.9),
+                                     stallTimeout: 1, startupTimeout: 4))
+precondition(speakerClock.hasStalled(at: speakerClockStart.addingTimeInterval(6.2),
+                                    stallTimeout: 1, startupTimeout: 4),
+             "a route that stops after playback begins must fail over")
+speakerClock.markBlocked(position: 10.1)
+precondition(!speakerClock.hasAdvanced, "buffering resets the clock's stall window")
+let requestCancellation = AirPlayRequestCancellation()
+precondition(!requestCancellation.isCancelled)
+requestCancellation.cancel()
+precondition(requestCancellation.isCancelled, "a canceled AVFoundation range is visible to FFmpeg")
+var audioStartClock = AirPlayAudioStartupClock()
+let startup = Date(timeIntervalSince1970: 1_000)
+audioStartClock.markBlocked()
+audioStartClock.markCanProgress(at: startup)
+precondition(!audioStartClock.hasExpired(at: startup.addingTimeInterval(9), timeout: 10))
+audioStartClock.markBlocked() // User pause or mpv cache buffering excludes the blocked interval.
+precondition(!audioStartClock.hasExpired(at: startup.addingTimeInterval(120), timeout: 10))
+audioStartClock.markCanProgress(at: startup.addingTimeInterval(120))
+precondition(!audioStartClock.hasExpired(at: startup.addingTimeInterval(129), timeout: 10))
+precondition(audioStartClock.hasExpired(at: startup.addingTimeInterval(131), timeout: 10))
+let frames = AirPlayPCMResourceLoader.frameCount(for: duration)
 let loader = AirPlayPCMResourceLoader(source: arguments[1], streamIndex: streamIndex, mediaOrigin: nil,
                                       frameCount: frames) { print("loader failed") }
 let asset = AVURLAsset(url: URL(string: "\(AirPlayPCMResourceLoader.scheme)://audio/1.wav")!)
-asset.resourceLoader.setDelegate(loader, queue: loader.queue)
+asset.resourceLoader.setDelegate(loader, queue: loader.delegateQueue)
 let item = AVPlayerItem(asset: asset)
 let player = AVPlayer(playerItem: item)
+if let outputDevice = ProcessInfo.processInfo.environment["REEL_TEST_AUDIO_UID"] {
+  player.audioOutputDeviceUniqueID = outputDevice
+}
 player.isMuted = true
 
 func wait(_ timeout: TimeInterval, until condition: () -> Bool) -> Bool {

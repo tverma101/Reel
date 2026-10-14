@@ -944,6 +944,13 @@ class OnlineSubtitle: NSObject {
    */
   var releaseName: String? { nil }
 
+  /// The language this result is in, as the provider reports it, used only to order and preselect
+  /// results against the *Preferred language* setting. `nil` means the provider cannot describe
+  /// its results; a language that cannot be recognized ranks as unknown rather than as preferred.
+  /// Providers that label their results override this instead of making the caller guess from a
+  /// filename.
+  var languageHint: String? { nil }
+
   /// Whether this provider result has independent evidence beyond uploader-controlled names.
   /// Providers must opt in explicitly; exact filename matches alone are not proof of content.
   var canAutomaticallySelect: Bool { false }
@@ -1613,5 +1620,270 @@ enum SubtitleMatchScorer {
                                locale: Locale(identifier: "en_US_POSIX"))
     let separated = String(folded.map { $0.isLetter || $0.isNumber ? $0 : " " })
     return separated.split(separator: " ").map(String.init)
+  }
+}
+
+// MARK: - Preferred subtitle language
+
+/// Recognizes the languages used by the *Preferred language* setting and by provider results, and
+/// reduces both to one canonical identity so they can be compared.
+///
+/// The setting is a comma-separated list written by the preferences token field, which stores an
+/// ISO 639 code — `en` or `eng`, depending on which completion the user accepted — and can hold a
+/// name the user typed by hand. Results arrive in whatever spelling each provider uses: assrt.net
+/// describes a file in Chinese (`简体`), SubDL returns a lowercase language name, and OpenSubtitles
+/// returns catalog codes that can carry a region (`pt-br`). Comparing those strings literally
+/// treats one language as several — `spa` is not `es` — and the language asked for is then silently
+/// dropped in favor of a fallback. Every token therefore goes through `canonical(_:)` first.
+enum SubtitleLanguagePreference {
+
+  /// Preferred when the setting is empty. OpenSubtitles and SubDL each already fall back to English
+  /// on their own, so naming it here makes the behavior explicit instead of incidental.
+  static let defaultLanguage = "en"
+
+  /// The user's languages, most preferred first, canonicalized and deduplicated. Never empty: an
+  /// unset setting means `defaultLanguage`.
+  static func preferred(from setting: String?) -> [String] {
+    var languages: [String] = []
+    for token in (setting ?? "").split(separator: ",") {
+      guard let language = canonical(String(token)), !languages.contains(language) else { continue }
+      languages.append(language)
+    }
+    return languages.isEmpty ? [defaultLanguage] : languages
+  }
+
+  /// The chooser keeps explicit regions when available, while names and language-only codes remain
+  /// broad preferences. Chinese scripts map to the provider's commonly reported region tags.
+  static func preferredForSelection(from setting: String?) -> [String] {
+    var languages: [String] = []
+    for token in (setting ?? "").split(separator: ",") {
+      guard let language = providerTag(String(token)), !languages.contains(language) else { continue }
+      languages.append(language)
+    }
+    return languages.isEmpty ? [defaultLanguage] : languages
+  }
+
+  /// Language tags accepted by mpv's `alang` and `slang` options. Resolve language names and
+  /// three-letter ISO codes to a canonical base tag, while preserving explicit region or script
+  /// subtags so a preference such as `pt-BR` can select that track when present.
+  static func preferredTrackTags(from setting: String?) -> [String] {
+    var tags: [String] = []
+    for rawToken in (setting ?? "").split(separator: ",") {
+      guard let tag = trackTag(String(rawToken)), !tags.contains(tag) else { continue }
+      tags.append(tag)
+    }
+    return tags.isEmpty ? [defaultLanguage] : tags
+  }
+
+  private static func trackTag(_ token: String) -> String? {
+    let normalized = token.trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: "_", with: "-")
+    let parts = normalized.split(separator: "-")
+    guard let first = parts.first else { return nil }
+    let rawLanguage = String(first)
+    let language = canonical(rawLanguage) ?? {
+      // Preserve well-formed three-letter codes that CoreFoundation does not currently know.
+      guard (2...3).contains(rawLanguage.count), rawLanguage.allSatisfy(\.isLetter) else { return nil }
+      return rawLanguage.lowercased()
+    }()
+    guard let language else { return nil }
+    let subtags = parts.dropFirst().map(String.init)
+    guard subtags.allSatisfy({
+      ((2...8).contains($0.count) && $0.allSatisfy(\.isLetter)) || $0.allSatisfy(\.isNumber)
+    }) else { return nil }
+    return ([language] + subtags.map { $0.lowercased() }).joined(separator: "-")
+  }
+
+  /// Position of a provider-reported language in `preferred`, or `nil` when the language is
+  /// unknown, unrecognizable, or simply not one the user asked for. A `nil` rank is not a
+  /// rejection: it only means the preference has nothing to say about that result.
+  static func rank(of language: String?, in preferred: [String]) -> Int? {
+    guard let language, let providerLanguage = providerTag(language) else { return nil }
+    for (rank, preference) in preferred.enumerated() {
+      if preference.contains("-") {
+        if preference == providerLanguage { return rank }
+      } else if canonical(language) == preference {
+        return rank
+      }
+    }
+    return nil
+  }
+
+  private static func providerTag(_ token: String) -> String? {
+    let normalized = token.trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: "_", with: "-").lowercased()
+    let parts = normalized.split(separator: "-")
+    guard let first = parts.first, let language = canonical(String(first)) else {
+      return canonical(token)
+    }
+    guard parts.count > 1 else { return language }
+    if language == "zh" {
+      if parts[1] == "hant" { return "zh-tw" }
+      if parts[1] == "hans" { return "zh-cn" }
+    }
+    let subtags = parts.dropFirst().map(String.init)
+    guard subtags.allSatisfy({
+      ((2...8).contains($0.count) && $0.allSatisfy(\.isLetter)) || $0.allSatisfy(\.isNumber)
+    }) else { return language }
+    return ([language] + subtags).joined(separator: "-")
+  }
+
+  /// Preserve an explicit supported region while allowing a language-only token to match every
+  /// regional provider code.
+  static func providerCodes(from setting: String?, supportedCodes: [String]) -> [String] {
+    var result: [String] = []
+    for rawToken in (setting ?? "").split(separator: ",") {
+      let token = String(rawToken).trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !token.isEmpty else { continue }
+      let normalized = token.replacingOccurrences(of: "_", with: "-").lowercased()
+      var matches = supportedCodes.filter {
+        $0.replacingOccurrences(of: "_", with: "-").lowercased() == normalized
+      }
+      if matches.isEmpty {
+        let parts = normalized.split(separator: "-")
+        if parts.count > 1, parts[0] == "zh" {
+          let scriptCode = parts[1] == "hant" ? "zh-tw" : (parts[1] == "hans" ? "zh-cn" : "")
+          if !scriptCode.isEmpty {
+            matches = supportedCodes.filter {
+              $0.replacingOccurrences(of: "_", with: "-").lowercased() == scriptCode
+            }
+          }
+        }
+      }
+      if matches.isEmpty, !normalized.contains("-"), let language = canonical(token) {
+        matches = supportedCodes.filter { canonical($0) == language }
+      }
+      for match in matches where !result.contains(match) {
+        result.append(match)
+      }
+    }
+    return result
+  }
+
+  /// Canonical language subtag for one token: `eng` → `en`, `English` → `en`, `pt-BR` → `pt`,
+  /// `简体` → `zh`. `nil` when the token cannot be recognized as a language. A region or script is
+  /// dropped, so a preference for Portuguese matches the subtitles tagged `pt-br`.
+  static func canonical(_ token: String?) -> String? {
+    guard let token else { return nil }
+    let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    // assrt.net describes its subtitles in Chinese, which is not a language tag at all.
+    if let described = describedLanguages[trimmed.lowercased()] { return described }
+    if let language = canonicalTag(trimmed) { return language }
+    // `CFLocale` accepts a language name only in its documented capitalization; SubDL reports
+    // names in lowercase (`english`), so a single-word token gets one retry in title case.
+    let capitalized = trimmed.capitalized
+    if capitalized != trimmed, !trimmed.contains(" ") { return canonicalTag(capitalized) }
+    return nil
+  }
+
+  /// `CFLocale`'s answer for a single token, validated as a language subtag rather than trusted: it
+  /// echoes anything it cannot identify (`klingon`), and passes through codes that name no language.
+  private static func canonicalTag(_ token: String) -> String? {
+    guard let identifier = CFLocaleCreateCanonicalLanguageIdentifierFromString(
+      kCFAllocatorDefault, token as CFString)?.rawValue as? String else { return nil }
+    let subtag = identifier.split(separator: "-", maxSplits: 1)[0]
+      .split(separator: "_", maxSplits: 1)[0].lowercased()
+    guard (2...3).contains(subtag.count), subtag.allSatisfy({ $0.isLetter }),
+          !unassignedSubtokens.contains(subtag) else { return nil }
+    return subtag
+  }
+
+  /// assrt.net `lang.desc` values that name exactly one language. Bilingual descriptions (`双语`,
+  /// `简英`) are deliberately absent: they name two languages, so reading them as a match for one of
+  /// them would be a guess. An unmapped description simply ranks as unknown, which keeps the result
+  /// in the chooser instead of quietly preferring it.
+  private static let describedLanguages: [String: String] = [
+    "简体": "zh", "簡体": "zh", "简体中文": "zh", "简中": "zh", "中文": "zh",
+    "繁体": "zh", "繁體": "zh", "繁体中文": "zh", "繁中": "zh", "中國台灣": "zh", "繁体中文（台湾）": "zh",
+    "英": "en", "英文": "en", "英语": "en", "英語": "en",
+    "日": "ja", "日文": "ja", "日语": "ja", "日語": "ja",
+    "韩": "ko", "韩文": "ko", "韩语": "ko", "韓": "ko", "韓文": "ko", "韓語": "ko",
+    "法": "fr", "法文": "fr", "法语": "fr", "法語": "fr",
+    "德": "de", "德文": "de", "德语": "de", "德語": "de",
+    "西": "es", "西班牙文": "es", "西班牙语": "es",
+    "俄": "ru", "俄文": "ru", "俄语": "ru",
+    "意": "it", "意大利文": "it", "意大利语": "it",
+    "葡": "pt", "葡萄牙文": "pt", "葡萄牙语": "pt",
+  ]
+
+  /// ISO 639 subtags that identify no language, and that `CFLocale` passes through unchanged.
+  private static let unassignedSubtokens: Set<String> = ["und", "mul", "mis", "zxx", "qaa"]
+}
+
+// MARK: - Deciding what to download and what to preselect
+
+/// What a search's results resolve to: the one result that may be downloaded without asking, and
+/// the result the chooser selects for the user.
+///
+/// This is a pure function of values the caller has already computed, so the rule can be checked
+/// directly (`other/check_subtitle_language_preference.sh`) rather than only through a search
+/// against a live provider.
+struct SubtitleSelectionPlan: Equatable {
+  /// Index of the result to download without asking, or `nil` when the chooser must be shown.
+  var autoSelected: Int?
+  /// Index of the result selected in the chooser, or `nil` when nothing resembles the media.
+  var preselected: Int?
+
+  /// Decide what to download and what to preselect.
+  ///
+  /// **Automatic selection** keeps the existing evidence rule: a result qualifies only when it is an
+  /// exact title and identity-anchor match *and* its provider opted in with evidence beyond a
+  /// filename. The *Preferred language* setting then decides between several qualifying results —
+  /// the first preferred language that any of them is in wins, and only if exactly one result is in
+  /// that language. When no qualifying result is in a preferred language the preference has nothing
+  /// to say, so the evidence rule stands alone and a single exact match is still selected.
+  ///
+  /// **Preselection** considers only results that resemble the media at all (a non-zero score or
+  /// provider boost). The match score plus provider boost decides first; preferred language breaks
+  /// ties, so a weak language preference cannot displace a better title match. Provider order decides
+  /// the rest.
+  ///
+  /// - Parameters:
+  ///   - scores: `SubtitleMatchScorer.score` for each result, in provider order.
+  ///   - languageRanks: `SubtitleLanguagePreference.rank` for each result, `nil` when unknown.
+  ///   - canAutomaticallySelect: Each provider's evidence verdict for its result.
+  ///   - selectionBoosts: `verifiedSelectionBoost` for each result.
+  ///   - autoSelectEnabled: The *Automatically select an exactly matching subtitle* setting.
+  /// - Returns: A plan that decides nothing when the inputs do not describe the same results, which
+  ///   leaves the chooser in charge rather than acting on a partial view of the search.
+  static func decide(scores: [Int], languageRanks: [Int?], canAutomaticallySelect: [Bool],
+                     selectionBoosts: [Int], autoSelectEnabled: Bool) -> SubtitleSelectionPlan {
+    let count = scores.count
+    guard count > 0, languageRanks.count == count, canAutomaticallySelect.count == count,
+          selectionBoosts.count == count else {
+      return SubtitleSelectionPlan(autoSelected: nil, preselected: nil)
+    }
+
+    var autoSelected: Int?
+    if autoSelectEnabled {
+      let perfect = (0..<count).filter {
+        scores[$0] == SubtitleMatchScorer.perfectMatch && canAutomaticallySelect[$0]
+      }
+      let ranked = perfect.compactMap { index -> (index: Int, rank: Int)? in
+        guard let rank = languageRanks[index] else { return nil }
+        return (index, rank)
+      }
+      if let best = ranked.map({ $0.rank }).min() {
+        let bestLanguage = ranked.filter { $0.rank == best }
+        if bestLanguage.count == 1 { autoSelected = bestLanguage[0].index }
+      }
+      if autoSelected == nil, perfect.count == 1 { autoSelected = perfect[0] }
+    }
+
+    var preselected: Int?
+    var best: (index: Int, rank: Int, priority: Int)?
+    for index in 0..<count {
+      let priority = scores[index] + selectionBoosts[index]
+      guard priority > 0 else { continue }
+      let rank = languageRanks[index] ?? Int.max
+      if let current = best {
+        guard priority > current.priority || (priority == current.priority && rank < current.rank) else { continue }
+      }
+      best = (index, rank, priority)
+    }
+    preselected = best?.index
+
+    return SubtitleSelectionPlan(autoSelected: autoSelected, preselected: preselected)
   }
 }

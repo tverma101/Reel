@@ -807,6 +807,11 @@ enum BundledAirPlayPluginManager {
           return
         }
         DispatchQueue.main.async {
+          guard !AppDelegate.shared.isApplicationTerminating else {
+            removeStagingDirectoryInBackground(stagedRoot)
+            completion(.unavailable)
+            return
+          }
           guard ObjectIdentifier(plugin) == identity,
                 plugin.root.standardizedFileURL == installedRoot,
                 plugin.version == installedVersion,
@@ -828,11 +833,21 @@ enum BundledAirPlayPluginManager {
           PlayerCore.acquirePluginUnloadPermit(identifier: identifier) { unloadResult in
             switch unloadResult {
             case .success(let permit):
+              guard !AppDelegate.shared.isApplicationTerminating else {
+                permit.release(reloadDeferredContexts: false)
+                removeStagingDirectoryInBackground(stagedRoot)
+                completion(.unavailable)
+                return
+              }
               let result = replace(plugin, with: candidate)
               permit.release()
               completion(result)
             case .failure(let error):
               removeStagingDirectoryInBackground(stagedRoot)
+              guard !AppDelegate.shared.isApplicationTerminating else {
+                completion(.failed)
+                return
+              }
               Logger.log("Unable to stop the installed AirPlay plugin before update: \(error.localizedDescription)",
                          level: .error)
               if let unloadError = error as? EventController.AsyncEventError,
@@ -1292,10 +1307,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   private var allPlayersHaveShutdown = false
 
   private var commandLineStatus = CommandLineStatus()
+  private var headlessModeRequestedOnCommandLine: Bool {
+    let earlyStatus = ProcessInfo.processInfo.arguments.dropFirst()
+      .prefix(while: { $0 != "--" })
+      .reduce((enabled: false, invalid: false)) { status, argument in
+      guard let option = CommandLineBoolean.option(argument), option.name == "headless" else { return status }
+      let value = option.value ?? "yes"
+      guard let enabled = CommandLineBoolean.parse(value) else { return (true, true) }
+      return (enabled, status.invalid)
+    }
+    return earlyStatus.enabled || earlyStatus.invalid
+  }
+  var isHeadlessCommandLineMode: Bool {
+    commandLineStatus.isHeadless || headlessModeRequestedOnCommandLine
+  }
 
   private var isTerminating = false
-  private var terminationBarrierPending = false
-  private var terminationBarrierCompleted = false
+  var isApplicationTerminating: Bool { isTerminating }
+
+  func applyCommandLineAudioPreference(to playerCore: PlayerCore) {
+    guard isHeadlessCommandLineMode || commandLineStatus.muteAudio != nil else { return }
+    let shouldMute = isHeadlessCommandLineMode || commandLineStatus.muteAudio == true
+    playerCore.mpv.setFlag(MPVOption.Audio.mute, shouldMute, level: .verbose)
+  }
 
   /// Longest time to wait for asynchronous shutdown tasks to finish before giving up on waiting and proceeding with termination.
   ///
@@ -1498,7 +1532,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // guide window
     switch InfoDictionary.shared.buildType {
     case .release, .beta:
-      if FirstRunManager.isFirstRun(for: .init("firstLaunchAfter\(version)")) {
+      if !isHeadlessCommandLineMode,
+         FirstRunManager.isFirstRun(for: .init("firstLaunchAfter\(version)")) {
         guideWindow.show(pages: [.highlights])
       }
     default:
@@ -1584,6 +1619,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     commandLineStatus.parseArguments(iinaArgs)
+    if let invalid = commandLineStatus.invalidBooleanArgument {
+      FileHandle.standardError.write(Data(
+        "Invalid boolean value for \(invalid). Use yes/no, true/false, on/off, or 1/0.\n".utf8))
+      exit(EX_USAGE)
+    }
+    if commandLineStatus.isHeadless && !commandLineStatus.isStdin {
+      let missingFiles = commandLineStatus.filenames.filter { filename in
+        !Regex.url.matches(filename) && !FileManager.default.fileExists(atPath: filename)
+      }
+      if let missing = missingFiles.first {
+        FileHandle.standardError.write(Data("No such input file: \(missing)\n".utf8))
+        exit(EX_NOINPUT)
+      }
+    }
     Logger.log("Filenames from args: \(iinaArgFilenames)")
     Logger.log("Derived mpv properties from args: \(commandLineStatus.mpvArguments)")
 
@@ -1592,6 +1641,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     guard !iinaArgFilenames.isEmpty || commandLineStatus.isStdin else {
       print("This binary is not intended for being used as a command line tool. Please use the bundled iina-cli.")
       print("Please ignore this message if you are running in a debug environment.")
+      if isHeadlessCommandLineMode {
+        exit(EX_USAGE)
+      }
       return
     }
 
@@ -1684,23 +1736,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       }
 
       if let pc = lastPlayerCore {
-        if commandLineStatus.enterMusicMode {
-          if commandLineStatus.enterPIP {
-            // PiP is not supported in music mode. Combining these options is not permitted and is
-            // rejected by iina-cli. The IINA executable must have been invoked directly with
-            // arguments.
-            Logger.log("Cannot specify both --music-mode and --pip", level: .error)
-            // Command line usage error.
-            exit(EX_USAGE)
+        // A headless launch must never create a visible playback surface. Still allow
+        // the normal player setup and mpv load path to run for diagnostics.
+        if !commandLineStatus.isHeadless {
+          if commandLineStatus.enterMusicMode {
+            if commandLineStatus.enterPIP {
+              // PiP is not supported in music mode. Combining these options is not permitted and is
+              // rejected by iina-cli. The IINA executable must have been invoked directly with
+              // arguments.
+              Logger.log("Cannot specify both --music-mode and --pip", level: .error)
+              // Command line usage error.
+              exit(EX_USAGE)
+            }
+            pc.switchToMiniPlayer()
+          } else if commandLineStatus.enterPIP {
+            pc.mainWindow.enterPIP()
           }
-          pc.switchToMiniPlayer()
-        } else if commandLineStatus.enterPIP {
-          pc.mainWindow.enterPIP()
         }
       }
     }
 
-    NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
+    if !commandLineStatus.isHeadless {
+      NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
+    }
 
     NSApplication.shared.servicesProvider = self
 
@@ -1761,34 +1819,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     let airPlayIdentifier = BundledAirPlayPluginManager.identifier
-    if !terminationBarrierCompleted && PlayerCore.hasLivePluginContext(identifier: airPlayIdentifier) {
-      guard !terminationBarrierPending else { return .terminateLater }
-      terminationBarrierPending = true
-      PlayerCore.acquirePluginUnloadPermit(identifier: airPlayIdentifier) { result in
-        self.terminationBarrierPending = false
-        switch result {
-        case .success(let permit):
-          self.terminationBarrierCompleted = true
-          let reply = self.beginApplicationTermination(sender)
-          permit.release(reloadDeferredContexts: false)
-          if case .terminateNow = reply {
-            NSApp.reply(toApplicationShouldTerminate: true)
-          }
-        case .failure(let error):
-          // Nothing has been closed or disabled yet, so cancellation leaves the existing player
-          // and plugin context available for the user's retry action.
-          NSApp.reply(toApplicationShouldTerminate: false)
-          self.presentPluginLifecycleFailure(error)
-        }
-      }
-      return .terminateLater
-    }
     if PlayerCore.hasAnyPluginContext(identifier: airPlayIdentifier) {
-      // An mpv-initiated shutdown may already have destroyed the player API. Do not invoke a plugin
-      // callback that might touch that API; its helper's own lifecycle timeout is the only safe
-      // cleanup available at this boundary.
-      Logger.log("AirPlay plugin context belongs to an already shut down player; skipping unsafe unload callback",
-                 level: .warning)
+      // App shutdown must not be held open by an AirPlay Promise that can also block
+      // plugin updates. Closing windows lets live contexts request stop; the helper's
+      // parent monitor is the independent fallback if that asynchronous request stalls.
+      Logger.log("Proceeding with app termination; AirPlay helper will finish through its stop request or parent monitor")
     }
     return beginApplicationTermination(sender)
   }
@@ -2346,6 +2381,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     PlayerCore.acquirePluginUnloadPermit(identifier: BundledAirPlayPluginManager.identifier) { result in
       switch result {
       case .success(let permit):
+        guard !self.isApplicationTerminating else {
+          permit.release(reloadDeferredContexts: false)
+          return
+        }
         self.reloadAllPluginsAfterUnloadBarrier()
         permit.release()
       case .failure(let error):
@@ -2608,9 +2647,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 
+enum CommandLineBoolean {
+  static func option(_ argument: String) -> (name: String, value: String?)? {
+    guard argument.hasPrefix("--") else { return nil }
+    let body = argument.dropFirst(2)
+    guard let separator = body.firstIndex(of: "=") else { return (String(body), nil) }
+    return (String(body[..<separator]), String(body[body.index(after: separator)...]))
+  }
+
+  static func parse(_ value: String) -> Bool? {
+    switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "yes", "true", "1", "on": return true
+    case "no", "false", "0", "off": return false
+    default: return nil
+    }
+  }
+}
+
 struct CommandLineStatus {
   var isCommandLine = false
   var isStdin = false
+  var isHeadless = false
+  var muteAudio: Bool?
+  var invalidBooleanArgument: String?
   var openSeparateWindows = false
   var enterMusicMode = false
   var enterPIP = false
@@ -2622,8 +2681,8 @@ struct CommandLineStatus {
     mpvArguments.removeAll()
     iinaArguments.removeAll()
     for arg in args {
-      let splitted = arg.dropFirst(2).split(separator: "=", maxSplits: 1)
-      let name = String(splitted[0])
+      guard let option = CommandLineBoolean.option(arg) else { continue }
+      let name = option.name
       if (name.hasPrefix("mpv-")) {
         // mpv args
         let strippedName = String(name.dropFirst(4))
@@ -2631,22 +2690,46 @@ struct CommandLineStatus {
           isStdin = true
         } else {
           let argPair: (String, String)
-          if splitted.count <= 1 {
+          if option.value == nil {
             argPair = (strippedName, "yes")
           } else {
-            argPair = (strippedName, String(splitted[1]))
+            argPair = (strippedName, option.value!)
           }
           mpvArguments.append(argPair)
         }
       } else {
         // other args
-        if splitted.count <= 1 {
+        if option.value == nil {
           iinaArguments.append((name, "yes"))
         } else {
-          iinaArguments.append((name, String(splitted[1])))
+          iinaArguments.append((name, option.value!))
         }
         if name == "stdin" {
           isStdin = true
+        }
+        if name == "headless" {
+          let value = (option.value ?? "yes").lowercased()
+          if let parsed = CommandLineBoolean.parse(value) {
+            isHeadless = parsed
+          } else {
+            invalidBooleanArgument = "--headless=\(value)"
+            isHeadless = true
+          }
+        }
+        if name == "mute" {
+          let value = option.value ?? "yes"
+          if let parsed = CommandLineBoolean.parse(value) {
+            muteAudio = parsed
+          } else {
+            invalidBooleanArgument = "--mute=\(value)"
+          }
+        }
+        if name == "no-mute" {
+          if option.value == nil {
+            muteAudio = false
+          } else {
+            invalidBooleanArgument = "--no-mute=\(option.value!)"
+          }
         }
         if name == "separate-windows" {
           openSeparateWindows = true
@@ -2671,6 +2754,11 @@ struct CommandLineStatus {
         continue
       }
       playerCore.mpv.setString(argPair.0, argPair.1)
+    }
+    // Headless runs are silent by default. A visible diagnostic run can also request
+    // silence explicitly; apply this after user mpv options so --headless stays safe.
+    if isHeadless || muteAudio != nil {
+      playerCore.mpv.setFlag(MPVOption.Audio.mute, isHeadless || muteAudio == true, level: .verbose)
     }
   }
 }

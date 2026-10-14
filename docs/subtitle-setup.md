@@ -23,6 +23,46 @@ provider archives. Reel's SubDL path handles per-file results; it does not expan
 download subtitle files for other episodes in a pack. If the file has no per-episode match, use a
 manual provider search or load a subtitle file yourself.
 
+## Preferred language
+
+**Settings → Subtitles → Online Subtitles → Preferred language** is the language list that online
+results are judged against and that Reel uses to choose a primary subtitle track. Entries may be
+written as a two-letter code (`en`), a three-letter code (`eng`), a regional tag (`pt-BR`), or a
+language name (`English`), and they are read in order. Reel converts names and three-letter codes to
+tags mpv understands while keeping valid region and script subtags. The default is English. Leaving
+the list empty also means English, which is the language both built-in providers already fell back
+to on their own. **Settings → Audio → Preferred language** works the same way for audio tracks.
+
+**Automatically select preferred audio and subtitles** is on by default. When media opens, Reel
+selects the best available audio and primary subtitle track matching the language lists. If either
+list is empty, English is used. This preference does not turn on subtitles when a file has none.
+Reel shows one primary subtitle along the bottom by default. Turn on **Automatically select a
+second subtitle track** in Settings → Subtitles → Other to ask mpv to select a secondary subtitle as
+well. You can still select a second track manually while this setting is off.
+
+The subtitle setting does three things:
+
+- **Filters the search.** OpenSubtitles and SubDL are asked for these languages, so results in
+  another language are usually not returned at all. The language is matched by identity rather than
+  by spelling: `eng`, `en`, and `English` all mean the same language. OpenSubtitles preserves an
+  explicit supported region such as `pt-BR`; a broad `pt` preference asks it for both `pt-pt` and
+  `pt-br`. An unsupported explicit region does not broaden to other OpenSubtitles regions; it falls
+  back to English when no requested code is supported. SubDL documents base-language codes, so
+  regional preferences use SubDL's language-wide fallback (for example, `pt-BR` is sent as `pt`).
+- **Orders the chooser.** Reel preselects the strongest media match. Preferred language breaks ties
+  between similarly scoring results when a provider reports the result language; a weaker title
+  match does not displace a stronger one. Providers without language metadata cannot be ranked by
+  language, and results themselves keep the provider's order.
+- **Decides between exact matches.** When several results are exact title and anchor matches *and*
+  their provider vouches for them, automatic selection now picks the one in the first preferred
+  language instead of leaving the choice to the chooser. It still asks when two of them are in that
+  same language, and a result whose language no provider could identify is judged on its release
+  name alone, exactly as before.
+
+assrt.net results are not filtered server-side, so a language preference only orders and preselects
+them; its Chinese language descriptions are recognized where they name exactly one language
+(`简体`, `英文`), while bilingual descriptions (`双语`) are left unranked rather than guessed.
+
 ## Manual selection and fallback
 
 The Subtitles → Find Online Subtitles menu keeps **OpenSubtitles** and installed subtitle plugins
@@ -37,6 +77,18 @@ Canceling a search closes its progress display and prevents a later provider, se
 or verification step from starting. Built-in HTTP requests are canceled as tasks; installed plugins
 that do not implement cancellation may finish their current request. If an OpenSubtitles quota
 response arrives after cancellation, Reel stops before fetching the candidate subtitle file.
+
+**Choosing a result.** Unless an exact result qualifies for the separate opt-in automatic-selection
+rule, built-in providers show the chooser and download only what you pick. shooter.cn is included:
+its search returns up to thirty files, and asking first is the difference between one download and
+all of them. It labels results with the provider's own description, because it returns links rather
+than file names, and that description is not treated as a release name.
+
+One consequence of routing a search through the chooser: the search remains cancellable while the
+chooser is up, and the shared cancellation token also reaches built-in downloads after a result is
+selected. A Stop or media change cancels those downloads and removes their temporary files. An
+installed plugin provider may finish its current request if it does not implement cancellation;
+Reel does not load its result after cancellation.
 
 Built-in subtitle downloads use bounded responses and stop when their search is canceled. Assrt and
 Shooter links are checked against provider-specific hosts before requests and redirects; Shooter's

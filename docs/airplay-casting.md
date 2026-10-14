@@ -52,8 +52,19 @@ overshoot the thresholds slightly. Reel streams helper output as it arrives and 
 KiB of each plugin process output stream. If no receiver joins, Reel stops the cast helper after two
 minutes. If a receiver disconnects during a cast, Reel allows a 30-second reconnect window before
 stopping that cast and cleaning its temporary output. Closing the player window or unloading the
-plugin also requests cast shutdown; if the helper cannot confirm shutdown, Reel keeps the cast in a
-retryable stop-error state rather than claiming it has stopped.
+plugin requests cast shutdown. AirPlay stop commands have a separate, bounded lane that is available
+across player contexts even when long-running serve processes occupy ordinary process slots. The
+helper stop command is capped at 36 seconds; the host waits up to 45 seconds for all loaded player
+contexts to confirm shutdown. If it cannot be confirmed, Reel keeps the package and cast identity
+available for another in-app attempt and does not claim the output was cleaned. A retry checks the
+recorded helper and FFmpeg processes under the cast lifecycle lock and cleans the output only after
+they have stopped. App Quit proceeds without waiting for the plugin stop Promise; the helper's parent
+monitor then attempts cleanup. A later cast also revisits expired failure-marked output, but preserves
+it when process records are unreadable, mismatched, or still alive. The parent monitor is a fallback,
+not a guaranteed cleanup deadline.
+
+If Quit cancels an in-app plugin update while its stop confirmation is pending, Reel discards the staged
+package and leaves the installed package unchanged without presenting an installation-error alert.
 
 ## Network and privacy
 
@@ -82,10 +93,14 @@ plugin maintainer or an online subtitle service.
   [release](https://github.com/ozykhan/iina-airplay/releases/tag/v0.4.0) and checked against SHA-256
   `6bad39d1d05f7c0c6f335248e557092e2a5a0fe1f99662b53c9f3f6cd6ef71fe`.
 - Reel's helper hardening is the patch in
-  [`other/iina-airplay-reel.patch`](../other/iina-airplay-reel.patch). The build script applies it,
-  runs the upstream Go and JavaScript tests, builds a universal helper, and repackages the plugin.
-  Preparing the package requires Go 1.26.4 or newer, Node.js with the built-in test runner, and
-  Xcode command-line tools. `--skip-plugins` skips optional upstream plugins but still builds AirPlay.
+  [`other/iina-airplay-reel.patch`](../other/iina-airplay-reel.patch). Run
+  `bash other/download_airplay_plugin.sh` to apply it to the pinned upstream source, run the Go and
+  JavaScript suites, build a universal helper, and refresh the ignored
+  `deps/plugins/iina-airplay.iinaplgz` build input. `other/download_libs.sh` also runs this packaging
+  step. The Xcode build phase copies the prepared archive; it does not regenerate it, so refresh
+  the package after changing the patch and before building Reel. Preparing the package requires Go
+  1.26.4 or newer, Node.js with the built-in test runner, and Xcode command-line tools.
+  `--skip-plugins` skips optional upstream plugins but still builds AirPlay.
 - The plugin and helper changes are MIT licensed. The complete upstream MIT notice is included as
   `LICENSE` inside the plugin archive and in Reel's in-app credits.
 - The bundled manifest retains `ghRepo: ozykhan/iina-airplay` as package provenance for Reel's

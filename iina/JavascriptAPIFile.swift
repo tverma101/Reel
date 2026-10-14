@@ -21,6 +21,8 @@ import JavaScriptCore
 }
 
 class JavascriptAPIFile: JavascriptAPI, JavascriptAPIFileExportable {
+  private static let maximumRequestedDirectoryEntries = 20_001
+
   func exists(_ path: String) -> Bool {
     guard let filePath = parsePath(path).path else { return false }
 
@@ -39,6 +41,31 @@ class JavascriptAPIFile: JavascriptAPI, JavascriptAPIFileExportable {
     }
 
     let dirURL = URL(fileURLWithPath: dirPath)
+    if let requestedLimit = options["limit"] as? Int {
+      let limit = min(max(requestedLimit, 0), Self.maximumRequestedDirectoryEntries)
+      guard limit > 0 else { return [] }
+      var enumerationFailed = false
+      guard let enumerator = FileManager.default.enumerator(
+        at: dirURL,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: fmOptions,
+        errorHandler: { _, _ in
+          enumerationFailed = true
+          return false
+        }
+      ) else { return nil }
+      var entries: [[String: Any]] = []
+      entries.reserveCapacity(limit)
+      while entries.count < limit, let url = enumerator.nextObject() as? URL {
+        entries.append([
+          "filename": url.lastPathComponent,
+          "path": url.path.dropFirst(dirURL.path.count),
+          "isDir": url.isExistingDirectory
+        ])
+      }
+      return enumerationFailed ? nil : entries
+    }
+
     let urls = try? FileManager.default.contentsOfDirectory(
       at: dirURL,
       includingPropertiesForKeys: [.isDirectoryKey],

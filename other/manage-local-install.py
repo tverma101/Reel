@@ -1587,9 +1587,40 @@ def discoverable_copies():
     return [Path(p) for p in paths if Path(p).exists()]
 
 
+def plugin_matches(*options, usable_only=False):
+    output = run("/usr/bin/pluginkit", "-m", *options, "-v", "-i", IDENTIFIER + ".OpenInIINA")
+    matches = set()
+    for line in output.splitlines():
+        election = line[0] if line and line[0] in "+-=!?" else None
+        match = re.search(r"\t(/.*?)(?: \(0x[0-9a-fA-F]+\))?$", line)
+        if not match:
+            continue
+        path = match.group(1)
+        # An absent tag is PlugInKit's default election. Only that state and an explicit
+        # `use` election are eligible for ordinary extension discovery; `ignore`, debugger,
+        # superseded, and unknown states must not make installation appear successful.
+        if usable_only and election not in (None, "+"):
+            continue
+        matches.add(Path(path))
+    return matches
+
+
 def registered_plugins():
-    output = run("/usr/bin/pluginkit", "-m", "-A", "-D", "-v", "-i", IDENTIFIER + ".OpenInIINA")
-    return {Path(match) for match in re.findall(r"\t(/[^\n]+)$", output, re.M)}
+    # The full inventory is needed to prune only registrations whose paths disappeared.
+    return plugin_matches("-A", "-D")
+
+
+def default_discovered_plugins():
+    # Without -A/-D, PlugInKit applies its normal version/instance reduction. Also reject
+    # matches that are ignored, debugger-only, superseded, or have an unknown election state.
+    return plugin_matches(usable_only=True)
+
+
+def same_path(first, second):
+    try:
+        return Path(first).resolve() == Path(second).resolve()
+    except OSError:
+        return False
 
 
 def embedded_open_in_extension(app):
@@ -2537,6 +2568,7 @@ def _repair_locked(support):
     after = audit()
     after["registered"] = [str(p) for p in registrations()]
     after["registeredPlugins"] = sorted(str(p) for p in registered_plugins())
+    after["defaultDiscoveredPlugins"] = sorted(str(p) for p in default_discovered_plugins())
     after["discoverable"] = [str(path) for path in discoverable_copies()]
     copies_after = {Path(path) for path in after["copies"]}
     live_extras = sorted({
@@ -2546,7 +2578,18 @@ def _repair_locked(support):
     # Other dormant development builds are preserved. They do not make the Desktop launcher
     # ambiguous when Launch Services prefers the canonical app and no alternate copy is running;
     # the launcher itself checks every active same-ID process before sending it a playlist.
-    registration_clean = canonical_selection_ready(after, INSTALLED)
+    expected_open_plugin = embedded_open_in_extension(INSTALLED)
+    extension_present = expected_open_plugin.exists()
+    extension_registered = extension_present and any(
+        same_path(path, expected_open_plugin) for path in after["registeredPlugins"]
+    )
+    extension_default_discovered = extension_present and any(
+        same_path(path, expected_open_plugin) for path in after["defaultDiscoveredPlugins"]
+    )
+    plugin_check_passed = not extension_present or (extension_registered and extension_default_discovered)
+    registered_plugin_paths_present = all(Path(path).exists() for path in after["registeredPlugins"])
+    app_selection_ready = canonical_selection_ready(after, INSTALLED)
+    registration_clean = app_selection_ready and plugin_check_passed and registered_plugin_paths_present
     return {
         "before": before,
         "after": after,
@@ -2554,7 +2597,11 @@ def _repair_locked(support):
         "removedStalePluginRegistrations": sorted(str(path) for path in stale_plugins),
         "preservedLiveCopies": [str(path) for path in live_extras],
         "onlyInstalledCopy": not live_extras and copies_after == {INSTALLED},
-        "canonicalSelectionReady": registration_clean,
+        "canonicalSelectionReady": app_selection_ready,
+        "openExtensionPresent": extension_present,
+        "openExtensionRegistered": extension_registered,
+        "openExtensionDefaultDiscovered": extension_default_discovered,
+        "registeredPluginPathsPresent": registered_plugin_paths_present,
         "registrationClean": registration_clean,
         "destructiveChanges": False,
     }
@@ -2711,12 +2758,23 @@ def _install_locked(source, support):
             after = audit()
             after["registered"] = [str(path) for path in registrations()]
             after["registeredPlugins"] = sorted(str(path) for path in registered_plugins())
+            after["defaultDiscoveredPlugins"] = sorted(str(path) for path in default_discovered_plugins())
             after["discoverable"] = [str(path) for path in discoverable_copies()]
-            plugin_registrations = {Path(path) for path in after["registeredPlugins"]}
+            plugin_registrations = after["registeredPlugins"]
+            default_plugin_matches = after["defaultDiscoveredPlugins"]
             expected_open_plugin = INSTALLED / "Contents/PlugIns/OpenInIINA.appex"
+            extension_present = expected_open_plugin.exists()
+            extension_registered = extension_present and any(
+                same_path(path, expected_open_plugin) for path in plugin_registrations
+            )
+            extension_default_discovered = extension_present and any(
+                same_path(path, expected_open_plugin) for path in default_plugin_matches
+            )
+            registered_plugin_paths_present = all(Path(path).exists() for path in plugin_registrations)
             registration_ready = (
                 canonical_selection_ready(after, INSTALLED)
-                and (not expected_open_plugin.exists() or expected_open_plugin in plugin_registrations)
+                and registered_plugin_paths_present
+                and (not extension_present or (extension_registered and extension_default_discovered))
             )
             if not registration_ready:
                 diagnostic = {
@@ -2726,15 +2784,17 @@ def _install_locked(source, support):
                         for path in after["registered"]
                     ),
                     "running": after.get("running", []),
-                    "openExtensionRegistered": (
-                        not expected_open_plugin.exists()
-                        or expected_open_plugin in plugin_registrations
-                    ),
+                    "openExtensionPresent": extension_present,
+                    "openExtensionRegistered": extension_registered,
+                    "openExtensionDefaultDiscovered": extension_default_discovered,
+                    "registeredExtensionPathsPresent": registered_plugin_paths_present,
                     "registeredExtensionCount": len(plugin_registrations),
+                    "defaultDiscoveredExtensionCount": len(default_plugin_matches),
                 }
                 raise RuntimeError(
-                    "The new Reel bundle was swapped, but Launch Services did not resolve the "
-                    "canonical app and embedded extension to /Applications/Reel.app. "
+                    "The new Reel bundle was swapped, but Launch Services or PlugInKit default "
+                    "discovery did not select the canonical app and embedded extension at "
+                    "/Applications/Reel.app. "
                     "The installer is restoring the previous bundle. Registration state: "
                     f"{json.dumps(diagnostic, sort_keys=True)}"
                 )
@@ -2822,13 +2882,21 @@ def main():
         result = audit()
         result["registered"] = [str(p) for p in registrations()]
         result["registeredPlugins"] = sorted(str(p) for p in registered_plugins())
+        result["defaultDiscoveredPlugins"] = sorted(str(p) for p in default_discovered_plugins())
         result["discoverable"] = [str(p) for p in discoverable_copies()]
         print(json.dumps(result, indent=2))
         ready = canonical_selection_ready(result)
         expected_open_plugin = INSTALLED / "Contents/PlugIns/OpenInIINA.appex"
+        default_plugin_matches = result["defaultDiscoveredPlugins"]
+        extension_present = expected_open_plugin.exists()
+        extension_registered = extension_present and any(
+            same_path(path, expected_open_plugin) for path in result["registeredPlugins"]
+        )
+        extension_default_discovered = extension_present and any(
+            same_path(path, expected_open_plugin) for path in default_plugin_matches
+        )
         plugins_ready = (
-            not expected_open_plugin.exists()
-            or str(expected_open_plugin) in result["registeredPlugins"]
+            not extension_present or (extension_registered and extension_default_discovered)
         ) and all(Path(path).exists() for path in result["registeredPlugins"])
         if ready and (len(result["copies"]) > 1 or len(result["registered"]) > 1
                       or len(result["discoverable"]) > 1):
@@ -2854,7 +2922,11 @@ def main():
                   "and the Desktop launcher checks active processes before routing.", file=sys.stderr)
     else:
         if result["registrationClean"]:
-            print(f"Reel registrations resolve only to {INSTALLED}. Evidence: {evidence}")
+            if result["openExtensionPresent"]:
+                print(f"Canonical Reel and its embedded Open In extension pass PlugInKit's normal reduced match at "
+                      f"{INSTALLED}. Evidence: {evidence}")
+            else:
+                print(f"Canonical Reel is preferred at {INSTALLED}. Evidence: {evidence}")
         else:
             if result["preservedLiveCopies"]:
                 detail = "Live copies were preserved for review: " + ", ".join(result["preservedLiveCopies"])

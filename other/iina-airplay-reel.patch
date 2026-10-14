@@ -1,5 +1,5 @@
 diff --git a/helper/cleanup.go b/helper/cleanup.go
-index db53fed68c462a9a38319e171c2dcf74953f9a7d..e17503593dd1fdab40f221e3cae252b868e1f3ab 100644
+index db53fed..e175035 100644
 --- a/helper/cleanup.go
 +++ b/helper/cleanup.go
 @@ -1,6 +1,8 @@
@@ -11,7 +11,7 @@ index db53fed68c462a9a38319e171c2dcf74953f9a7d..e17503593dd1fdab40f221e3cae252b8
  	"os"
  	"path/filepath"
  )
-@@ -9,18 +11,69 @@
+@@ -9,18 +11,69 @@ import (
  // media and subtitle playlists, the fMP4 init segment, media segments and
  // WebVTT segments. The pidfile is deliberately not here — it belongs to
  // the process lifecycle, not the cast.
@@ -46,7 +46,7 @@ index db53fed68c462a9a38319e171c2dcf74953f9a7d..e17503593dd1fdab40f221e3cae252b8
 +		info, err := entry.Info()
 +		if err != nil {
 +			return fmt.Errorf("inspect cast cleanup entry %q: %w", entry.Name(), err)
-+		}
+ 		}
 +		if !info.Mode().IsRegular() {
 +			continue
 +		}
@@ -61,10 +61,10 @@ index db53fed68c462a9a38319e171c2dcf74953f9a7d..e17503593dd1fdab40f221e3cae252b8
 +				}
 +				break
 +			}
- 		}
- 	}
++		}
++	}
 +	return nil
- }
++}
 +
 +// readCastDir materializes at most limit+1 entries, returning an error before
 +// callers mutate anything if a directory exceeds the expected bounded set.
@@ -86,11 +86,11 @@ index db53fed68c462a9a38319e171c2dcf74953f9a7d..e17503593dd1fdab40f221e3cae252b8
 +	}
 +	if len(entries) > limit {
 +		return nil, fmt.Errorf("directory %q exceeds %d entry limit", dir, limit)
-+	}
+ 	}
 +	return entries, nil
-+}
+ }
 diff --git a/helper/cleanup_test.go b/helper/cleanup_test.go
-index 4c227c7c425eca2bc7d7b562152f8e5af1dff24c..035b4a2ebdbca51ec58a9169c37c363cd5251c21 100644
+index 4c227c7..035b4a2 100644
 --- a/helper/cleanup_test.go
 +++ b/helper/cleanup_test.go
 @@ -1,6 +1,7 @@
@@ -101,7 +101,7 @@ index 4c227c7c425eca2bc7d7b562152f8e5af1dff24c..035b4a2ebdbca51ec58a9169c37c363c
  	"os"
  	"path/filepath"
  	"testing"
-@@ -12,7 +13,12 @@
+@@ -12,7 +13,12 @@ import (
  // dropped in the directory is not ours to touch.
  func TestCleanOutDirRemovesCastArtifactsOnly(t *testing.T) {
  	dir := t.TempDir()
@@ -115,7 +115,7 @@ index 4c227c7c425eca2bc7d7b562152f8e5af1dff24c..035b4a2ebdbca51ec58a9169c37c363c
  	keep := []string{"helper.pid", "notes.txt"}
  	for _, f := range append(append([]string{}, artifacts...), keep...) {
  		if err := os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o644); err != nil {
-@@ -32,6 +38,28 @@
+@@ -32,6 +38,28 @@ func TestCleanOutDirRemovesCastArtifactsOnly(t *testing.T) {
  	}
  }
  
@@ -146,10 +146,10 @@ index 4c227c7c425eca2bc7d7b562152f8e5af1dff24c..035b4a2ebdbca51ec58a9169c37c363c
 +	}
  }
 diff --git a/helper/e2e_test.go b/helper/e2e_test.go
-index 558bb06bb130beb1c5115063fbdcd9cc321e3834..9c1c88dd26488453be72d32ad390e11e6beccd73 100644
+index 558bb06..9c1c88d 100644
 --- a/helper/e2e_test.go
 +++ b/helper/e2e_test.go
-@@ -141,6 +141,7 @@
+@@ -141,6 +141,7 @@ func TestRealFFmpegEndToEnd(t *testing.T) {
  		}
  	}
  
@@ -157,7 +157,7 @@ index 558bb06bb130beb1c5115063fbdcd9cc321e3834..9c1c88dd26488453be72d32ad390e11e
  	resp, err := http.Get(url)
  	if err != nil {
  		t.Fatal(err)
-@@ -153,6 +154,9 @@
+@@ -153,6 +154,9 @@ func TestRealFFmpegEndToEnd(t *testing.T) {
  	}
  	// AAC expected: stereo FLAC goes down the ≤2ch branch
  	segURL := strings.Replace(url, "index.m3u8", "init.mp4", 1)
@@ -167,7 +167,7 @@ index 558bb06bb130beb1c5115063fbdcd9cc321e3834..9c1c88dd26488453be72d32ad390e11e
  	resp2, err := http.Get(segURL)
  	if err != nil {
  		t.Fatal(err)
-@@ -215,9 +219,7 @@
+@@ -215,9 +219,7 @@ func TestRealFFmpegSubtitledEndToEnd(t *testing.T) {
  	defer func() { cmd.Process.Kill(); cmd.Wait() }()
  
  	url := waitReady(t, stdout, 60*time.Second)
@@ -178,7 +178,7 @@ index 558bb06bb130beb1c5115063fbdcd9cc321e3834..9c1c88dd26488453be72d32ad390e11e
  
  	resp, err := http.Get(url)
  	if err != nil {
-@@ -244,6 +246,9 @@
+@@ -244,6 +246,9 @@ func TestRealFFmpegSubtitledEndToEnd(t *testing.T) {
  	// The rendition playlist and its first segment must be fetchable, and the
  	// cue text must have survived the WebVTT conversion.
  	vttPlaylistURL := strings.Replace(url, "master.m3u8", mediaURI(subLine), 1)
@@ -188,7 +188,7 @@ index 558bb06bb130beb1c5115063fbdcd9cc321e3834..9c1c88dd26488453be72d32ad390e11e
  	resp2, err := http.Get(vttPlaylistURL)
  	if err != nil {
  		t.Fatal(err)
-@@ -264,14 +269,18 @@
+@@ -264,14 +269,18 @@ func TestRealFFmpegSubtitledEndToEnd(t *testing.T) {
  	if seg == "" {
  		t.Fatalf("no segment in vtt playlist:\n%s", body2)
  	}
@@ -210,10 +210,10 @@ index 558bb06bb130beb1c5115063fbdcd9cc321e3834..9c1c88dd26488453be72d32ad390e11e
  }
  
 diff --git a/helper/job.go b/helper/job.go
-index 517c85b5ef897dbe50bc09b03013fdf18b6ac034..0e8ce16ca9dc1879331dd32dc6dbefffc1cf440e 100644
+index 517c85b..0e8ce16 100644
 --- a/helper/job.go
 +++ b/helper/job.go
-@@ -2,15 +2,32 @@
+@@ -2,17 +2,34 @@ package main
  
  import (
  	"bufio"
@@ -230,8 +230,8 @@ index 517c85b5ef897dbe50bc09b03013fdf18b6ac034..0e8ce16ca9dc1879331dd32dc6dbefff
  	"sync/atomic"
  	"syscall"
  	"time"
-+)
-+
+ )
+ 
 +const (
 +	ffmpegStopTermTimeout = 2 * time.Second
 +	ffmpegStopKillTimeout = 1 * time.Second
@@ -243,10 +243,12 @@ index 517c85b5ef897dbe50bc09b03013fdf18b6ac034..0e8ce16ca9dc1879331dd32dc6dbefff
 +	castHLSWindowSegments = 30
 +	castHLSDeleteRetained = 2
 +	ffmpegPIDName         = "ffmpeg.pid"
- )
- 
++)
++
  type JobConfig struct {
-@@ -25,11 +42,12 @@
+ 	FFmpeg    string
+ 	Source    string
+@@ -25,11 +42,12 @@ type JobConfig struct {
  	// Subtitles are optional; zero values mean "no subtitle track". SubMap
  	// holds the ff-index as a string so the zero value can't be mistaken
  	// for stream 0. SubPath (external file, fed as input 1) wins over SubMap.
@@ -264,13 +266,12 @@ index 517c85b5ef897dbe50bc09b03013fdf18b6ac034..0e8ce16ca9dc1879331dd32dc6dbefff
  }
  
  func (c JobConfig) HasSub() bool { return c.SubPath != "" || c.SubMap != "" }
-@@ -48,9 +66,24 @@
+@@ -48,9 +66,24 @@ func (c JobConfig) PlaylistName() string {
  func BuildArgs(c JobConfig) []string {
  	args := []string{
  		"-hide_banner", "-nostats", "-loglevel", "warning", "-y",
 -		"-progress", "pipe:1",
 -		"-i", c.Source,
--	}
 +		// Pace local input in real time so the rolling HLS window stays useful
 +		// while the receiver fetches it instead of remuxing a whole file ahead.
 +		"-re",
@@ -287,12 +288,12 @@ index 517c85b5ef897dbe50bc09b03013fdf18b6ac034..0e8ce16ca9dc1879331dd32dc6dbefff
 +		// identical absolute media seconds (no start-time offset is applied).
 +		args = append(args, "-copyts", "-start_at_zero", "-noaccurate_seek",
 +			"-ss", strconv.FormatFloat(c.StartTime, 'f', 3, 64))
-+	}
+ 	}
 +	args = append(args, "-progress", "pipe:1", "-i", c.Source)
  	if c.SubPath != "" {
  		args = append(args, "-i", c.SubPath)
  	}
-@@ -88,8 +121,10 @@
+@@ -88,8 +121,10 @@ func BuildArgs(c JobConfig) []string {
  		args = append(args, "-c:s", "webvtt")
  	}
  	args = append(args,
@@ -305,7 +306,7 @@ index 517c85b5ef897dbe50bc09b03013fdf18b6ac034..0e8ce16ca9dc1879331dd32dc6dbefff
  		"-hls_fmp4_init_filename", "init.mp4",
  		"-hls_segment_filename", filepath.Join(c.OutDir, "seg_%04d.m4s"),
  	)
-@@ -128,21 +163,37 @@
+@@ -128,21 +163,37 @@ func ProgressPct(outTimeUS int64, duration float64) float64 {
  	return pct
  }
  
@@ -347,7 +348,7 @@ index 517c85b5ef897dbe50bc09b03013fdf18b6ac034..0e8ce16ca9dc1879331dd32dc6dbefff
  	}
  
  	// Flag to track when job has completed (0 = running, 1 = done)
-@@ -178,34 +229,215 @@
+@@ -178,34 +229,215 @@ func RunJob(c JobConfig, out io.Writer) (func(), <-chan error) {
  		jobDone.Store(1)
  		done <- werr
  		close(finished)
@@ -406,7 +407,7 @@ index 517c85b5ef897dbe50bc09b03013fdf18b6ac034..0e8ce16ca9dc1879331dd32dc6dbefff
 +			// a direct-child fallback if it changed its process group.
 +			if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 +				return fmt.Errorf("kill ffmpeg child: %w", err)
- 			}
++			}
 +		}
 +		if waitForJobExit(cmd.Process.Pid, finished, ffmpegStopKillTimeout) {
 +			_ = os.Remove(pidPath)
@@ -451,8 +452,8 @@ index 517c85b5ef897dbe50bc09b03013fdf18b6ac034..0e8ce16ca9dc1879331dd32dc6dbefff
 +			case <-finished:
 +				return true
 +			default:
-+			}
-+		}
+ 			}
+ 		}
 +		remaining := time.Until(deadline)
 +		if remaining <= 0 {
 +			return false
@@ -460,7 +461,7 @@ index 517c85b5ef897dbe50bc09b03013fdf18b6ac034..0e8ce16ca9dc1879331dd32dc6dbefff
 +		pause := processProbeInterval
 +		if remaining < pause {
 +			pause = remaining
- 		}
++		}
  		select {
  		case <-finished:
 +			// The direct child is reaped, but descendants may still be writing.
@@ -513,26 +514,22 @@ index 517c85b5ef897dbe50bc09b03013fdf18b6ac034..0e8ce16ca9dc1879331dd32dc6dbefff
 +			reaped <- fmt.Errorf("reap ffmpeg child: %w", err)
  			return
 -		case <-time.After(2 * time.Second):
--		}
+ 		}
 -		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 -		select {
 -		case <-finished:
 -		case <-time.After(time.Second):
--		}
--	}
--	return stop, done
--}
-+		}
 +		reaped <- nil // A non-zero exit caused by SIGKILL is expected on this path.
 +	}()
 +	select {
 +	case err := <-reaped:
 +		if err != nil {
 +			return fmt.Errorf("%w; preserving output", err)
-+		}
+ 		}
 +	case <-time.After(ffmpegStopKillTimeout):
 +		return fmt.Errorf("ffmpeg child was not reaped after forced shutdown; preserving output")
-+	}
+ 	}
+-	return stop, done
 +	if signalErr != nil && !errors.Is(signalErr, syscall.ESRCH) {
 +		return fmt.Errorf("stop untracked ffmpeg process group %d: %w; preserving output", pgid, signalErr)
 +	}
@@ -584,12 +581,12 @@ index 517c85b5ef897dbe50bc09b03013fdf18b6ac034..0e8ce16ca9dc1879331dd32dc6dbefff
 +	w.mu.Lock()
 +	defer w.mu.Unlock()
 +	return string(w.tail)
-+}
+ }
 diff --git a/helper/job_test.go b/helper/job_test.go
-index fe3f7e79dca1fa304eea5c1661fae13c6cd08c0d..74df7ed41bfc89319faffedd29ead30731bf8789 100644
+index fe3f7e7..74df7ed 100644
 --- a/helper/job_test.go
 +++ b/helper/job_test.go
-@@ -3,10 +3,14 @@
+@@ -3,10 +3,14 @@ package main
  import (
  	"bytes"
  	"encoding/json"
@@ -604,7 +601,7 @@ index fe3f7e79dca1fa304eea5c1661fae13c6cd08c0d..74df7ed41bfc89319faffedd29ead307
  	"testing"
  	"time"
  )
-@@ -32,7 +36,6 @@
+@@ -32,7 +36,6 @@ func TestBuildArgsHEVCLossless(t *testing.T) {
  	argsHave(t, args, "-tag:v", "hvc1")
  	argsHave(t, args, "-c:a", "eac3", "-b:a", "640k", "-ac", "6")
  	argsHave(t, args, "-map", "0:0", "-map", "0:1", "-sn", "-dn")
@@ -612,7 +609,7 @@ index fe3f7e79dca1fa304eea5c1661fae13c6cd08c0d..74df7ed41bfc89319faffedd29ead307
  	argsHave(t, args, "-progress", "pipe:1")
  	if slices.Contains(args, "hevc_videotoolbox") {
  		t.Fatal("HEVC source must not be re-encoded")
-@@ -65,6 +68,26 @@
+@@ -65,6 +68,26 @@ func TestBuildArgsAudioCopy(t *testing.T) {
  	}
  }
  
@@ -639,7 +636,7 @@ index fe3f7e79dca1fa304eea5c1661fae13c6cd08c0d..74df7ed41bfc89319faffedd29ead307
  func TestParseProgress(t *testing.T) {
  	k, v, ok := ParseProgressValue("out_time_us=123456789")
  	if !ok || k != "out_time_us" || v != "123456789" {
-@@ -115,6 +138,7 @@
+@@ -115,6 +138,7 @@ func TestRunJobEmitsProgressAndPackaged(t *testing.T) {
  		`echo "out_time_us=2700000000"; echo "progress=continue"; echo "out_time_us=5400000000"; echo "progress=end"`)
  	c := baseCfg()
  	c.FFmpeg = stub
@@ -647,16 +644,14 @@ index fe3f7e79dca1fa304eea5c1661fae13c6cd08c0d..74df7ed41bfc89319faffedd29ead307
  	var buf bytes.Buffer
  	_, done := RunJob(c, &buf)
  	if err := <-done; err != nil {
-@@ -138,14 +162,15 @@
+@@ -138,14 +162,15 @@ func TestRunJobEmitsProgressAndPackaged(t *testing.T) {
  }
  
  func TestRunJobFailureCarriesStderr(t *testing.T) {
 -	stub := writeStubFFmpeg(t, `echo "Unknown encoder 'nope'" >&2; exit 1`)
--	c := baseCfg()
--	c.FFmpeg = stub
 +	stub := writeStubFFmpeg(t, `dd if=/dev/zero bs=1048576 count=3 2>/dev/null | tr '\000' x >&2; echo "Unknown encoder 'nope'" >&2; exit 1`)
-+	c := baseCfg()
-+	c.FFmpeg = stub
+ 	c := baseCfg()
+ 	c.FFmpeg = stub
 +	c.OutDir = t.TempDir()
  	var buf bytes.Buffer
  	_, done := RunJob(c, &buf)
@@ -668,7 +663,7 @@ index fe3f7e79dca1fa304eea5c1661fae13c6cd08c0d..74df7ed41bfc89319faffedd29ead307
  	}
  }
  
-@@ -153,10 +178,13 @@
+@@ -153,10 +178,13 @@ func TestRunJobStop(t *testing.T) {
  	stub := writeStubFFmpeg(t, `trap 'exit 0' TERM; sleep 30`)
  	c := baseCfg()
  	c.FFmpeg = stub
@@ -683,7 +678,7 @@ index fe3f7e79dca1fa304eea5c1661fae13c6cd08c0d..74df7ed41bfc89319faffedd29ead307
  	select {
  	case <-done:
  	case <-time.After(3 * time.Second):
-@@ -168,6 +196,7 @@
+@@ -168,6 +196,7 @@ func TestRunJobStopAfterDone(t *testing.T) {
  	stub := writeStubFFmpeg(t, `exit 0`)
  	c := baseCfg()
  	c.FFmpeg = stub
@@ -691,7 +686,7 @@ index fe3f7e79dca1fa304eea5c1661fae13c6cd08c0d..74df7ed41bfc89319faffedd29ead307
  	var buf bytes.Buffer
  	stop, done := RunJob(c, &buf)
  	// Wait for job to complete
-@@ -175,8 +204,12 @@
+@@ -175,8 +204,12 @@ func TestRunJobStopAfterDone(t *testing.T) {
  		t.Fatalf("job failed: %v", err)
  	}
  	// Call stop() after job is done - should not panic or signal recycled PID
@@ -706,7 +701,7 @@ index fe3f7e79dca1fa304eea5c1661fae13c6cd08c0d..74df7ed41bfc89319faffedd29ead307
  }
  
  func TestBuildArgsNoSubByteIdentical(t *testing.T) {
-@@ -185,13 +218,15 @@
+@@ -185,13 +218,15 @@ func TestBuildArgsNoSubByteIdentical(t *testing.T) {
  	got := strings.Join(BuildArgs(baseCfg()), " ")
  	want := strings.Join([]string{
  		"-hide_banner", "-nostats", "-loglevel", "warning", "-y",
@@ -724,7 +719,7 @@ index fe3f7e79dca1fa304eea5c1661fae13c6cd08c0d..74df7ed41bfc89319faffedd29ead307
  		"-hls_fmp4_init_filename", "init.mp4",
  		"-hls_segment_filename", "/tmp/out/seg_%04d.m4s",
  		"/tmp/out/index.m3u8",
-@@ -217,6 +252,7 @@
+@@ -217,6 +252,7 @@ func TestBuildArgsEmbeddedSub(t *testing.T) {
  func TestBuildArgsExternalSub(t *testing.T) {
  	c := baseCfg()
  	c.SubPath = "/subs/en.srt"
@@ -732,7 +727,7 @@ index fe3f7e79dca1fa304eea5c1661fae13c6cd08c0d..74df7ed41bfc89319faffedd29ead307
  	args := BuildArgs(c)
  	argsHave(t, args, "-i", "/movies/a.mkv")
  	argsHave(t, args, "-i", "/subs/en.srt")
-@@ -226,6 +262,9 @@
+@@ -226,6 +262,9 @@ func TestBuildArgsExternalSub(t *testing.T) {
  	if slices.Index(args, "/subs/en.srt") < slices.Index(args, "/movies/a.mkv") {
  		t.Fatal("subtitle input must come after the media input (it must be input 1)")
  	}
@@ -742,7 +737,7 @@ index fe3f7e79dca1fa304eea5c1661fae13c6cd08c0d..74df7ed41bfc89319faffedd29ead307
  	if slices.Contains(args, "-sn") {
  		t.Fatal("-sn must be dropped when a subtitle is mapped")
  	}
-@@ -255,13 +294,115 @@
+@@ -255,13 +294,115 @@ func TestRunJobStopWaitsForExit(t *testing.T) {
  	stub := writeStubFFmpeg(t, `trap '' TERM; sleep 30`)
  	c := baseCfg()
  	c.FFmpeg = stub
@@ -861,10 +856,10 @@ index fe3f7e79dca1fa304eea5c1661fae13c6cd08c0d..74df7ed41bfc89319faffedd29ead307
 +}
 diff --git a/helper/lifecycle.go b/helper/lifecycle.go
 new file mode 100644
-index 0000000..cc41b10aa5f738377a6a05803e484a6056629f04
+index 0000000..538e07e
 --- /dev/null
 +++ b/helper/lifecycle.go
-@@ -0,0 +1,990 @@
+@@ -0,0 +1,1070 @@
 +package main
 +
 +import (
@@ -885,8 +880,9 @@ index 0000000..cc41b10aa5f738377a6a05803e484a6056629f04
 +	instanceStopName     = "helper.stop"
 +	instanceFailureName  = "helper.failure"
 +
-+	// The stop command waits for marker-driven helper teardown without signaling
-+	// a PID. Keep its helper wait bounded above FFmpeg/server shutdown deadlines.
++	// Stop waits for marker-driven helper teardown without signaling a PID. Keep
++	// its complete budget below the plugin host's stop-child timeout.
++	stopCommandBudget      = 33 * time.Second
 +	helperShutdownGrace    = 40 * time.Second
 +	helperKillWait         = 1 * time.Second
 +	instanceLockWait       = 8 * time.Second
@@ -1217,10 +1213,21 @@ index 0000000..cc41b10aa5f738377a6a05803e484a6056629f04
 +}
 +
 +func stopInstanceWithProcesses(outDir string, startDeadline time.Time, helperOps, groupOps processController) error {
++	return stopInstanceUntil(outDir, startDeadline, time.Now().Add(stopCommandBudget), helperOps, groupOps)
++}
++
++func stopInstanceUntil(outDir string, startDeadline, stopDeadline time.Time, helperOps, groupOps processController) error {
++	if !time.Now().Before(stopDeadline) {
++		return fmt.Errorf("stop command deadline exceeded; preserving cast output")
++	}
 +	if err := createPrivateDirectoryPath(outDir); err != nil {
 +		return fmt.Errorf("prepare cast output directory: %w", err)
 +	}
-+	lock, err := lockInstance(outDir, instanceLockWait)
++	remaining := time.Until(stopDeadline)
++	if remaining <= 0 {
++		return fmt.Errorf("stop command deadline exceeded; preserving cast output")
++	}
++	lock, err := lockInstance(outDir, min(instanceLockWait, remaining))
 +	if err != nil {
 +		if os.IsNotExist(err) {
 +			return nil
@@ -1249,24 +1256,20 @@ index 0000000..cc41b10aa5f738377a6a05803e484a6056629f04
 +		if !startDeadline.IsZero() && startDeadline.After(time.Now()) && startDeadline.After(deadline) {
 +			deadline = startDeadline.Add(helperShutdownGrace)
 +		}
++		if stopDeadline.Before(deadline) {
++			deadline = stopDeadline
++		}
 +		return waitForOwnedHelperStop(outDir, helperPID, deadline, helperOps, groupOps)
 +	}
 +	if !startDeadline.IsZero() && startDeadline.After(time.Now()) {
-+		return waitForQueuedServe(outDir, startDeadline, helperOps, groupOps)
++		return waitForQueuedServeUntil(outDir, startDeadline, stopDeadline, helperOps, groupOps)
 +	}
 +	// Read and validate failure state before any zero-deadline/legacy return.
-+	return finishStoppedCast(outDir, helperOps, groupOps)
++	return finishStoppedCast(outDir, stopDeadline, helperOps, groupOps)
 +}
 +
 +func waitForOwnedHelperStop(outDir string, expectedPID int, deadline time.Time, helperOps, groupOps processController) error {
 +	for time.Now().Before(deadline) {
-+		failure, present, err := readHelperFailure(filepath.Join(outDir, instanceFailureName))
-+		if err != nil {
-+			return fmt.Errorf("cannot verify helper shutdown result: %w; preserving cast output", err)
-+		}
-+		if present {
-+			return fmt.Errorf("helper teardown failed (%s); preserving cast output", failure.message)
-+		}
 +		pid, hasPID, err := readProcessPID(filepath.Join(outDir, "helper.pid"))
 +		if err != nil {
 +			return fmt.Errorf("inspect helper pidfile: %w", err)
@@ -1274,21 +1277,63 @@ index 0000000..cc41b10aa5f738377a6a05803e484a6056629f04
 +		if hasPID && pid != expectedPID {
 +			return fmt.Errorf("helper identity changed while stopping; preserving cast output")
 +		}
++		failure, hasFailure, err := readHelperFailure(filepath.Join(outDir, instanceFailureName))
++		if err != nil {
++			return fmt.Errorf("cannot verify helper shutdown result: %w; preserving cast output", err)
++		}
++		if hasFailure {
++			if failure.helperPID != expectedPID {
++				return fmt.Errorf("helper failure identity changed while stopping; preserving cast output")
++			}
++			// The parent watcher leaves both records when teardown failed. A later
++			// stop may clean them only after the helper and FFmpeg are confirmed
++			// gone again under the instance lock in finishStoppedCast.
++			return finishStoppedCast(outDir, deadline, helperOps, groupOps)
++		}
 +		if !hasPID || !helperOps.alive(expectedPID) {
 +			// A clean helper removes helper.pid only after teardown has stopped
 +			// writers and swept output. Do not wait for kill(pid, 0) to clear
 +			// after that boundary: a parent may not have reaped the helper yet.
-+			return finishStoppedCast(outDir, helperOps, groupOps)
++			return finishStoppedCast(outDir, deadline, helperOps, groupOps)
 +		}
 +		time.Sleep(processProbeInterval)
 +	}
 +	return fmt.Errorf("timed out waiting for the owning helper to stop; preserving cast output")
 +}
 +
-+func finishStoppedCast(outDir string, helperOps, groupOps processController) error {
-+	if failure, present, err := readHelperFailure(filepath.Join(outDir, instanceFailureName)); err != nil {
++func finishStoppedCast(outDir string, deadline time.Time, helperOps, groupOps processController) error {
++	if _, err := os.Lstat(outDir); os.IsNotExist(err) {
++		return nil
++	} else if err != nil {
++		return fmt.Errorf("inspect cast output before cleanup: %w", err)
++	}
++	remaining := time.Until(deadline)
++	if remaining <= 0 {
++		return fmt.Errorf("stop command deadline exceeded; preserving cast output")
++	}
++	lock, err := lockInstance(outDir, min(instanceLockWait, remaining))
++	if err != nil {
++		return fmt.Errorf("serialize stopped cast cleanup: %w; preserving cast output", err)
++	}
++	defer lock.release()
++	if !time.Now().Before(deadline) {
++		return fmt.Errorf("stop command deadline exceeded; preserving cast output")
++	}
++	failure, failurePresent, err := readHelperFailure(filepath.Join(outDir, instanceFailureName))
++	if err != nil {
 +		return fmt.Errorf("cannot verify helper shutdown result: %w; preserving cast output", err)
-+	} else if present {
++	}
++	helperPID, helperPIDPresent, err := readProcessPID(filepath.Join(outDir, "helper.pid"))
++	if err != nil {
++		return fmt.Errorf("inspect helper pidfile: %w; preserving cast output", err)
++	}
++	if failurePresent && helperPIDPresent && failure.helperPID != helperPID {
++		return fmt.Errorf("helper failure identity changed before cleanup; preserving cast output")
++	}
++	if helperPIDPresent && helperOps.alive(helperPID) {
++		return fmt.Errorf("helper %d may still be active; preserving cast output", helperPID)
++	}
++	if failurePresent {
 +		if helperOps.alive(failure.helperPID) {
 +			return fmt.Errorf("helper %d from failure record may still be active; preserving output", failure.helperPID)
 +		}
@@ -1316,13 +1361,21 @@ index 0000000..cc41b10aa5f738377a6a05803e484a6056629f04
 +}
 +
 +func waitForQueuedServe(outDir string, deadline time.Time, helperOps, groupOps processController) error {
-+	for time.Now().Before(deadline) {
++	return waitForQueuedServeUntil(outDir, deadline, time.Now().Add(stopCommandBudget), helperOps, groupOps)
++}
++
++func waitForQueuedServeUntil(outDir string, startDeadline, stopDeadline time.Time, helperOps, groupOps processController) error {
++	for time.Now().Before(startDeadline) && time.Now().Before(stopDeadline) {
 +		if _, err := os.Stat(outDir); os.IsNotExist(err) {
 +			return nil // the matching serve consumed the marker and removed its dir
 +		} else if err != nil {
 +			return fmt.Errorf("inspect queued cast directory: %w", err)
 +		}
-+		lock, err := lockInstance(outDir, instanceLockWait)
++		remaining := time.Until(stopDeadline)
++		if remaining <= 0 {
++			break
++		}
++		lock, err := lockInstance(outDir, min(instanceLockWait, remaining))
 +		if err != nil {
 +			if os.IsNotExist(err) {
 +				return nil
@@ -1334,7 +1387,7 @@ index 0000000..cc41b10aa5f738377a6a05803e484a6056629f04
 +			if err := lock.release(); err != nil {
 +				return err
 +			}
-+			return stopInstanceWithProcesses(outDir, deadline, helperOps, groupOps)
++			return stopInstanceUntil(outDir, startDeadline, stopDeadline, helperOps, groupOps)
 +		} else if !os.IsNotExist(err) {
 +			_ = lock.release()
 +			return fmt.Errorf("inspect helper pidfile: %w", err)
@@ -1348,9 +1401,13 @@ index 0000000..cc41b10aa5f738377a6a05803e484a6056629f04
 +		}
 +		time.Sleep(castStartPoll)
 +	}
-+	// The deadline is now expired. A late serve is rejected by runServe before
-+	// it can launch FFmpeg; remove only this cast's stale marker and artifacts.
-+	return stopInstanceWithProcesses(outDir, deadline, helperOps, groupOps)
++	// Preserve the cancellation marker and output when the command budget ends;
++	// a later retry or the independent parent watcher can finish teardown. If
++	// only startup expired, the late serve is rejected and this command can sweep.
++	if !time.Now().Before(stopDeadline) {
++		return fmt.Errorf("stop command deadline exceeded; preserving cast output")
++	}
++	return stopInstanceUntil(outDir, startDeadline, stopDeadline, helperOps, groupOps)
 +}
 +
 +func removeEmptyCastDir(outDir string) error {
@@ -1474,8 +1531,9 @@ index 0000000..cc41b10aa5f738377a6a05803e484a6056629f04
 +				return err
 +			}
 +		}
-+		if pid, present, err := readProcessPID(filepath.Join(outDir, "helper.pid")); err == nil {
-+			if present && systemProcesses.alive(pid) {
++		helperPID, helperPresent, err := readProcessPID(filepath.Join(outDir, "helper.pid"))
++		if err == nil {
++			if helperPresent && systemProcesses.alive(helperPID) {
 +				_ = lock.release()
 +				continue
 +			}
@@ -1483,8 +1541,9 @@ index 0000000..cc41b10aa5f738377a6a05803e484a6056629f04
 +			_ = lock.release()
 +			return fmt.Errorf("inspect cast helper PID: %w", err)
 +		}
-+		if pid, present, err := readProcessPID(filepath.Join(outDir, ffmpegPIDName)); err == nil {
-+			if present && systemProcessGroups.alive(pid) {
++		ffmpegPID, ffmpegPresent, err := readProcessPID(filepath.Join(outDir, ffmpegPIDName))
++		if err == nil {
++			if ffmpegPresent && systemProcessGroups.alive(ffmpegPID) {
 +				_ = lock.release()
 +				continue
 +			}
@@ -1492,15 +1551,31 @@ index 0000000..cc41b10aa5f738377a6a05803e484a6056629f04
 +			_ = lock.release()
 +			return fmt.Errorf("inspect cast FFmpeg process group: %w", err)
 +		}
-+		if helperFailurePresent(outDir) {
++		failure, failurePresent, err := readHelperFailure(filepath.Join(outDir, instanceFailureName))
++		if err != nil {
 +			_ = lock.release()
-+			continue // a helper explicitly declared cleanup unsafe
++			continue // malformed or unreadable failure evidence is never cleanup authority
++		}
++		if failurePresent {
++			if helperPresent && failure.helperPID != helperPID {
++				_ = lock.release()
++				continue // preserve ambiguous process identity
++			}
++			if systemProcesses.alive(failure.helperPID) ||
++				(failure.ffmpegPGID > 0 && systemProcessGroups.alive(failure.ffmpegPGID)) {
++				_ = lock.release()
++				continue // a recorded writer remains alive
++			}
++			if ffmpegPresent && failure.ffmpegPGID > 0 && ffmpegPID != failure.ffmpegPGID {
++				_ = lock.release()
++				continue // preserve ambiguous FFmpeg process identity
++			}
 +		}
 +		if err := cleanOutDir(outDir); err != nil {
 +			_ = lock.release()
 +			return fmt.Errorf("clean expired cast output: %w", err)
 +		}
-+		for _, name := range []string{instanceStopName, "helper.pid", ffmpegPIDName} {
++		for _, name := range []string{instanceStopName, instanceFailureName, "helper.pid", ffmpegPIDName} {
 +			if err := os.Remove(filepath.Join(outDir, name)); err != nil && !os.IsNotExist(err) {
 +				_ = lock.release()
 +				return err
@@ -1857,10 +1932,10 @@ index 0000000..cc41b10aa5f738377a6a05803e484a6056629f04
 +}
 diff --git a/helper/lifecycle_test.go b/helper/lifecycle_test.go
 new file mode 100644
-index 0000000..4c758626abc3fb4f22035949c51ef0b17112ac5d
+index 0000000..bea8a8f
 --- /dev/null
 +++ b/helper/lifecycle_test.go
-@@ -0,0 +1,682 @@
+@@ -0,0 +1,819 @@
 +package main
 +
 +import (
@@ -1914,6 +1989,54 @@ index 0000000..4c758626abc3fb4f22035949c51ef0b17112ac5d
 +	}
 +}
 +
++func TestStopCommandBudgetBoundsLifecycleLockAndQueuedStartup(t *testing.T) {
++	if stopCommandBudget <= 0 || stopCommandBudget >= 36*time.Second {
++		t.Fatalf("stop command budget=%s; must remain below the 36s process timeout", stopCommandBudget)
++	}
++
++	root := t.TempDir()
++	out := filepath.Join(root, "locked-cast")
++	if err := createPrivateDirectoryPath(out); err != nil {
++		t.Fatal(err)
++	}
++	owner, err := lockInstance(out, time.Second)
++	if err != nil {
++		t.Fatal(err)
++	}
++	started := time.Now()
++	err = stopInstanceUntil(out, time.Time{}, time.Now().Add(100*time.Millisecond), systemProcesses, systemProcessGroups)
++	_ = owner.release()
++	if err == nil || !strings.Contains(err.Error(), "lifecycle lock") {
++		t.Fatalf("locked stop error=%v; want bounded lifecycle-lock failure", err)
++	}
++	if elapsed := time.Since(started); elapsed > time.Second {
++		t.Fatalf("stop exceeded its 100ms test deadline: %s", elapsed)
++	}
++	if _, err := os.Stat(filepath.Join(out, instanceStopName)); !os.IsNotExist(err) {
++		t.Fatalf("stop marker should not be written without the lock: %v", err)
++	}
++
++	queued := filepath.Join(root, "queued-cast")
++	if err := createPrivateDirectoryPath(queued); err != nil {
++		t.Fatal(err)
++	}
++	marker := filepath.Join(queued, instanceStopName)
++	if err := os.WriteFile(marker, []byte("0\n"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	started = time.Now()
++	err = waitForQueuedServeUntil(queued, time.Now().Add(10*time.Second), time.Now().Add(120*time.Millisecond), systemProcesses, systemProcessGroups)
++	if err == nil || !strings.Contains(err.Error(), "stop command deadline") {
++		t.Fatalf("queued stop error=%v; want one overall deadline", err)
++	}
++	if elapsed := time.Since(started); elapsed > time.Second {
++		t.Fatalf("queued stop exceeded its 120ms test deadline: %s", elapsed)
++	}
++	if _, err := os.Stat(marker); err != nil {
++		t.Fatalf("deadline should preserve queued cancellation marker for retry: %v", err)
++	}
++}
++
 +func TestStopSubcommandReturnsNonzeroWhenHelperReportsTeardownFailure(t *testing.T) {
 +	bin := buildHelper(t)
 +	out := t.TempDir()
@@ -1962,6 +2085,9 @@ index 0000000..4c758626abc3fb4f22035949c51ef0b17112ac5d
 +	if err := os.WriteFile(filepath.Join(out, instanceFailureName), []byte(failure), 0o600); err != nil {
 +		t.Fatal(err)
 +	}
++	if err := os.WriteFile(filepath.Join(out, "helper.pid"), []byte(strconv.Itoa(helperPID)), 0o600); err != nil {
++		t.Fatal(err)
++	}
 +	helperAlive, ffmpegAlive := true, true
 +	helperOps := processController{
 +		alive: func(pid int) bool { return pid == helperPID && helperAlive },
@@ -1993,6 +2119,33 @@ index 0000000..4c758626abc3fb4f22035949c51ef0b17112ac5d
 +	}
 +	if _, err := os.Stat(out); !os.IsNotExist(err) {
 +		t.Fatalf("verified stopped cast directory remains: %v", err)
++	}
++}
++
++func TestFailureMarkerRetryRejectsMismatchedHelperPID(t *testing.T) {
++	out := t.TempDir()
++	mediaPath := filepath.Join(out, "index.m3u8")
++	if err := os.WriteFile(mediaPath, []byte("#EXTM3U\n"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	failure := "version=1\nhelper_pid=101\nffmpeg_pgid=0\nmessage=simulated teardown failure\n"
++	if err := os.WriteFile(filepath.Join(out, instanceFailureName), []byte(failure), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(out, "helper.pid"), []byte("303\n"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	ops := processController{
++		alive: func(int) bool { return false },
++		now:   time.Now,
++		sleep: func(time.Duration) {},
++	}
++	err := stopInstanceWithProcesses(out, time.Time{}, ops, systemProcessGroups)
++	if err == nil || !strings.Contains(err.Error(), "identity changed") {
++		t.Fatalf("mismatched helper identity error=%v; want fail-closed rejection", err)
++	}
++	if _, err := os.Stat(mediaPath); err != nil {
++		t.Fatalf("mismatched helper identity removed cast output: %v", err)
 +	}
 +}
 +
@@ -2139,6 +2292,65 @@ index 0000000..4c758626abc3fb4f22035949c51ef0b17112ac5d
 +	}
 +	if _, err := os.Stat(future); err != nil {
 +		t.Fatalf("future marker was pruned before its start deadline: %v", err)
++	}
++}
++
++func TestPruneExpiredFailureMarkerOnlyAfterRecordedProcessesExit(t *testing.T) {
++	root := t.TempDir()
++	now := time.Now()
++	dead := filepath.Join(root, "cast-failed-dead")
++	live := filepath.Join(root, "cast-failed-live")
++	ambiguous := filepath.Join(root, "cast-failed-ambiguous")
++	for _, dir := range []string{dead, live, ambiguous} {
++		if err := os.Mkdir(dir, 0o700); err != nil {
++			t.Fatal(err)
++		}
++		if err := os.WriteFile(filepath.Join(dir, instanceStopName), []byte(strconv.FormatInt(now.Add(-time.Hour).Unix(), 10)), 0o600); err != nil {
++			t.Fatal(err)
++		}
++		if err := os.WriteFile(filepath.Join(dir, "index.m3u8"), []byte("#EXTM3U\n"), 0o600); err != nil {
++			t.Fatal(err)
++		}
++	}
++
++	const deadHelperPID, deadFFmpegPGID = 99999999, 99999998
++	deadRecord := fmt.Sprintf("version=1\nhelper_pid=%d\nffmpeg_pgid=%d\nmessage=failed teardown\n", deadHelperPID, deadFFmpegPGID)
++	if err := os.WriteFile(filepath.Join(dead, "helper.pid"), []byte(strconv.Itoa(deadHelperPID)), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(dead, ffmpegPIDName), []byte(strconv.Itoa(deadFFmpegPGID)), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(dead, instanceFailureName), []byte(deadRecord), 0o600); err != nil {
++		t.Fatal(err)
++	}
++
++	liveRecord := fmt.Sprintf("version=1\nhelper_pid=%d\nffmpeg_pgid=0\nmessage=failed teardown\n", os.Getpid())
++	if err := os.WriteFile(filepath.Join(live, "helper.pid"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(live, instanceFailureName), []byte(liveRecord), 0o600); err != nil {
++		t.Fatal(err)
++	}
++
++	ambiguousRecord := "version=1\nhelper_pid=99999997\nffmpeg_pgid=0\nmessage=failed teardown\n"
++	if err := os.WriteFile(filepath.Join(ambiguous, "helper.pid"), []byte("99999996\n"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(ambiguous, instanceFailureName), []byte(ambiguousRecord), 0o600); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := pruneExpiredCastDirs(root, "", now); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := os.Stat(dead); !os.IsNotExist(err) {
++		t.Fatalf("expired failure with dead recorded processes was not pruned: %v", err)
++	}
++	for _, dir := range []string{live, ambiguous} {
++		if _, err := os.Stat(filepath.Join(dir, "index.m3u8")); err != nil {
++			t.Fatalf("unsafe failure evidence in %q did not preserve output: %v", dir, err)
++		}
 +	}
 +}
 +
@@ -2544,10 +2756,10 @@ index 0000000..4c758626abc3fb4f22035949c51ef0b17112ac5d
 +	}
 +}
 diff --git a/helper/main.go b/helper/main.go
-index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede18896e4f1ae 100644
+index 44f065e..9e88cab 100644
 --- a/helper/main.go
 +++ b/helper/main.go
-@@ -3,9 +3,12 @@
+@@ -3,9 +3,12 @@ package main
  import (
  	"flag"
  	"fmt"
@@ -2560,7 +2772,7 @@ index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede188
  	"syscall"
  	"time"
  )
-@@ -17,39 +20,54 @@
+@@ -17,39 +20,54 @@ func main() {
  	}
  	switch os.Args[1] {
  	case "serve":
@@ -2622,7 +2834,7 @@ index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede188
  	fs.Float64Var(&c.Duration, "duration", 0, "source duration seconds")
  	fs.StringVar(&c.VCodec, "vcodec", "", "source video codec (mpv name)")
  	fs.StringVar(&c.ACodec, "acodec", "", "source audio codec (mpv name)")
-@@ -60,95 +78,310 @@
+@@ -60,95 +78,310 @@ func runServe(argv []string) {
  	fs.StringVar(&c.SubPath, "subpath", "", "external subtitle file (used as input 1; overrides -smap)")
  	fs.StringVar(&c.SubLang, "sublang", "", "subtitle language tag for the HLS rendition")
  	fs.StringVar(&c.SubName, "subname", "", "subtitle display name for the HLS rendition")
@@ -2653,9 +2865,6 @@ index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede188
 -		stopJob()
 -		if outOwned {
 -			cleanOutDir(c.OutDir)
--		}
--		if pidfile != "" {
--			os.Remove(pidfile)
 +	safeToCleanup := true
 +	var shutdown func() error
 +	var startupLock *instanceLock
@@ -2664,7 +2873,9 @@ index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede188
 +	releaseStartupLock := func() error {
 +		if startupLock == nil || startupLockReleased {
 +			return nil
-+		}
+ 		}
+-		if pidfile != "" {
+-			os.Remove(pidfile)
 +		if err := startupLock.release(); err != nil {
 +			return err
 +		}
@@ -2679,9 +2890,8 @@ index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede188
  		}
  		Emit(os.Stdout, "error", map[string]any{"msg": msg})
 -		os.Exit(1)
--	}
 +		return 1
-+	}
+ 	}
 +	defer func() {
 +		if shutdown != nil {
 +			if err := shutdown(); err != nil {
@@ -2767,11 +2977,10 @@ index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede188
  	}
  	if _, err := os.Stat(c.FFmpeg); err != nil {
 -		fail("ffmpeg not found at " + c.FFmpeg + " — reinstall the plugin through IINA's plugin installer")
--	}
++		return fail("ffmpeg not found at " + c.FFmpeg + " — reinstall the plugin through IINA's plugin installer")
+ 	}
 -	if err := os.MkdirAll(c.OutDir, 0o755); err != nil {
 -		fail(err.Error())
-+		return fail("ffmpeg not found at " + c.FFmpeg + " — reinstall the plugin through IINA's plugin installer")
-+	}
 +	if err := createPrivateDirectoryPath(c.OutDir); err != nil {
 +		return fail(err.Error())
 +	}
@@ -2823,27 +3032,24 @@ index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede188
 +	}
  	if err := WritePidfile(pidfile); err != nil {
 -		fail(err.Error())
--	}
++		return fail(err.Error())
+ 	}
 -	defer os.Remove(pidfile)
 -
-+		return fail(err.Error())
-+	}
 +	pidfileOwned = true
  	var srcSize int64
  	if fi, serr := os.Stat(c.Source); serr == nil {
  		srcSize = fi.Size()
  	}
 -	port, shutdown, err := StartServer(c.OutDir, c.SubName, c.SubLang, EstimateBandwidth(srcSize, c.Duration))
--	if err != nil {
--		fail(err.Error())
--	}
--	defer shutdown()
--
- 	ip, err := LanIP(ipOverride)
++	ip, err := LanIP(ipOverride)
  	if err != nil {
 -		fail(err.Error())
 +		return fail(err.Error())
-+	}
+ 	}
+-	defer shutdown()
+-
+-	ip, err := LanIP(ipOverride)
 +	token, err := NewCastToken()
 +	if err != nil {
 +		return fail("could not create a private cast URL")
@@ -2855,7 +3061,8 @@ index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede188
 +	}
 +	shutdown = serverShutdown
 +	diskBudget, err := outputBudget(c.OutDir, productionCastDiskLimits, availableBytes)
-+	if err != nil {
+ 	if err != nil {
+-		fail(err.Error())
 +		return fail(err.Error())
  	}
  
@@ -2878,8 +3085,6 @@ index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede188
 -	teardown := func() {
 -		stopJob()
 -		cleanOutDir(c.OutDir)
--	}
--
 +	var teardownMu sync.Mutex
 +	teardownComplete := false
 +	teardown := func() error {
@@ -2914,8 +3119,8 @@ index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede188
 +		teardownComplete = true
 +		safeToCleanup = true
 +		return nil
-+	}
-+
+ 	}
+ 
 +	// Keep stop commands behind the startup lock until the signal handler is
 +	// active and both child lifecycles are installed. A queued stop then goes
 +	// through the same bounded teardown as an ordinary signal.
@@ -2982,7 +3187,7 @@ index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede188
  	playlistReady := func() bool {
  		if _, err := os.Stat(filepath.Join(c.OutDir, playlistName)); err != nil {
  			return false
-@@ -178,12 +411,12 @@
+@@ -178,12 +411,12 @@ func runServe(argv []string) {
  					ready = true
  					readyTick.Stop()
  				} else if time.Now().After(readyDeadline) {
@@ -2997,7 +3202,7 @@ index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede188
  			}
  			if !ready {
  				// Job finished before the poll noticed the playlist (tiny file).
-@@ -192,18 +425,43 @@
+@@ -192,18 +425,43 @@ func runServe(argv []string) {
  					ready = true
  					readyTick.Stop()
  				} else {
@@ -3048,10 +3253,10 @@ index 44f065ed2caa83ee198d834421935b2de0d15730..9e88cabadd2c0c38f4045e4ad8ede188
  	}
  }
 diff --git a/helper/main_test.go b/helper/main_test.go
-index d8481a146a63e28dfe0c5f7d4b4ea3c34d4f0237..7aa6284a4c8f30d3f4424eed016aa2610702831c 100644
+index d8481a1..7aa6284 100644
 --- a/helper/main_test.go
 +++ b/helper/main_test.go
-@@ -2,14 +2,17 @@
+@@ -2,14 +2,17 @@ package main
  
  import (
  	"bufio"
@@ -3069,7 +3274,7 @@ index d8481a146a63e28dfe0c5f7d4b4ea3c34d4f0237..7aa6284a4c8f30d3f4424eed016aa261
  	"strings"
  	"testing"
  	"time"
-@@ -105,6 +108,9 @@
+@@ -105,6 +108,9 @@ func TestLocateHelper(t *testing.T) {
  func TestServeEndToEndWithStub(t *testing.T) {
  	bin := buildHelper(t)
  	out := t.TempDir()
@@ -3079,7 +3284,7 @@ index d8481a146a63e28dfe0c5f7d4b4ea3c34d4f0237..7aa6284a4c8f30d3f4424eed016aa261
  	// Stub ffmpeg: writes a playlist like the real one would, then idles like a
  	// long transcode so `serve` stays up.
  	stub := filepath.Join(t.TempDir(), "ffmpeg")
-@@ -156,8 +162,16 @@
+@@ -156,9 +162,17 @@ func TestServeEndToEndWithStub(t *testing.T) {
  			t.Fatal("no ready event within 15s")
  		}
  	}
@@ -3087,17 +3292,18 @@ index d8481a146a63e28dfe0c5f7d4b4ea3c34d4f0237..7aa6284a4c8f30d3f4424eed016aa261
 +	assertPrivateCastURL(t, readyURL, "index.m3u8")
 +	if strings.Contains(readyURL, "127.0.0.1") {
  		t.Fatalf("bad ready url %q", readyURL)
-+	}
+ 	}
 +	info, err := os.Stat(out)
 +	if err != nil {
 +		t.Fatal(err)
 +	}
 +	if info.Mode().Perm() != 0o700 {
 +		t.Fatalf("cast directory permissions = %04o, want 0700", info.Mode().Perm())
- 	}
++	}
  	resp, err := http.Get(readyURL)
  	if err != nil {
-@@ -216,9 +230,7 @@
+ 		t.Fatal(err)
+@@ -216,9 +230,7 @@ func TestServeWithSubsAdvertisesRewrittenMaster(t *testing.T) {
  	defer func() { cmd.Process.Kill(); cmd.Wait() }()
  
  	readyURL := waitReady(t, stdout, 15*time.Second)
@@ -3108,7 +3314,7 @@ index d8481a146a63e28dfe0c5f7d4b4ea3c34d4f0237..7aa6284a4c8f30d3f4424eed016aa261
  	resp, err := http.Get(readyURL)
  	if err != nil {
  		t.Fatal(err)
-@@ -231,6 +243,20 @@
+@@ -231,6 +243,20 @@ func TestServeWithSubsAdvertisesRewrittenMaster(t *testing.T) {
  	}
  }
  
@@ -3129,13 +3335,10 @@ index d8481a146a63e28dfe0c5f7d4b4ea3c34d4f0237..7aa6284a4c8f30d3f4424eed016aa261
  func TestServeCleansStaleSubtitleFiles(t *testing.T) {
  	bin := buildHelper(t)
  	out := t.TempDir()
-@@ -262,6 +288,84 @@
- 		if _, err := os.Stat(filepath.Join(out, f)); err == nil {
- 			t.Fatalf("stale %s survived cleanup", f)
- 		}
-+	}
-+}
-+
+@@ -265,6 +291,84 @@ func TestServeCleansStaleSubtitleFiles(t *testing.T) {
+ 	}
+ }
+ 
 +func TestExpiredServeCommandCannotStartAfterOrphanMarkerCleanup(t *testing.T) {
 +	bin := buildHelper(t)
 +	root := t.TempDir()
@@ -3211,10 +3414,13 @@ index d8481a146a63e28dfe0c5f7d4b4ea3c34d4f0237..7aa6284a4c8f30d3f4424eed016aa261
 +	}
 +	if _, err := os.Stat(started); !os.IsNotExist(err) {
 +		t.Fatalf("FFmpeg started after the final deadline check: %v", err)
- 	}
- }
- 
-@@ -354,6 +458,9 @@
++	}
++}
++
+ // waitReady scans helper stdout until a ready event and returns its url.
+ func waitReady(t *testing.T, stdout io.Reader, timeout time.Duration) string {
+ 	t.Helper()
+@@ -354,6 +458,9 @@ func assertSwept(t *testing.T, out string) {
  			t.Errorf("%s left behind in the output dir", f)
  		}
  	}
@@ -3224,12 +3430,10 @@ index d8481a146a63e28dfe0c5f7d4b4ea3c34d4f0237..7aa6284a4c8f30d3f4424eed016aa261
  }
  
  func TestStopSweepsOutDir(t *testing.T) {
-@@ -373,6 +480,147 @@
- 	}
- 	waitExit(t, cmd, 5*time.Second)
+@@ -375,6 +482,147 @@ func TestStopSweepsOutDir(t *testing.T) {
  	assertSwept(t, out)
-+}
-+
+ }
+ 
 +func TestStopBeforeServePIDPublicationPreventsThatCast(t *testing.T) {
 +	bin := buildHelper(t)
 +	out := filepath.Join(t.TempDir(), "cast-before-pid")
@@ -3369,14 +3573,16 @@ index d8481a146a63e28dfe0c5f7d4b4ea3c34d4f0237..7aa6284a4c8f30d3f4424eed016aa261
 +	if !errors.As(err, &exitErr) || exitErr.ExitCode() == 0 {
 +		t.Fatalf("stop error=%v, want nonzero exit status", err)
 +	}
- }
- 
++}
++
  // After ffmpeg has finished (VOD complete) the helper keeps serving until
+ // killed — a distinct branch of the serve loop that must sweep too.
+ func TestStopAfterPackagedSweepsOutDir(t *testing.T) {
 diff --git a/helper/netinfo.go b/helper/netinfo.go
-index 05e6e771dc22391f2109a795716fe94754cc7fb4..2990e646e73cef042bd8c413e8aab2e657205011 100644
+index 05e6e77..2990e64 100644
 --- a/helper/netinfo.go
 +++ b/helper/netinfo.go
-@@ -23,7 +23,7 @@
+@@ -23,7 +23,7 @@ func pickIPv4(addrs []net.Addr) string {
  			ip = v.IP
  		}
  		ip4 := ip.To4()
@@ -3385,7 +3591,7 @@ index 05e6e771dc22391f2109a795716fe94754cc7fb4..2990e646e73cef042bd8c413e8aab2e6
  			continue
  		}
  		return ip4.String()
-@@ -74,7 +74,7 @@
+@@ -74,7 +74,7 @@ func interfaceForIP(ip net.IP, ifaces []interfaceInfo) *interfaceInfo {
  
  func physicalPrivateIPv4(ifaces []interfaceInfo) string {
  	for _, iface := range ifaces {
@@ -3394,7 +3600,7 @@ index 05e6e771dc22391f2109a795716fe94754cc7fb4..2990e646e73cef042bd8c413e8aab2e6
  			continue
  		}
  		for _, addr := range iface.addrs {
-@@ -88,7 +88,7 @@
+@@ -88,7 +88,7 @@ func physicalPrivateIPv4(ifaces []interfaceInfo) string {
  
  func walkInterfaces(ifaces []interfaceInfo) string {
  	for _, iface := range ifaces {
@@ -3403,12 +3609,10 @@ index 05e6e771dc22391f2109a795716fe94754cc7fb4..2990e646e73cef042bd8c413e8aab2e6
  			continue
  		}
  		if ip := pickIPv4(iface.addrs); ip != "" {
-@@ -114,6 +114,27 @@
- 		}
- 	}
+@@ -116,6 +116,27 @@ func chooseLanIP(route net.IP, ifaces []interfaceInfo) string {
  	return walkInterfaces(ifaces)
-+}
-+
+ }
+ 
 +// isVirtualNetworkInterface rejects software interfaces when walking for a
 +// fallback address. The default-route address remains preferred (except for
 +// a VPN tunnel, where the physical private LAN address is more likely to be
@@ -3428,14 +3632,16 @@ index 05e6e771dc22391f2109a795716fe94754cc7fb4..2990e646e73cef042bd8c413e8aab2e6
 +func eligibleLanInterface(name string, flags net.Flags) bool {
 +	return flags&net.FlagUp != 0 && flags&net.FlagLoopback == 0 &&
 +		flags&net.FlagPointToPoint == 0 && !isVirtualNetworkInterface(name)
- }
- 
++}
++
  func interfaces() ([]interfaceInfo, error) {
+ 	ifaces, err := net.Interfaces()
+ 	if err != nil {
 diff --git a/helper/netinfo_test.go b/helper/netinfo_test.go
-index 8574ccc181d4f6e0fbd7883b03a9ca5e5bc35802..7c1bf17caa742d93877e8e4c827975e04588b457 100644
+index 8574ccc..7c1bf17 100644
 --- a/helper/netinfo_test.go
 +++ b/helper/netinfo_test.go
-@@ -25,6 +25,7 @@
+@@ -25,6 +25,7 @@ func TestPickIPv4(t *testing.T) {
  		want  string
  	}{
  		{[]net.Addr{mustCIDR(t, "127.0.0.1/8")}, ""},                                            // loopback rejected
@@ -3443,13 +3649,10 @@ index 8574ccc181d4f6e0fbd7883b03a9ca5e5bc35802..7c1bf17caa742d93877e8e4c827975e0
  		{[]net.Addr{mustCIDR(t, "169.254.10.1/16")}, ""},                                        // link-local rejected
  		{[]net.Addr{mustCIDR(t, "fe80::1/64"), mustCIDR(t, "192.168.1.18/24")}, "192.168.1.18"}, // v6 skipped
  		{[]net.Addr{mustCIDR(t, "10.0.0.7/8")}, "10.0.0.7"},
-@@ -33,6 +34,23 @@
- 		if got := pickIPv4(c.addrs); got != c.want {
- 			t.Errorf("case %d: got %q want %q", i, got, c.want)
- 		}
-+	}
-+}
-+
+@@ -36,6 +37,23 @@ func TestPickIPv4(t *testing.T) {
+ 	}
+ }
+ 
 +func TestEligibleLanInterfaceSkipsVirtualAndPointToPointInterfaces(t *testing.T) {
 +	for _, name := range []string{"utun4", "ipsec0", "ppp0", "tun0", "tap0", "wg0", "tailscale0",
 +		"bridge100", "veth123", "docker0", "vmnet1", "awdl0", "llw0", "gif0", "stf0"} {
@@ -3464,10 +3667,13 @@ index 8574ccc181d4f6e0fbd7883b03a9ca5e5bc35802..7c1bf17caa742d93877e8e4c827975e0
 +	}
 +	if !eligibleLanInterface("en0", net.FlagUp|net.FlagBroadcast) {
 +		t.Error("active physical interface should be eligible")
- 	}
- }
- 
-@@ -101,6 +119,16 @@
++	}
++}
++
+ func TestChooseLanIP(t *testing.T) {
+ 	cases := []struct {
+ 		name   string
+@@ -101,6 +119,16 @@ func TestChooseLanIP(t *testing.T) {
  	}
  }
  
@@ -3485,7 +3691,7 @@ index 8574ccc181d4f6e0fbd7883b03a9ca5e5bc35802..7c1bf17caa742d93877e8e4c827975e0
  	ifaces := []interfaceInfo{testInterface(t, "en0", "192.168.50.10/24")}
  	if got, err := validateIPOverride("192.168.50.10", ifaces); err != nil || got != "192.168.50.10" {
 diff --git a/helper/pidfile.go b/helper/pidfile.go
-index 084cbe57c61e1559f9d16f066d022b46a356e604..3965c069d6b7f4a5be7ac3a3298da5b31f3a6f0c 100644
+index 084cbe5..3965c06 100644
 --- a/helper/pidfile.go
 +++ b/helper/pidfile.go
 @@ -1,11 +1,10 @@
@@ -3501,14 +3707,12 @@ index 084cbe57c61e1559f9d16f066d022b46a356e604..3965c069d6b7f4a5be7ac3a3298da5b3
  )
  
  func WritePidfile(path string) error {
-@@ -13,31 +12,6 @@
+@@ -13,31 +12,6 @@ func WritePidfile(path string) error {
  }
  
  func processAlive(pid int) bool {
 -	return syscall.Kill(pid, 0) == nil
-+	err := syscall.Kill(pid, 0)
-+	return err == nil || errors.Is(err, syscall.EPERM)
- }
+-}
 -
 -func TakeOver(path string) error {
 -	b, err := os.ReadFile(path)
@@ -3534,12 +3738,14 @@ index 084cbe57c61e1559f9d16f066d022b46a356e604..3965c069d6b7f4a5be7ac3a3298da5b3
 -		return err
 -	}
 -	return nil
--}
++	err := syscall.Kill(pid, 0)
++	return err == nil || errors.Is(err, syscall.EPERM)
+ }
 diff --git a/helper/pidfile_test.go b/helper/pidfile_test.go
-index 9e0058c061e232f11374ee8b968a25d25d9de7b0..416b02dc856421994fa6373a02fbd30addc626a7 100644
+index 9e0058c..416b02d 100644
 --- a/helper/pidfile_test.go
 +++ b/helper/pidfile_test.go
-@@ -6,7 +6,6 @@
+@@ -6,7 +6,6 @@ import (
  	"path/filepath"
  	"strconv"
  	"testing"
@@ -3547,7 +3753,7 @@ index 9e0058c061e232f11374ee8b968a25d25d9de7b0..416b02dc856421994fa6373a02fbd30a
  )
  
  func TestTakeOverNoFile(t *testing.T) {
-@@ -15,34 +14,39 @@
+@@ -15,34 +14,39 @@ func TestTakeOverNoFile(t *testing.T) {
  	}
  }
  
@@ -3604,10 +3810,10 @@ index 9e0058c061e232f11374ee8b968a25d25d9de7b0..416b02dc856421994fa6373a02fbd30a
  	}
  }
 diff --git a/helper/playlist.go b/helper/playlist.go
-index a7c91bbbafef4407441ed914c5103761108adae7..aeadae09f4fdb6753df0f98eb7f31f1e6196be8d 100644
+index a7c91bb..aeadae0 100644
 --- a/helper/playlist.go
 +++ b/helper/playlist.go
-@@ -3,6 +3,7 @@
+@@ -3,6 +3,7 @@ package main
  import (
  	"strconv"
  	"strings"
@@ -3615,7 +3821,7 @@ index a7c91bbbafef4407441ed914c5103761108adae7..aeadae09f4fdb6753df0f98eb7f31f1e
  )
  
  // fallbackBandwidth is the BANDWIDTH advertised when the source's size or
-@@ -101,8 +102,22 @@
+@@ -101,8 +102,22 @@ func setAttr(attrs []string, key, val string) []string {
  	return append(attrs, key+"="+val)
  }
  
@@ -3642,10 +3848,10 @@ index a7c91bbbafef4407441ed914c5103761108adae7..aeadae09f4fdb6753df0f98eb7f31f1e
 +	return `"` + safe.String() + `"`
  }
 diff --git a/helper/playlist_test.go b/helper/playlist_test.go
-index f17a1ce189e6092eeea25263034d1a4dd57c269b..12265505a4d1f91eed8d45273e7f788df637f17e 100644
+index f17a1ce..1226550 100644
 --- a/helper/playlist_test.go
 +++ b/helper/playlist_test.go
-@@ -66,6 +66,17 @@
+@@ -66,6 +66,17 @@ func TestRewriteRespectsQuotedCommasAndQuotesInName(t *testing.T) {
  	}
  }
  
@@ -3664,10 +3870,10 @@ index f17a1ce189e6092eeea25263034d1a4dd57c269b..12265505a4d1f91eed8d45273e7f788d
  	in := `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="a",DEFAULT=NO,URI="a.m3u8"`
  	if got := RewriteMasterPlaylist(in, "English", "en"); got != in {
 diff --git a/helper/server.go b/helper/server.go
-index 72df6cc2cd0f247eb31d9e400800844ccea977d7..399ce1c904e5b5dbab0ce3e3bc14632bb5acc24e 100644
+index 72df6cc..399ce1c 100644
 --- a/helper/server.go
 +++ b/helper/server.go
-@@ -2,14 +2,46 @@
+@@ -2,15 +2,47 @@ package main
  
  import (
  	"context"
@@ -3686,7 +3892,7 @@ index 72df6cc2cd0f247eb31d9e400800844ccea977d7..399ce1c904e5b5dbab0ce3e3bc14632b
 +	"sync"
  	"time"
  )
-+
+ 
 +const (
 +	serverReadHeaderTimeout = 5 * time.Second
 +	serverIdleTimeout       = 30 * time.Second
@@ -3711,10 +3917,11 @@ index 72df6cc2cd0f247eb31d9e400800844ccea977d7..399ce1c904e5b5dbab0ce3e3bc14632b
 +	maxConnections:    serverMaxConnections,
 +	shutdownTimeout:   serverShutdownTimeout,
 +}
- 
++
  // Safari refuses HLS served as application/octet-stream, and Go's built-in
  // table doesn't know these extensions.
-@@ -27,28 +59,159 @@
+ func init() {
+@@ -27,28 +59,159 @@ func init() {
  // one; everything else is a plain file serve. subName/subLang may be empty
  // (no-subs casts never produce a master.m3u8, so the rewrite path simply
  // never runs for them).
@@ -3885,7 +4092,7 @@ index 72df6cc2cd0f247eb31d9e400800844ccea977d7..399ce1c904e5b5dbab0ce3e3bc14632b
 +	return false
 +}
 diff --git a/helper/server_test.go b/helper/server_test.go
-index 4fad4fd8979d68c272a2f737152508b414ca8e62..21332ca4bf8006dd840fc0ea14753ab7fba439b9 100644
+index 4fad4fd..21332ca 100644
 --- a/helper/server_test.go
 +++ b/helper/server_test.go
 @@ -1,27 +1,32 @@
@@ -3903,91 +4110,73 @@ index 4fad4fd8979d68c272a2f737152508b414ca8e62..21332ca4bf8006dd840fc0ea14753ab7
  	"testing"
 +	"time"
  )
-+
-+const testCastToken = "0123456789abcdef0123456789abcdef"
  
++const testCastToken = "0123456789abcdef0123456789abcdef"
++
  func TestServerMIMEAndRange(t *testing.T) {
  	dir := t.TempDir()
  	os.WriteFile(filepath.Join(dir, "index.m3u8"), []byte("#EXTM3U\n"), 0o644)
  	os.WriteFile(filepath.Join(dir, "seg_0000.m4s"), []byte("0123456789"), 0o644)
  
 -	port, shutdown, err := StartServer(dir, "", "", 0)
--	if err != nil {
--		t.Fatal(err)
--	}
--	defer shutdown()
--
--	base := fmt.Sprintf("http://127.0.0.1:%d", port)
 +	port, shutdown, err := StartServer(dir, "", "", 0, "127.0.0.1", testCastToken)
-+	if err != nil {
-+		t.Fatal(err)
-+	}
-+	defer shutdown()
-+
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	defer shutdown()
+ 
+-	base := fmt.Sprintf("http://127.0.0.1:%d", port)
 +	base := fmt.Sprintf("http://127.0.0.1:%d/%s", port, testCastToken)
  
  	resp, err := http.Get(base + "/index.m3u8")
  	if err != nil {
-@@ -54,12 +59,12 @@
+@@ -54,12 +59,12 @@ func TestServerRewritesMasterPlaylist(t *testing.T) {
  	os.WriteFile(filepath.Join(dir, "master.m3u8"), []byte(master), 0o644)
  	os.WriteFile(filepath.Join(dir, "seg_0000.vtt"), []byte("WEBVTT\n"), 0o644)
  
 -	port, shutdown, err := StartServer(dir, "English", "en", 0)
--	if err != nil {
--		t.Fatal(err)
--	}
--	defer shutdown()
--	base := fmt.Sprintf("http://127.0.0.1:%d", port)
 +	port, shutdown, err := StartServer(dir, "English", "en", 0, "127.0.0.1", testCastToken)
-+	if err != nil {
-+		t.Fatal(err)
-+	}
-+	defer shutdown()
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	defer shutdown()
+-	base := fmt.Sprintf("http://127.0.0.1:%d", port)
 +	base := fmt.Sprintf("http://127.0.0.1:%d/%s", port, testCastToken)
  
  	resp, err := http.Get(base + "/master.m3u8")
  	if err != nil {
-@@ -87,12 +92,12 @@
+@@ -87,12 +92,12 @@ func TestServerRewritesMasterPlaylist(t *testing.T) {
  
  func TestServerMissingMasterFallsThrough(t *testing.T) {
  	dir := t.TempDir()
 -	port, shutdown, err := StartServer(dir, "", "", 0)
--	if err != nil {
--		t.Fatal(err)
--	}
--	defer shutdown()
--	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/master.m3u8", port))
 +	port, shutdown, err := StartServer(dir, "", "", 0, "127.0.0.1", testCastToken)
-+	if err != nil {
-+		t.Fatal(err)
-+	}
-+	defer shutdown()
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	defer shutdown()
+-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/master.m3u8", port))
 +	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/%s/master.m3u8", port, testCastToken))
  	if err != nil {
  		t.Fatal(err)
  	}
-@@ -110,13 +115,13 @@
+@@ -110,13 +115,13 @@ func TestServerAddsVariantToIncompleteMaster(t *testing.T) {
  	dir := t.TempDir()
  	os.WriteFile(filepath.Join(dir, "master.m3u8"), []byte(ffmpegMasterNoVariant), 0o644)
  
 -	port, shutdown, err := StartServer(dir, "English", "en", 7_000_000)
--	if err != nil {
--		t.Fatal(err)
--	}
--	defer shutdown()
--
--	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/master.m3u8", port))
 +	port, shutdown, err := StartServer(dir, "English", "en", 7_000_000, "127.0.0.1", testCastToken)
-+	if err != nil {
-+		t.Fatal(err)
-+	}
-+	defer shutdown()
-+
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	defer shutdown()
+ 
+-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/master.m3u8", port))
 +	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/%s/master.m3u8", port, testCastToken))
  	if err != nil {
  		t.Fatal(err)
  	}
-@@ -130,3 +135,257 @@
+@@ -130,3 +135,257 @@ func TestServerAddsVariantToIncompleteMaster(t *testing.T) {
  		t.Fatalf("subtitle rewrite must still apply:\n%s", s)
  	}
  }
@@ -4247,7 +4436,7 @@ index 4fad4fd8979d68c272a2f737152508b414ca8e62..21332ca4bf8006dd840fc0ea14753ab7
 +}
 diff --git a/helper/token.go b/helper/token.go
 new file mode 100644
-index 0000000..a6c4d56f21eb8e89f17e0c970fb82c7d8a581d17
+index 0000000..a6c4d56
 --- /dev/null
 +++ b/helper/token.go
 @@ -0,0 +1,16 @@
@@ -4269,7 +4458,7 @@ index 0000000..a6c4d56f21eb8e89f17e0c970fb82c7d8a581d17
 +}
 diff --git a/helper/token_test.go b/helper/token_test.go
 new file mode 100644
-index 0000000..b0d4c238f4ea7b50a2ae45675c2242fd27e5f0a7
+index 0000000..b0d4c23
 --- /dev/null
 +++ b/helper/token_test.go
 @@ -0,0 +1,23 @@
@@ -4297,14 +4486,13 @@ index 0000000..b0d4c238f4ea7b50a2ae45675c2242fd27e5f0a7
 +	}
 +}
 diff --git a/plugin/main.js b/plugin/main.js
-index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1d6536036 100644
+index 6376662..a1eda4a 100644
 --- a/plugin/main.js
 +++ b/plugin/main.js
-@@ -107,6 +107,43 @@
-   if (rest.indexOf("localhost/") === 0) rest = rest.slice("localhost".length);
+@@ -108,6 +108,43 @@ function normalizeSource(p) {
    try { return decodeURIComponent(rest); } catch (e) { return rest; }
  }
-+
+ 
 +// The helper preserves media-relative HLS timestamps, so TV time-pos and mpv
 +// time-pos share the same zero. Keep the captured start finite and within the
 +// file: FFmpeg cannot seek a NaN, Infinity, or negative offset.
@@ -4341,10 +4529,11 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
 +
 +var NO_RECEIVER_TIMEOUT_MS = 120000;
 +var RECONNECT_GRACE_MS = 30000;
- 
++
  // The "LAN address" preference (Info.json preferenceDefaults.lanIP, edited in
  // Settings → Plugins → AirPlay → Preferences) is handed to the helper as
-@@ -213,6 +250,13 @@
+ // `serve -ip <addr>` when non-empty. The helper validates it (IPv4, assigned
+@@ -213,6 +250,13 @@ if (typeof module !== "undefined") {
      hasURLScheme: hasURLScheme,
      normalizeSource: normalizeSource,
      lanIPOverride: lanIPOverride,
@@ -4358,7 +4547,7 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
      newMirror: newMirror,
      mirrorOnMpvPause: mirrorOnMpvPause,
      mirrorOnMpvSeek: mirrorOnMpvSeek,
-@@ -231,6 +275,12 @@
+@@ -231,6 +275,12 @@ if (typeof iina !== "undefined") {
  
    var state = { phase: "idle", url: null, pct: 0, msg: null };
    var stdoutRest = "";
@@ -4371,7 +4560,7 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
  
    // Bumped every time a new cast starts or the cast is stopped. Async
    // callbacks (bin-dir resolution, helper stdout, exec .then/.catch) capture
-@@ -274,7 +324,41 @@
+@@ -274,7 +324,41 @@ if (typeof iina !== "undefined") {
    // exec callbacks, which must not touch mpv from off-main. They only mutate
    // `state`; the page's next poll lands here (onMessage: safe) and sweeps up.
    function reapMirror() {
@@ -4414,11 +4603,10 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
    }
  
    event.on("mpv.pause.changed", function () {
-@@ -290,6 +374,33 @@
-   event.on("iina.file-loaded", function () {
+@@ -291,6 +375,35 @@ if (typeof iina !== "undefined") {
      if (mirror === null) return;
      stopCast();
-+  });
+   });
 +  event.on("iina.plugin-will-unload", function (identifier) {
 +    if (identifier !== "dev.faruk.iina-airplay") return;
 +    // Plugin teardown can remove the sidebar before another getState poll
@@ -4428,7 +4616,8 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
 +    endMirror();
 +    return stopCast().then(function (stopped) {
 +      if (stopped !== true || activeOutDir !== null) {
-+        throw new Error("AirPlay helper shutdown was not confirmed");
++        throw new Error("AirPlay helper shutdown was not confirmed" +
++          (state.msg ? ": " + state.msg : ""));
 +      }
 +    });
 +  });
@@ -4438,17 +4627,19 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
 +    // restores mute or calls any mpv API.
 +    return stopCast(null, true).then(function (stopped) {
 +      if (stopped !== true || activeOutDir !== null) {
-+        throw new Error("AirPlay helper shutdown was not confirmed after mpv shutdown");
++        throw new Error("AirPlay helper shutdown was not confirmed after mpv shutdown" +
++          (state.msg ? ": " + state.msg : ""));
 +      }
 +    });
 +  });
 +  event.on("iina.window-will-close", function () {
 +    endMirror();
 +    return stopCast();
-   });
++  });
  
    // Resolve our own install dir: @data is <plugins>/.data/<identifier>; the
-@@ -354,7 +465,8 @@
+   // plugin itself lives directly under that <.../plugins> directory. Locate
+@@ -354,7 +467,8 @@ if (typeof iina !== "undefined") {
                    // un-reaped (only the getState poll normally does that); a
                    // restart must not let newMirror() capture that stale
                    // savedMute instead of the user's real pre-cast value.
@@ -4458,7 +4649,7 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
      var src = normalizeSource(mpv.getString("path"));
      if (!src) {
        var nothingMsg = "nothing is playing";
-@@ -402,26 +514,38 @@
+@@ -402,26 +516,38 @@ if (typeof iina !== "undefined") {
      // from a utils.exec promise, and nothing IINA-facing is called from there.
      var lanIP = lanIPOverride(preferences.get("lanIP"));
      var duration = mpv.getNumber("duration") || 0;
@@ -4499,7 +4690,7 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
          "-ffmpeg", ffmpeg,
          "-parent", String(pid),
          "-duration", String(duration),
-@@ -441,20 +565,54 @@
+@@ -441,20 +567,54 @@ if (typeof iina !== "undefined") {
          stdoutRest = parsed.rest;
          for (var i = 0; i < parsed.events.length; i++) {
            var ev = parsed.events[i];
@@ -4559,7 +4750,7 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
          state = { phase: "error", url: null, pct: 0, msg: String(e) };
        });
      });
-@@ -466,14 +624,60 @@
+@@ -466,14 +626,60 @@ if (typeof iina !== "undefined") {
      return mpv.getNumber("pid");
    }
  
@@ -4569,8 +4760,6 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
 -    resolveBinDir(function (binDir, resolveErr) {
 -      if (resolveErr) { console.log("[stopCast] " + resolveErr); return; }
 -      utils.exec(binDir + "/airplay-helper", ["stop", "-out", utils.resolvePath("@tmp/hls")]);
--    });
--    state = { phase: "idle", url: null, pct: 0, msg: null };
 +  function stopCast(reason, playerUnavailable) {
 +    clearNoReceiverTimer();
 +    receiverConnected = false;
@@ -4595,8 +4784,8 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
 +    state = { phase: "stopping", url: prior.url, pct: prior.pct || 0, msg: null };
 +    var pending;
 +    try {
-+      pending = utils.exec(helper, ["stop", "-out", outDir,
-+        "-start-deadline", String(startDeadline)]);
++		pending = utils.execWithTimeout(helper, ["stop", "-out", outDir,
++			"-start-deadline", String(startDeadline)], 36);
 +    } catch (e) {
 +      pending = Promise.reject(e);
 +    }
@@ -4622,13 +4811,14 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
 +      return false;
 +    }).finally(function () {
 +      if (stopInFlight && stopInFlight.promise === promise) stopInFlight = null;
-+    });
+     });
+-    state = { phase: "idle", url: null, pct: 0, msg: null };
 +    stopInFlight = { outDir: outDir, promise: promise };
 +    return promise;
    }
  
    // Info.json's sidebarTab makes IINA show an "AirPlay" tab in the sidebar's
-@@ -511,6 +715,7 @@
+@@ -511,6 +717,7 @@ if (typeof iina !== "undefined") {
      sidebar.onMessage("tvState", function (tv) {
        reapMirror(); // a helper-initiated teardown may have left a stale mirror
                      // un-reaped; don't mpv.set against a dead stream.
@@ -4636,7 +4826,7 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
        if (mirror === null || !tv) return;
        var r = mirrorOnTvState(mirror, tv, mpv.getNumber("time-pos") || 0,
                                !!mpv.getFlag("pause"), Date.now());
-@@ -519,6 +724,9 @@
+@@ -519,6 +726,9 @@ if (typeof iina !== "undefined") {
        if (r.setMpvPaused !== null) mpv.set("pause", r.setMpvPaused);
        if (r.setMpvPos !== null) mpv.set("time-pos", r.setMpvPos);
      });
@@ -4647,7 +4837,7 @@ index 6376662e3e82d88bf13bbe984b7e30ec637ff11b..f86da3b553b2f3a07bbca6d35f5710f1
    }
    // Force on window-loaded: nothing can be casting before the window exists,
 diff --git a/plugin/sidebar.html b/plugin/sidebar.html
-index 7a60f2a1b531edb14ae2b85b5d27237238fdca7c..e679fb5dabf825421ceb8d8042b87f8046aeb215 100644
+index 7a60f2a..e679fb5 100644
 --- a/plugin/sidebar.html
 +++ b/plugin/sidebar.html
 @@ -150,6 +150,8 @@
@@ -4764,10 +4954,10 @@ index 7a60f2a1b531edb14ae2b85b5d27237238fdca7c..e679fb5dabf825421ceb8d8042b87f80
 +  schedulePoll();
  </script>
 diff --git a/plugin/tests/main.test.mjs b/plugin/tests/main.test.mjs
-index a7943ae8d6c137d32928499b5310201b21529875..0b2d63420683c305286b630e018a083cc6b3e397 100644
+index a7943ae..0b2d634 100644
 --- a/plugin/tests/main.test.mjs
 +++ b/plugin/tests/main.test.mjs
-@@ -2,7 +2,12 @@
+@@ -2,7 +2,12 @@ import { test } from "node:test";
  import assert from "node:assert/strict";
  import { createRequire } from "node:module";
  const require = createRequire(import.meta.url);
@@ -4781,7 +4971,7 @@ index a7943ae8d6c137d32928499b5310201b21529875..0b2d63420683c305286b630e018a083c
  
  const mpvTracks = [
    { type: "video", id: 1, selected: true, codec: "hevc", "ff-index": 0 },
-@@ -154,6 +159,45 @@
+@@ -154,6 +159,45 @@ test("normalizeSource does not throw on a malformed percent-escape", () => {
    assert.equal(normalizeSource("file:///bad%ZZ.mkv"), "/bad%ZZ.mkv");
  });
  
@@ -4828,15 +5018,13 @@ index a7943ae8d6c137d32928499b5310201b21529875..0b2d63420683c305286b630e018a083c
    assert.equal(isValidPid(1234), true);
    assert.equal(isValidPid(0), false);
 diff --git a/plugin/tests/mirror.test.mjs b/plugin/tests/mirror.test.mjs
-index f3617db6ec94d0925cd27fb4dca72000b918070c..bccec3182ed123c22c12ecb24025ae0dc3839ebe 100644
+index f3617db..bccec31 100644
 --- a/plugin/tests/mirror.test.mjs
 +++ b/plugin/tests/mirror.test.mjs
-@@ -56,6 +56,17 @@
-   const m = mirrorOnMpvSeek(newMirror(0, false, false), 300, 1000);
-   assert.equal(m.seq, 1);
+@@ -58,6 +58,17 @@ test("a user seek bumps seq and sets seekTo with its own seq", () => {
    assert.deepEqual(m.seekTo, { seq: 1, pos: 300 });
-+});
-+
+ });
+ 
 +test("deep-start HLS uses source-relative time for TV-to-mpv and mpv-to-TV seeks", () => {
 +  // FFmpeg's -copyts HLS timeline remains in media seconds after input seek.
 +  // The cast begins at 303.25; a TV remote seek to 318.5 maps unchanged to
@@ -4846,24 +5034,28 @@ index f3617db6ec94d0925cd27fb4dca72000b918070c..bccec3182ed123c22c12ecb24025ae0d
 +  assert.equal(fromTV.setMpvPos, 318.5);
 +  const fromMpv = mirrorOnMpvSeek(started, 327.75, 2000);
 +  assert.deepEqual(fromMpv.seekTo, { seq: 1, pos: 327.75 });
- });
- 
++});
++
  test("a seek echoing our own drift correction is swallowed", () => {
+   const m0 = { ...newMirror(0, false, false), lastSetPos: { pos: 100, at: 1000 } };
+   const m = mirrorOnMpvSeek(m0, 100.5, 1000 + ECHO_WINDOW_MS - 1);
 diff --git a/plugin/tests/runtime.test.mjs b/plugin/tests/runtime.test.mjs
-index 2686f2898564d0245b71ec0c313e1ee732d2b127..aa1d1cebbaacd631a669dcef63b3177deb6ea511 100644
+index 2686f28..fc7b39d 100644
 --- a/plugin/tests/runtime.test.mjs
 +++ b/plugin/tests/runtime.test.mjs
-@@ -20,6 +20,9 @@
+@@ -20,6 +20,11 @@ function loadPlugin(opts = {}) {
    const sets = [];           // [name, value] pushed by mpv.set
    const events = {};         // event name -> callback registered via event.on
    const stdouts = [];        // per-serve stdout callbacks, for scripting helper events
 +  const deferredServes = [];
 +  const deferredStops = [];
 +  const deferredBinDirLookups = [];
++  const stopTimeouts = [];
++  let timeoutStopsRemaining = opts.timeoutStopCount || 0;
    let menuCallback = null;
    let loadedFile = null;
    let loads = 0;
-@@ -33,7 +36,7 @@
+@@ -33,7 +38,7 @@ function loadPlugin(opts = {}) {
      core: { osd: (m) => osd.push(m), pause: () => { flags.pause = true; } },
      mpv: {
        getString: (k) => (k === "path" ? (opts.path !== undefined ? opts.path : "/movies/a.mkv") : null),
@@ -4872,7 +5064,7 @@ index 2686f2898564d0245b71ec0c313e1ee732d2b127..aa1d1cebbaacd631a669dcef63b3177d
                         : k === "time-pos" ? (opts.timePos !== undefined ? opts.timePos : 42) : 0),
        getNative: () => trackList,
        getFlag: (k) => !!flags[k],
-@@ -61,12 +64,23 @@
+@@ -61,12 +66,32 @@ function loadPlugin(opts = {}) {
          if (typeof onStdout === "function") stdouts.push(onStdout);
          // opts.binDirLookup scripts the /bin/sh lookup that resolveBinDir runs
          // when no bin dir is cached; everything else hangs, as before.
@@ -4890,6 +5082,15 @@ index 2686f2898564d0245b71ec0c313e1ee732d2b127..aa1d1cebbaacd631a669dcef63b3177d
 +        if (args[0] === "stop") return Promise.resolve({ status: 0 });
          return new Promise(() => {});
        },
++      execWithTimeout: function (bin, args, timeoutSeconds) {
++        stopTimeouts.push(timeoutSeconds);
++        const result = this.exec(bin, args);
++        if (args[0] === "stop" && timeoutStopsRemaining > 0) {
++          timeoutStopsRemaining--;
++          return Promise.reject(new Error("Process timed out after " + timeoutSeconds + " seconds"));
++        }
++        return result;
++      },
      },
      file: {
 -      read: () => (opts.binDirLookup ? "" : "/plugins/dev.faruk.iina-airplay/bin"),
@@ -4897,16 +5098,18 @@ index 2686f2898564d0245b71ec0c313e1ee732d2b127..aa1d1cebbaacd631a669dcef63b3177d
        write: () => {},
      },
      // Issue #33: preferences.get is synchronous in the JSContext and returns
-@@ -85,7 +99,7 @@
+@@ -84,8 +109,9 @@ function loadPlugin(opts = {}) {
+ 
    return {
      execs, posted, osd,
++    stopTimeouts: () => stopTimeouts,
      flags, sets,
 -    fire: (name) => { assert.ok(events[name], `no event handler for "${name}"`); events[name](); },
 +    fire: (name, data) => { assert.ok(events[name], `no event handler for "${name}"`); return events[name](data); },
      helperSays: (obj) => { assert.ok(stdouts.length, "no serve running"); stdouts.at(-1)(JSON.stringify(obj) + "\n"); },
      clickMenu: () => menuCallback(),
      send: (name, data) => {
-@@ -93,6 +107,12 @@
+@@ -93,6 +119,12 @@ function loadPlugin(opts = {}) {
        return messages[name](data);
      },
      state: () => posted.filter(([n]) => n === "state").at(-1)?.[1],
@@ -4919,7 +5122,7 @@ index 2686f2898564d0245b71ec0c313e1ee732d2b127..aa1d1cebbaacd631a669dcef63b3177d
      loadedFile: () => loadedFile,
      loads: () => loads,
      shown: () => shown,
-@@ -146,18 +166,291 @@
+@@ -146,18 +178,311 @@ test("the menu item shows the already-loaded page instead of reloading it", () =
    assert.equal(serves(p).length, 1);
  });
  
@@ -5023,6 +5226,26 @@ index 2686f2898564d0245b71ec0c313e1ee732d2b127..aa1d1cebbaacd631a669dcef63b3177d
 +  assert.equal(serves(p).length, 1, "failed unload stop keeps old cast ownership active");
 +  p.send("stop", {});
 +  assert.equal(stops(p).at(-1).args[stops(p).at(-1).args.indexOf("-out") + 1], outDir);
++});
++
++test("timed out stop retains cast identity and allows a bounded retry", async () => {
++  const p = loadPlugin({ timeoutStopCount: 1 });
++  p.clickMenu();
++  const outDir = serves(p)[0].args[serves(p)[0].args.indexOf("-out") + 1];
++  const unload = p.fire("iina.plugin-will-unload", "dev.faruk.iina-airplay");
++  assert.deepEqual(p.stopTimeouts(), [36]);
++  await assert.rejects(unload, /shutdown was not confirmed/);
++  p.send("getState", {});
++  assert.equal(p.state().phase, "stop-error");
++
++  p.send("stop", {});
++  await p.flush();
++  assert.equal(stops(p).length, 2, "retry launches a fresh stop instead of reusing a settled Promise");
++  assert.deepEqual(p.stopTimeouts(), [36, 36]);
++  assert.equal(stops(p)[1].args[stops(p)[1].args.indexOf("-out") + 1], outDir,
++    "retry retains the exact cast identity until shutdown is confirmed");
++  p.send("getState", {});
++  assert.equal(p.state().phase, "idle");
 +});
 +
 +test("mpv shutdown stops only the retained helper and never restores mute through a dead player", async () => {
@@ -5212,7 +5435,7 @@ index 2686f2898564d0245b71ec0c313e1ee732d2b127..aa1d1cebbaacd631a669dcef63b3177d
  });
  
  test("start is a no-op while a cast is already running", () => {
-@@ -286,28 +579,34 @@
+@@ -286,28 +611,34 @@ test("starting a cast mutes mpv and does NOT pause it", () => {
    assert.equal(p.flags.pause, false, "the muted mirror replaced core.pause()");
  });
  
@@ -5250,7 +5473,7 @@ index 2686f2898564d0245b71ec0c313e1ee732d2b127..aa1d1cebbaacd631a669dcef63b3177d
    assert.equal(p.flags.mute, true, "the user's own mute must survive the cast");
  });
  
-@@ -343,21 +642,24 @@
+@@ -343,21 +674,24 @@ test("drift beyond tolerance corrects mpv's clock to the TV's", () => {
    assert.deepEqual(p.sets.filter(([k]) => k === "time-pos").at(-1), ["time-pos", 50]);
  });
  
@@ -5260,10 +5483,10 @@ index 2686f2898564d0245b71ec0c313e1ee732d2b127..aa1d1cebbaacd631a669dcef63b3177d
    p.clickMenu();
    p.send("tvState", { appliedSeq: 0, pos: 120, paused: false, wireless: true, ended: true });
    assert.equal(stops(p).length, 1);
+-  assert.equal(p.flags.mute, false);
 +  await p.flush();
-+  p.send("getState", {});
-   assert.equal(p.flags.mute, false);
--  p.send("getState", {});
+   p.send("getState", {});
++  assert.equal(p.flags.mute, false);
    assert.equal(p.state().phase, "idle");
  });
  
@@ -5278,7 +5501,7 @@ index 2686f2898564d0245b71ec0c313e1ee732d2b127..aa1d1cebbaacd631a669dcef63b3177d
    assert.equal(p.flags.mute, false);
  });
  
-@@ -383,31 +685,40 @@
+@@ -383,31 +717,40 @@ test("a pre-handshake tvState must not un-pause a paused cast", () => {
  });
  
  test("the poll restores mute after the helper dies on its own", () => {
@@ -5292,13 +5515,11 @@ index 2686f2898564d0245b71ec0c313e1ee732d2b127..aa1d1cebbaacd631a669dcef63b3177d
    p.send("getState", {});              // the next poll runs on-message: safe to restore
    assert.equal(p.flags.mute, false);
    assert.equal(p.state().sync, null);
--});
--
++  });
+ });
+ 
 -test("tvState reaps a stale mirror after the helper dies, before touching mpv", () => {
 -  const p = loadPlugin({ mute: false });
-+  });
-+});
-+
 +test("tvState reaps a stale mirror after the helper dies, before touching mpv", async () => {
 +  const p = loadPlugin({ mute: false, deferServes: true });
    p.clickMenu();
@@ -5318,17 +5539,16 @@ index 2686f2898564d0245b71ec0c313e1ee732d2b127..aa1d1cebbaacd631a669dcef63b3177d
    p.clickMenu();
    p.helperSays({ event: "stopped" });   // teardown lands off-main: only state mutates
 -  p.send("start", {});                   // restart before any getState poll ran
--  p.send("stop", {});
 +  p.resolveServe(0, 0);
 +  await p.flush();
 +  p.send("start", {});                   // a main-thread poll reaps, then restart is safe
-+  p.send("stop", {});
+   p.send("stop", {});
 +  await p.flush();
 +  p.send("getState", {});
    assert.equal(p.flags.mute, false, "savedMute must come from the user's real pre-cast value");
  });
  
-@@ -431,10 +742,12 @@
+@@ -431,10 +774,12 @@ test("state reports the selected subtitle track", () => {
    assert.equal(p.state().subs.label, "Subtitles: eng");
  });
  
@@ -5343,10 +5563,10 @@ index 2686f2898564d0245b71ec0c313e1ee732d2b127..aa1d1cebbaacd631a669dcef63b3177d
    assert.equal(s.phase, "idle");
    assert.equal(s.subs.label, "No subtitles");
 diff --git a/plugin/tests/sidebar.test.mjs b/plugin/tests/sidebar.test.mjs
-index 9c87da2280464ac1d86230dc28f2ea4be1278306..a974f1e8c83e3624cf51e484ddaa21946bcbbd11 100644
+index 9c87da2..a974f1e 100644
 --- a/plugin/tests/sidebar.test.mjs
 +++ b/plugin/tests/sidebar.test.mjs
-@@ -18,7 +18,7 @@
+@@ -18,7 +18,7 @@ function loadPage() {
    const listeners = {};
    const video = Object.assign(el("v"), {
      src: "", paused: true, muted: true, currentTime: 0, error: null,
@@ -5355,7 +5575,7 @@ index 9c87da2280464ac1d86230dc28f2ea4be1278306..a974f1e8c83e3624cf51e484ddaa2194
      addEventListener: (name, cb) => { listeners[name] = cb; },
      play() { this.paused = false; return Promise.resolve(); },
      pause() { this.paused = true; },
-@@ -27,17 +27,20 @@
+@@ -27,17 +27,20 @@ function loadPage() {
    });
    const posted = [];
    const handlers = {};
@@ -5378,12 +5598,10 @@ index 9c87da2280464ac1d86230dc28f2ea4be1278306..a974f1e8c83e3624cf51e484ddaa2194
      state: (s) => handlers.state(Object.assign(
        { pct: 0, msg: null, duration: 100, sync: null, subs: { label: "", warn: false } }, s)),
      fire: (name, ev) => listeners[name](ev || {}),
-@@ -61,6 +64,19 @@
-   assert.equal(p.els.headline.textContent, "Couldn't cast");
-   assert.match(p.els.sub.textContent, /media error 3/);
+@@ -63,6 +66,19 @@ test("a page-side media error shows Couldn't cast with Try again", () => {
    assert.equal(p.els.primary.textContent, "Try again");
-+});
-+
+ });
+ 
 +test("initial deep seek waits for source-relative time to enter the HLS seekable range", () => {
 +  const p = loadPage();
 +  p.video.seekable = { length: 1, start: () => 299.9, end: () => 302.0 };
@@ -5395,10 +5613,12 @@ index 9c87da2280464ac1d86230dc28f2ea4be1278306..a974f1e8c83e3624cf51e484ddaa2194
 +  p.video.seekable = { length: 1, start: () => 299.9, end: () => 310.0 };
 +  p.state({ phase: "ready", url: URL_, sync: { seq: 0, paused: false, seekTo: null, startPos: 303.25 } });
 +  assert.equal(p.video.currentTime, 303.25, "seek to the media-relative cast start once packaged");
- });
- 
++});
++
  // The helper is still serving: Try again reloads the stream in the page. It
-@@ -89,3 +105,20 @@
+ // must not ask main.js to start (a no-op while a cast is live) nor restart
+ // the pipeline (a repackage can't fix a page-side load failure).
+@@ -89,3 +105,20 @@ test("Try again after a pipeline error starts a new cast", () => {
    p.click("primary");
    assert.deepEqual(p.posted.map(([n]) => n).filter((n) => n === "start"), ["start"]);
  });

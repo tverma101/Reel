@@ -847,7 +847,12 @@
 "settings.subBorderStyle.label" = "Border Style";
 "settings.subBold.label" = "Bold";
 "settings.subItalic.label" = "Italic";
-"settings.subLang.desc" = "This option will be stored as ISO 639-2 language code and will work for both mpv and opensubtitles.";
+"settings.subLang.desc" = "The subtitle languages to prefer, in order. When automatic preferred-track selection is on, Reel uses this list to choose a primary subtitle. OpenSubtitles and SubDL also limit searches to these languages. Leave empty to prefer English. Accepts a language code (en or eng), a regional tag (pt-BR), or a language name (English).";
+"settings.audioLanguage.desc" = "The audio languages to prefer, in order. When automatic preferred-track selection is on, Reel selects the best available match when media opens. Leave empty to prefer English. Accepts a language code (en or eng), a regional tag (pt-BR), or a language name (English).";
+"settings.autoSelectPreferredTrackLanguages.label" = "Automatically select preferred audio and subtitles";
+"settings.autoSelectPreferredTrackLanguages.desc" = "When media opens, Reel prefers the languages selected in Audio and Subtitles settings. English is used when either list is empty. This selects one primary subtitle track.";
+"settings.showSecondSubtitleTrack.label" = "Automatically select a second subtitle track";
+"settings.showSecondSubtitleTrack.desc" = "Off by default, Reel shows one primary subtitle at the bottom. Turn this on to automatically select a second subtitle track when one is available. You can still select a second track manually.";
 "settings.subOverrideLevel.items.0" = "yes";
 "settings.subOverrideLevel.items.0.desc" = "Apply all the style settings in this section.";
 "settings.subOverrideLevel.items.1" = "force";

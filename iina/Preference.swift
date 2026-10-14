@@ -198,6 +198,7 @@ struct Preference {
     static let audioDriverEnableAVFoundation = Key("audioDriverEnableAVFoundation")
     static let audioThreads = Key("audioThreads")
     static let audioLanguage = Key("audioLanguage")
+    static let autoSelectPreferredTrackLanguages = Key("autoSelectPreferredTrackLanguages")
     static let maxVolume = Key("maxVolume")
 
     static let spdifAC3 = Key("spdifAC3")
@@ -247,6 +248,7 @@ struct Preference {
     static let subMarginY = Key("subMarginY")
     static let subPos = Key("subPos")
     static let subLang = Key("subLang")
+    static let showSecondSubtitleTrack = Key("showSecondSubtitleTrack")
     static let legacyOnlineSubSource = Key("onlineSubSource")
     static let onlineSubProvider = Key("onlineSubProvider")
     static let displayInLetterBox = Key("displayInLetterBox")
@@ -1168,7 +1170,8 @@ struct Preference {
     .toneMappingParamOverride: Float(1), // Most common default for tone mapping algorithms.
     .audioDriverEnableAVFoundation: false,
     .audioThreads: 0,
-    .audioLanguage: "",
+    .audioLanguage: "en",
+    .autoSelectPreferredTrackLanguages: true,
     .maxVolume: 100,
     .spdifAC3: false,
     .spdifDTS: false,
@@ -1208,7 +1211,8 @@ struct Preference {
     .subMarginX: Float(25),
     .subMarginY: Float(22),
     .subPos: Float(100),
-    .subLang: "",
+    .subLang: "en",
+    .showSecondSubtitleTrack: false,
     .legacyOnlineSubSource: 1, /* openSub */
     .onlineSubProvider: OnlineSubtitle.Providers.openSub.id,
     .displayInLetterBox: true,
@@ -1485,6 +1489,7 @@ struct Preference {
            .followGlobalSeekTypeWhenAdjustSlider,
            .forceDedicatedGPU,
            .fullScreenWhenOpen,
+           .groupSimultaneousOpensInPlaylist,
            .ignoreAssStyles,
            .iinaEnablePluginSystem,
            .keepOpenOnFileEnd,
@@ -1616,7 +1621,10 @@ struct Preference {
       case .screenshotFormat:
         defaultAsString = String(describing: ScreenshotFormat.defaultValue)
         valueAsString = String(describing: Preference.enum(for: key) as ScreenshotFormat)
-      case .horizontalScrollAction, .verticalScrollAction:
+      case .horizontalScrollAction:
+        defaultAsString = String(describing: ScrollAction.seek)
+        valueAsString = String(describing: Preference.enum(for: key) as ScrollAction)
+      case .verticalScrollAction:
         defaultAsString = String(describing: ScrollAction.defaultValue)
         valueAsString = String(describing: Preference.enum(for: key) as ScrollAction)
       case .useExactSeek:

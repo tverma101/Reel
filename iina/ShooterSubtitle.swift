@@ -28,6 +28,13 @@ class Shooter {
       super.init(index: index)
     }
 
+    /// Name the result in the chooser. `desc` is the description the provider returns for the
+    /// release. It is deliberately not `releaseName`: it is provider prose rather than the file the
+    /// subtitle was authored for, so it must not influence matching or preselect a result.
+    override func getDescription() -> (name: String, left: String, right: String) {
+      (desc, "shooter.cn", "")
+    }
+
     override func download() -> Promise<[URL]> {
       download(cancellation: SubtitleAudioMatcher.Cancellation())
     }
@@ -111,7 +118,7 @@ class Shooter {
     private let chunkSize: Int = 4096
     private let apiPath = "https://www.shooter.cn/api/subapi.php"
 
-    private var language: String?
+    private let subChooseViewController = SubChooseViewController()
 
     func fetch(from url: URL, withProviderID id: String, playerCore player: PlayerCore) -> Promise<[Subtitle]> {
       fetch(from: url, withProviderID: id, playerCore: player,
@@ -121,7 +128,26 @@ class Shooter {
     func fetch(from url: URL, withProviderID id: String, playerCore player: PlayerCore,
                cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<[Subtitle]> {
       guard !cancellation.isCancelled else { return Promise(error: OnlineSubtitle.CommonError.dismissed) }
-      return hash(url, cancellation: cancellation).then { self.request($0, cancellation: cancellation) }
+      // Keep the string the search is based on so the results can be matched back against it.
+      let mediaName = url.deletingPathExtension().lastPathComponent
+      return hash(url, cancellation: cancellation)
+        .then { self.request($0, cancellation: cancellation) }
+        .then { subs in
+          guard !cancellation.isCancelled else { throw OnlineSubtitle.CommonError.dismissed }
+          return self.showSubSelectWindow(with: subs, mediaName: mediaName, expectedURL: url,
+                                          player: player)
+        }
+    }
+
+    /// Let the user choose. A search returns up to thirty files, and without this every one of them
+    /// was downloaded and added as a subtitle track, spending the provider's rate limit and the
+    /// user's bandwidth on results they never asked for. Every other built-in provider asks first.
+    func showSubSelectWindow(with subs: [Subtitle], mediaName: String, expectedURL: URL,
+                             player: PlayerCore) -> Promise<[Subtitle]> {
+      // `self` is assigned as the chooser's context to keep this fetcher alive for as long as the
+      // chooser is on screen.
+      OnlineSubtitle.resolveSelection(subs, mediaName: mediaName, expectedURL: expectedURL, player: player,
+                                      chooser: subChooseViewController, context: self)
     }
 
     private func hash(_ url: URL,

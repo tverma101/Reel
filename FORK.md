@@ -43,6 +43,26 @@ project; Reel ships under its own name, bundle identifier, and icon.
   title *and* carries the same year/episode anchor. The release name is treated
   as untrusted input throughout; anything short of a full match only preselects
   in the chooser. Provider ordering is never modified.
+- **Preferred subtitle language** (`SubtitleLanguagePreference` and
+  `SubtitleSelectionPlan` in `iina/OnlineSubtitle.swift`): the existing
+  *Preferred language* setting now also decides *which* search result wins. Every
+  spelling of a language — a two- or three-letter code, a language name, a
+  catalog code with a region such as `pt-br`, or assrt.net's Chinese description
+  — is reduced to one canonical subtag, so the language asked for is no longer
+  dropped when it is stored in a different form from the one a provider
+  reports. Results in a preferred language are preselected, and automatic
+  selection loads one of them instead of giving up when several exact matches
+  differ only by language. English is the default when the setting is empty,
+  which is what both providers already did implicitly.
+- **Chooser for every built-in provider** (`iina/ShooterSubtitle.swift`):
+  shooter.cn results now open the same chooser as the other providers. Its
+  search returns up to thirty files, and previously every one of them was
+  downloaded and added as a subtitle track without being asked for.
+- **OpenSubtitles language filtering** (`iina/OpenSubSubtitle.swift`): the
+  preferred languages are matched to the provider's own list by canonical
+  language, and the provider's spelling is what is sent. Comparing the setting
+  to that list as literal strings discarded every preference stored as a
+  three-letter code or a name, and silently searched for English instead.
 - **OpenSubtitles audio verification** (`iina/SubtitleAudioMatcher.swift`): an
   opt-in check that downloads at most three candidates, parses their cues, and
   compares them against a locally decoded audio excerpt using pinned,

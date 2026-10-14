@@ -92,6 +92,15 @@ caption setup, see [Subtitle setup](docs/subtitle-setup.md).
 For installing this local fork and preventing stale app copies in macOS launch choices,
 see [Local macOS installation](docs/local-installation.md).
 
+For the bundled command-line tool, including silent headless playback, see
+[Command-line playback](docs/command-line.md).
+
+For plugin subprocess output and timeout behavior, see
+[Plugin subprocesses](docs/plugin-processes.md).
+
+For log retention and where to find complete on-disk diagnostic logs, see
+[Logging](docs/logging.md).
+
 ## Audio output
 
 Use **AirPlay Audio** in the on-screen controller to send only Reel's audio to an AirPlay

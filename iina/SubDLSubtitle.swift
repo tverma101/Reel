@@ -53,6 +53,10 @@ class SubDL {
 
     override var releaseName: String? { providerReleaseName ?? fileName }
 
+    /// SubDL labels each file with a language name (`english`) or a code, depending on the endpoint
+    /// version; both are reduced to a language subtag before comparison.
+    override var languageHint: String? { language }
+
     /// SubDL defines 0.8+ as a confident release match. The shared scorer still requires an exact
     /// title and year/episode anchor before this candidate can be auto-selected.
     override var canAutomaticallySelect: Bool { SubDLSearchResultParser.isConfidentMatch(matchScore) }
@@ -142,16 +146,10 @@ class SubDL {
       let name = url.isFileURL ? url.lastPathComponent : player.getMediaTitle()
       var query = [URLQueryItem(name: "filename", value: name),
                    URLQueryItem(name: "subs_per_page", value: String(SubDLSearchResultParser.maximumResults))]
-      let languages = (Preference.string(for: .subLang) ?? "eng")
-        .split(separator: ",")
-        .compactMap { raw -> String? in
-          let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-          guard !value.isEmpty else { return nil }
-          let canonical = CFLocaleCreateCanonicalLanguageIdentifierFromString(kCFAllocatorDefault,
-                                                                             value as CFString)?.rawValue as? String
-          return canonical?.split(separator: "-").first.map(String.init)?.lowercased()
-        }
-      query.append(URLQueryItem(name: "languages", value: languages.isEmpty ? "en" : languages.joined(separator: ",")))
+      // SubDL takes base-language codes (`en,fa,ar`); regional preferences intentionally use
+      // that language-wide fallback because the API does not document regional codes.
+      let languages = SubtitleLanguagePreference.preferred(from: Preference.string(for: .subLang))
+      query.append(URLQueryItem(name: "languages", value: languages.joined(separator: ",")))
       components.queryItems = query
       var request = URLRequest(url: components.url!)
       request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")

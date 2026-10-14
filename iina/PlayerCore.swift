@@ -159,6 +159,10 @@ class PlayerCore: NSObject {
                                         timeout: TimeInterval = 45,
                                         completion: @escaping (Result<PluginUnloadPermit, Error>) -> Void) {
     let begin = {
+      guard !AppDelegate.shared.isApplicationTerminating else {
+        completion(.failure(PluginOperationCancellationError.applicationTerminating))
+        return
+      }
       guard !pluginUnloadOperations.contains(identifier) else {
         completion(.failure(PluginUnloadError.operationInProgress))
         return
@@ -181,7 +185,8 @@ class PlayerCore: NSObject {
           }
           completion(.success(permit))
         case .failure(let error):
-          finishPluginUnloadOperation(identifier)
+          finishPluginUnloadOperation(identifier,
+                                      reloadDeferredContexts: !AppDelegate.shared.isApplicationTerminating)
           completion(.failure(error))
         }
       }
@@ -193,6 +198,9 @@ class PlayerCore: NSObject {
         guard !didFinish else { return }
         didFinish = true
         timeoutWork.cancel()
+        // The timeout block retains finishOperation, which captures this local.
+        // Clear the item here so a successful unload does not leave that cycle alive.
+        timeoutWork = nil
         runNextBatch = nil
         finishOnce.finish(result)
       }
@@ -204,6 +212,11 @@ class PlayerCore: NSObject {
       var coveredContexts = Set<ObjectIdentifier>()
       runNextBatch = {
         guard !didFinish else { return }
+        guard !AppDelegate.shared.isApplicationTerminating else {
+          finishOperation(.failure(PluginOperationCancellationError.applicationTerminating))
+          runNextBatch = nil
+          return
+        }
         // mpv-initiated shutdown can leave a PluginInstance retained in pluginMap. Retire it
         // without JS or mpv calls. A shutting-down core cannot acknowledge a stop safely, so do
         // not wait for it to become unreachable and accidentally treat that as proof.
@@ -382,6 +395,20 @@ class PlayerCore: NSObject {
    */
   @Atomic var backgroundQueueTicket = 0
 
+  /// Playlist structure changes invalidate the cached row order. FILE_LOADED usually only moves
+  /// mpv's current/playing markers, so it can update those rows without querying every entry again.
+  @Atomic private var playlistChangeGeneration: UInt64 = 0
+  private let playlistSnapshotStateLock = Lock()
+  private var playlistSnapshotReadRevision: UInt64 = 0
+  private var playlistSnapshotGeneration: UInt64 = UInt64.max
+  private var playlistMutationsInProgress = 0
+  private var playlistLoadTransitionCounter: UInt64 = 0
+  private var playlistLoadTransitionTokens = Set<UInt64>()
+  private var playlistCurrentIndex = -1
+  private var playlistPlayingIndex = -1
+  private let playlistRefreshScheduleLock = Lock()
+  private var playlistRefreshScheduleGeneration: UInt64 = 0
+
   enum TicketExpiredError: Error {
     case ticketExpired
   }
@@ -446,6 +473,10 @@ class PlayerCore: NSObject {
   /// `isSearchingOnlineSubtitle` and dismiss the OSD, instead of the flag being left set — which
   /// would make every later search return early and silently disable the feature.
   func cancelOnlineSubtitleSearchIfNeeded() {
+    guard Thread.isMainThread else {
+      DispatchQueue.main.async { [weak self] in self?.cancelOnlineSubtitleSearchIfNeeded() }
+      return
+    }
     let hadSearch = onlineSubtitleSearchID != nil
     onlineSubtitleSearchID = nil
     isSearchingOnlineSubtitle = false
@@ -799,7 +830,8 @@ class PlayerCore: NSObject {
     info.isNetworkResource = isNetwork
     info.audioTracks = []
     info.chapters = []
-    info.playlist = []
+    info.resetPlaylistSnapshot(activeFilePath: path)
+    advancePlaylistChangeGeneration()
     info.isShuffled = false
     info.subTracks = []
     info.thumbnails = []
@@ -809,7 +841,7 @@ class PlayerCore: NSObject {
     info.videoPosition = nil
     info.videoTracks = []
     info.videoWidth = nil
-    if isNetwork {
+    if isNetwork && !AppDelegate.shared.isHeadlessCommandLineMode {
       AppDelegate.shared.openURLWindow.showLoadingScreen(playerCore: self)
     }
 
@@ -1868,12 +1900,12 @@ class PlayerCore: NSObject {
   }
 
   func addToPlaylist(paths: [String], at index: Int = -1) {
-    getPlaylist()
     info.isShuffled = false
+    let previousCount = max(0, mpv.getIntIfAvailable(MPVProperty.playlistCount)
+      ?? info.$playlist.withLock { $0.count })
     for path in paths {
       mpv.playlistAppend(path)
     }
-    let previousCount = info.$playlist.withLock { $0.count }
     if index <= previousCount && index >= 0 {
       for i in 0..<paths.count {
         playlistMove(previousCount + i, to: index + i)
@@ -1931,7 +1963,7 @@ class PlayerCore: NSObject {
       mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
     }
     mpv.command(.playlistPlayIndex, args: [String(pos)], level: .verbose)
-    getPlaylist()
+    refreshPlaylistPlaybackStatus()
   }
 
   /// Play the next or the previous entry in the playlist.
@@ -2361,7 +2393,11 @@ class PlayerCore: NSObject {
       Preference.set(url, for: .iinaLastPlayedFilePath)
       // Write to cache directly (rather than calling `refreshCachedVideoProgress`).
       // If user only closed the window but didn't quit the app, this can make sure playlist displays the correct progress.
-      info.setCachedVideoDurationAndProgress(url.path, (duration: info.videoDuration?.second, progress: info.videoPosition?.second))
+      if let path = info.activeCachedFilePath {
+        info.setCachedVideoDurationAndProgress(path,
+                                              (duration: info.videoDuration?.second,
+                                               progress: info.videoPosition?.second))
+      }
     }
     if let position = info.videoPosition?.second {
       Preference.set(position, for: .iinaLastPlayedFilePosition)
@@ -2401,6 +2437,9 @@ class PlayerCore: NSObject {
       DispatchQueue.main.async { [self] in
         log("Running on_before_start_file hook: shuffling playlist")
         mpv.command(.playlistShuffle)
+        // The order changes while mpv is inside its load hook. Invalidate the cached snapshot
+        // now, then let fileLoaded rebuild it once hook-time property reads are safe.
+        advancePlaylistChangeGeneration()
         info.isShuffled = true
         /// will cancel this file load sequence (so `fileLoaded` will not be called), then will start loading item at index 0
         mpv.command(.playlistPlayIndex, args: ["0"])
@@ -2444,10 +2483,17 @@ class PlayerCore: NSObject {
     info.currentURL = path.contains("://") ?
       URL(string: path.addingPercentEncoding(withAllowedCharacters: .urlAllowed) ?? path) :
       URL(fileURLWithPath: path)
+    info.setActiveCachedFile(path)
+    if !info.playlist.contains(where: { $0.filename == path }) {
+      // Direct loadfile commands can replace the playlist without passing through the UI
+      // mutation methods. Force one structural refresh after this item finishes loading.
+      advancePlaylistChangeGeneration()
+    }
     if let url = info.currentURL {
       info.mpvMd5 = Utility.mpvWatchLaterMd5(url, ignorePathInWatchLaterConfig)
     }
     info.isNetworkResource = !info.currentURL!.isFileURL
+    let startedURL = info.currentURL
 
     // set "date last opened" attribute
     if let url = info.currentURL, url.isFileURL {
@@ -2495,7 +2541,7 @@ class PlayerCore: NSObject {
           try checkTicket(currentTicket)
           setTrack(1, forType: .sub)
         }
-        autoSearchOnlineSub()
+        autoSearchOnlineSub(for: startedURL)
       } catch TicketExpiredError.ticketExpired {
         log("Background task stopping due to ticket expiration")
       } catch let err {
@@ -2530,6 +2576,10 @@ class PlayerCore: NSObject {
     guard info.state.active else { return }
     log("File loaded")
 
+    // mpv may apply file-local configuration after the initial CLI properties
+    // were set. Reassert the requested silence before any load path resumes.
+    AppDelegate.shared.applyCommandLineAudioPreference(to: self)
+
     info.state = .loaded
 
     // Showing the OSD refreshes playback timing, which synchronously reads mpv properties.
@@ -2557,6 +2607,7 @@ class PlayerCore: NSObject {
     info.displayHeight = 0
     info.videoDuration = VideoTime(duration)
     if let filename = mpv.getString(MPVProperty.path) {
+      info.setActiveCachedFile(filename)
       info.setCachedVideoDuration(filename, duration)
     }
     info.videoPosition = VideoTime(pos)
@@ -2569,7 +2620,15 @@ class PlayerCore: NSObject {
     }
     // call `trackListChanged` to load tracks and check whether need to switch to music mode
     trackListChanged()
-    getPlaylist()
+    // Work around mpv selecting Apple's Positional Audio Codec when FFmpeg cannot decode it.
+    // Newer iPhones can store a second, conventional audio track alongside the APAC spatial track.
+    if info.aid == 0, info.audioTracks.count >= 2, info.audioTracks[0].codec == "apple_apac" {
+      let fallbackTrack = info.audioTracks[1]
+      log("Audio track 1 uses Apple Positional Audio Codec; switching to audio track \(fallbackTrack.id):\n" +
+          info.audioTracks.map { String(describing: $0) }.joined(separator: "\n"), level: .warning)
+      setTrack(fallbackTrack.id, forType: .audio)
+    }
+    refreshPlaylistPlaybackStatus(forceFullSnapshotIfNeeded: true)
     getChapters()
     // These property notifications can be delivered while an mpv loading hook is still running.
     // Their handlers intentionally avoid synchronous mpv reads during that phase, so resync their
@@ -2712,7 +2771,8 @@ class PlayerCore: NSObject {
   }
 
   func fullscreenChanged() {
-    guard mainWindow.loaded, info.state.loaded else { return }
+    guard !AppDelegate.shared.isHeadlessCommandLineMode,
+          mainWindow.loaded, info.state.loaded else { return }
     let fs = mpv.getFlag(MPVOption.Window.fullscreen)
     if fs != mainWindow.fsState.isFullscreen {
       mainWindow.toggleWindowFullScreen()
@@ -2725,11 +2785,14 @@ class PlayerCore: NSObject {
         currentController.close()
         if AppDelegate.shared.openURLWindow.window?.isVisible == true {
           AppDelegate.shared.openURLWindow.failedToLoadURL()
+        } else if AppDelegate.shared.isHeadlessCommandLineMode {
+          Logger.log("Failed to open media in headless mode", level: .error)
         } else {
           Utility.showAlert("error_open")
         }
       }
       info.currentURL = nil
+      info.setActiveCachedFile(nil)
       info.isNetworkResource = false
     }
     receivedEndFileWhileLoading = false
@@ -2744,6 +2807,7 @@ class PlayerCore: NSObject {
       log("Playback has stopped")
       info.state = .idle
       postNotification(.iinaPlayerStopped)
+      schedulePlaylistSnapshotRefresh()
       if let pendingUrl {
         self.pendingUrl = nil
         log("Processing pending open")
@@ -3009,18 +3073,19 @@ class PlayerCore: NSObject {
     }
   }
 
-  private func autoSearchOnlineSub() {
-    let expectedURL = info.currentURL
-    Thread.sleep(forTimeInterval: 0.5)
-    if Preference.bool(for: .autoSearchOnlineSub) && !info.isNetworkResource &&
-      (info.videoDuration?.second ?? 0.0) >= Preference.double(for: .autoSearchThreshold) * 60 {
-      DispatchQueue.main.async {
-        guard self.info.currentURL == expectedURL, self.info.subTracks.isEmpty,
-              SubDL.apiKey != nil else { return }
-        let item = NSMenuItem()
-        item.representedObject = OnlineSubtitle.Providers.subDL.id
-        self.mainWindow.menuActionHandler.menuFindOnlineSub(item)
-      }
+  private func autoSearchOnlineSub(for expectedURL: URL?) {
+    guard let expectedURL else { return }
+    // Keep the small post-load settling delay without blocking the serial background queue. A
+    // Thread.sleep here accumulated one half-second task per fast playlist transition, retaining
+    // the player and delaying queued stop/shutdown work even when automatic search was disabled.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+      guard let self, self.info.state.active, self.info.currentURL == expectedURL,
+            Preference.bool(for: .autoSearchOnlineSub), !self.info.isNetworkResource,
+            (self.info.videoDuration?.second ?? 0.0) >= Preference.double(for: .autoSearchThreshold) * 60,
+            self.info.subTracks.isEmpty, SubDL.apiKey != nil else { return }
+      let item = NSMenuItem()
+      item.representedObject = OnlineSubtitle.Providers.subDL.id
+      self.mainWindow.menuActionHandler.menuFindOnlineSub(item)
     }
   }
   /**
@@ -3049,7 +3114,8 @@ class PlayerCore: NSObject {
     guard mainWindow.loaded else { return }
 
     let fs = mpv.getFlag(MPVOption.Window.fullscreen)
-    if fs != mainWindow.fsState.isFullscreen {
+    if !AppDelegate.shared.isHeadlessCommandLineMode,
+       fs != mainWindow.fsState.isFullscreen {
       DispatchQueue.main.async {
         self.mainWindow.toggleWindowFullScreen()
       }
@@ -3147,8 +3213,10 @@ class PlayerCore: NSObject {
     currentController.handleVideoSizeChange()
     if currentController.pendingShow {
       currentController.pendingShow = false
-      currentController.showWindow(self)
-      AppDelegate.shared.openURLWindow.close()
+      if !AppDelegate.shared.isHeadlessCommandLineMode {
+        currentController.showWindow(self)
+        AppDelegate.shared.openURLWindow.close()
+      }
     }
     if info.state == .loaded {
       // If the media was loaded manually then playback was paused to avoid audio starting to play
@@ -3163,7 +3231,8 @@ class PlayerCore: NSObject {
       info.state = Preference.bool(for: .pauseWhenOpen) ? .paused : .playing
       if mainWindow.loaded { mainWindow.liveCaptions.updateEligibility() }
       syncUI(.playButton)
-      if Preference.bool(for: .fullScreenWhenOpen) && !mainWindow.fsState.isFullscreen && !isInMiniPlayer {
+      if !AppDelegate.shared.isHeadlessCommandLineMode,
+         Preference.bool(for: .fullScreenWhenOpen) && !mainWindow.fsState.isFullscreen && !isInMiniPlayer {
         mainWindow.toggleWindowFullScreen()
       }
     }
@@ -3311,6 +3380,11 @@ class PlayerCore: NSObject {
     DispatchQueue.main.async {
       self.touchBarSupport.touchBarPlaySlider?.resetCachedThumbnails()
     }
+    guard let videoWidth = info.videoWidth, videoWidth > 0,
+          let videoHeight = info.videoHeight, videoHeight > 0 else {
+      log("...stopped because file has no video stream", level: .debug)
+      return
+    }
     guard !info.isNetworkResource, let url = info.currentURL else {
       log("...stopped because cannot get file path", level: .warning)
       return
@@ -3407,18 +3481,124 @@ class PlayerCore: NSObject {
     info.secondSid = mpv.getInt(MPVOption.Subtitles.secondarySid)
   }
 
-  func getPlaylist() {
-    info.$playlist.withLock { playlist in
-      playlist.removeAll()
-      let playlistCount = mpv.getInt(MPVProperty.playlistCount)
-      for index in 0..<playlistCount {
-        let playlistItem = MPVPlaylistItem(filename: mpv.getString(MPVProperty.playlistNFilename(index))!,
-                                           isCurrent: mpv.getFlag(MPVProperty.playlistNCurrent(index)),
-                                           isPlaying: mpv.getFlag(MPVProperty.playlistNPlaying(index)),
-                                           title: mpv.getString(MPVProperty.playlistNTitle(index)))
-        playlist.append(playlistItem)
+  @discardableResult
+  func getPlaylist() -> Bool {
+    refreshPlaylistSnapshot(retryCount: 0)
+  }
+
+  private func refreshPlaylistSnapshot(retryCount: Int) -> Bool {
+    // mpv property reads on the main thread can deadlock while a file-loading hook is waiting for
+    // main-thread work. FILE_LOADED and idle-active both mark safe points for a full snapshot.
+    let readState = playlistSnapshotStateLock.withLock {
+      () -> (revision: UInt64, generation: UInt64, mutationInProgress: Bool,
+             loadTransitionInProgress: Bool) in
+      playlistSnapshotReadRevision &+= 1
+      return (playlistSnapshotReadRevision, playlistChangeGeneration, playlistMutationsInProgress > 0,
+              !playlistLoadTransitionTokens.isEmpty)
+    }
+    guard MPVPlaylistItem.canReadFullPlaylistSnapshot(isLoaded: info.state.loaded,
+                                                      isIdle: info.state == .idle,
+                                                      isLoadTransitioning: readState.loadTransitionInProgress),
+          !readState.mutationInProgress, !readState.loadTransitionInProgress else {
+      schedulePlaylistSnapshotRefresh(retryCount: retryCount + 1)
+      return false
+    }
+    guard let playlistCount = mpv.getIntIfAvailable(MPVProperty.playlistCount), playlistCount >= 0 else {
+      schedulePlaylistSnapshotRefresh(retryCount: retryCount + 1)
+      return false
+    }
+    var currentIndex = -1
+    var playingIndex = -1
+    guard let refreshedPlaylist = MPVPlaylistItem.makeSnapshot(count: playlistCount, readRow: { index in
+      let isCurrent = mpv.getFlag(MPVProperty.playlistNCurrent(index))
+      let isPlaying = mpv.getFlag(MPVProperty.playlistNPlaying(index))
+      if isCurrent { currentIndex = index }
+      if isPlaying { playingIndex = index }
+      guard let filename = mpv.getString(MPVProperty.playlistNFilename(index)) else { return nil }
+      return MPVPlaylistItem(filename: filename,
+                             isCurrent: isCurrent,
+                             isPlaying: isPlaying,
+                             title: mpv.getString(MPVProperty.playlistNTitle(index)))
+    }) else {
+      schedulePlaylistSnapshotRefresh(retryCount: retryCount + 1)
+      return false
+    }
+    let committed = playlistSnapshotStateLock.withLock { () -> Bool in
+      guard playlistMutationsInProgress == 0, playlistLoadTransitionTokens.isEmpty,
+            MPVPlaylistItem.canCommitPlaylistSnapshot(readRevision: readState.revision,
+                                                      currentReadRevision: playlistSnapshotReadRevision,
+                                                      snapshotGeneration: readState.generation,
+                                                      currentGeneration: playlistChangeGeneration) else { return false }
+      info.replacePlaylistSnapshot(refreshedPlaylist, generation: readState.generation)
+      playlistCurrentIndex = currentIndex
+      playlistPlayingIndex = playingIndex
+      playlistSnapshotGeneration = readState.generation
+      if playlistChangeGeneration != readState.generation {
+        info.invalidatePlaylistSnapshot()
+        playlistSnapshotGeneration = UInt64.max
+        return false
+      }
+      return true
+    }
+    guard committed else {
+      schedulePlaylistSnapshotRefresh(retryCount: retryCount + 1)
+      return false
+    }
+    return true
+  }
+
+  /// mpv has completed loading the selected entry. Reuse the playlist snapshot when its structure
+  /// is unchanged and update only the current/playing rows; otherwise fall back to a full refresh.
+  @discardableResult
+  private func refreshPlaylistPlaybackStatus(forceFullSnapshotIfNeeded: Bool = false) -> Bool {
+    let readState = playlistSnapshotStateLock.withLock {
+      () -> (revision: UInt64, generation: UInt64, mutationInProgress: Bool,
+             loadTransitionInProgress: Bool) in
+      playlistSnapshotReadRevision &+= 1
+      return (playlistSnapshotReadRevision, playlistChangeGeneration, playlistMutationsInProgress > 0,
+              !playlistLoadTransitionTokens.isEmpty)
+    }
+    guard !readState.mutationInProgress, !readState.loadTransitionInProgress else {
+      schedulePlaylistSnapshotRefresh()
+      return false
+    }
+    guard let playlistCount = mpv.getIntIfAvailable(MPVProperty.playlistCount),
+          let currentIndex = mpv.getIntIfAvailable(MPVProperty.playlistCurrentPos),
+          let playingIndex = mpv.getIntIfAvailable(MPVProperty.playlistPlayingPos),
+          playlistCount >= 0 else {
+      if forceFullSnapshotIfNeeded { getPlaylist() } else { schedulePlaylistSnapshotRefresh() }
+      return false
+    }
+    let titleUpdates = Set([currentIndex, playingIndex])
+      .filter { (0..<playlistCount).contains($0) }
+      .map { MPVPlaylistTitleUpdate(index: $0, title: mpv.getString(MPVProperty.playlistNTitle($0))) }
+    let refreshed = playlistSnapshotStateLock.withLock {
+      guard playlistMutationsInProgress == 0, playlistLoadTransitionTokens.isEmpty,
+            MPVPlaylistItem.canCommitPlaylistSnapshot(readRevision: readState.revision,
+                                                      currentReadRevision: playlistSnapshotReadRevision,
+                                                      snapshotGeneration: readState.generation,
+                                                      currentGeneration: playlistChangeGeneration) else { return false }
+      return info.$playlist.withLock { playlist in
+        guard MPVPlaylistItem.canReusePlaybackSnapshot(snapshotGeneration: playlistSnapshotGeneration,
+                                                        currentGeneration: readState.generation,
+                                                        cachedCount: playlist.count,
+                                                        currentCount: playlistCount),
+              MPVPlaylistItem.refreshPlaybackFlags(in: &playlist,
+                                                  previousCurrentIndex: playlistCurrentIndex,
+                                                  previousPlayingIndex: playlistPlayingIndex,
+                                                  currentIndex: currentIndex,
+                                                  playingIndex: playingIndex,
+                                                  titleUpdates: titleUpdates) != nil else { return false }
+        playlistCurrentIndex = currentIndex
+        playlistPlayingIndex = playingIndex
+        return true
       }
     }
+    guard refreshed, playlistChangeGeneration == readState.generation else {
+      if forceFullSnapshotIfNeeded { getPlaylist() } else { schedulePlaylistSnapshotRefresh() }
+      return false
+    }
+    return true
   }
 
   func getChapters() {
@@ -3440,8 +3620,122 @@ class PlayerCore: NSObject {
 
   // MARK: - Notifications
 
+  private func advancePlaylistChangeGeneration() {
+    playlistSnapshotStateLock.withLock {
+      $playlistChangeGeneration.withLock { $0 &+= 1 }
+    }
+  }
+
+  /// Raw plugin commands can reorder or replace playlist entries without changing its count.
+  /// Invalidate immediately, then refresh the sidebar only after mpv is out of a load transition.
+  func playlistStructureWillChange() {
+    playlistSnapshotStateLock.withLock {
+      $playlistChangeGeneration.withLock { $0 &+= 1 }
+      playlistMutationsInProgress += 1
+      info.invalidatePlaylistSnapshot()
+    }
+    invalidatePlaylistRefreshSchedule()
+  }
+
+  func playlistStructureDidChange() {
+    // Reject reads that began after WillChange but before mpv completed its mutation.
+    playlistSnapshotStateLock.withLock {
+      $playlistChangeGeneration.withLock { $0 &+= 1 }
+      playlistMutationsInProgress = max(0, playlistMutationsInProgress - 1)
+      info.invalidatePlaylistSnapshot()
+    }
+    schedulePlaylistSnapshotRefresh()
+  }
+
+  /// START_FILE arrives before mpv's loading hooks. Keep all playlist property reads deferred until
+  /// FILE_LOADED or END_FILE has completed its main-thread state update.
+  @discardableResult
+  func playlistLoadDidStart() -> UInt64 {
+    let token = playlistSnapshotStateLock.withLock { () -> UInt64 in
+      $playlistChangeGeneration.withLock { $0 &+= 1 }
+      playlistLoadTransitionCounter &+= 1
+      playlistLoadTransitionTokens.insert(playlistLoadTransitionCounter)
+      return playlistLoadTransitionCounter
+    }
+    invalidatePlaylistRefreshSchedule()
+    DispatchQueue.main.async { [weak self] in self?.info.invalidatePlaylistSnapshot() }
+    return token
+  }
+
+  func playlistLoadDidFinish(_ token: UInt64?) {
+    guard let token else { return }
+    let didFinish = playlistSnapshotStateLock.withLock { () -> Bool in
+      guard playlistLoadTransitionTokens.remove(token) != nil else { return false }
+      $playlistChangeGeneration.withLock { $0 &+= 1 }
+      return true
+    }
+    if didFinish {
+      info.invalidatePlaylistSnapshot()
+      schedulePlaylistSnapshotRefresh()
+    }
+  }
+
+  /// mpv's current/playing index changed without changing playlist structure. Refresh only the
+  /// affected row flags and notify queue consumers without invalidating the playlist snapshot.
+  func playlistPlaybackStatusMayHaveChanged() {
+    guard Thread.isMainThread else {
+      DispatchQueue.main.async { [weak self] in self?.playlistPlaybackStatusMayHaveChanged() }
+      return
+    }
+    guard info.state.loaded else { return }
+    guard refreshPlaylistPlaybackStatus() else { return }
+    NotificationCenter.default.post(Notification(name: .iinaPlaylistPlaybackStatusChanged, object: self))
+  }
+
   func postNotification(_ name: Notification.Name) {
+    if name == .iinaPlaylistChanged {
+      guard Thread.isMainThread else {
+        DispatchQueue.main.async { [weak self] in self?.postNotification(name) }
+        return
+      }
+      postPlaylistChanged(advanceGeneration: true)
+      return
+    }
     NotificationCenter.default.post(Notification(name: name, object: self))
+  }
+
+  private func postPlaylistChanged(advanceGeneration: Bool) {
+    if advanceGeneration {
+      playlistSnapshotStateLock.withLock {
+        $playlistChangeGeneration.withLock { $0 &+= 1 }
+        info.invalidatePlaylistSnapshot()
+      }
+    }
+    schedulePlaylistSnapshotRefresh()
+  }
+
+  private func schedulePlaylistSnapshotRefresh(retryCount: Int = 0) {
+    guard retryCount <= 5 else { return }
+    let scheduleGeneration = playlistRefreshScheduleLock.withLock {
+      playlistRefreshScheduleGeneration &+= 1
+      return playlistRefreshScheduleGeneration
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
+      guard let self,
+            self.playlistRefreshScheduleLock.withLock({ self.playlistRefreshScheduleGeneration == scheduleGeneration }) else {
+        return
+      }
+      let loadTransitionInProgress = self.playlistSnapshotStateLock.withLock {
+        !self.playlistLoadTransitionTokens.isEmpty
+      }
+      guard MPVPlaylistItem.canReadFullPlaylistSnapshot(isLoaded: self.info.state.loaded,
+                                                        isIdle: self.info.state == .idle,
+                                                        isLoadTransitioning: loadTransitionInProgress),
+            self.refreshPlaylistSnapshot(retryCount: retryCount) else { return }
+      guard self.playlistRefreshScheduleLock.withLock({ self.playlistRefreshScheduleGeneration == scheduleGeneration }) else {
+        return
+      }
+      NotificationCenter.default.post(Notification(name: .iinaPlaylistChanged, object: self))
+    }
+  }
+
+  private func invalidatePlaylistRefreshSchedule() {
+    playlistRefreshScheduleLock.withLock { playlistRefreshScheduleGeneration &+= 1 }
   }
 
   /// Observer for changes to the macOS Touch Bar settings.
@@ -3588,31 +3882,36 @@ class PlayerCore: NSObject {
    It may take some time to run this method, so it should be used in background.
    */
   func refreshCachedVideoInfo(forVideoPath path: String) {
-    guard let dict = FFmpegController.probeVideoInfo(forFile: path) else { return }
+    guard let requestID = info.beginCachedInfoProbe(for: path) else { return }
+    guard let dict = FFmpegController.probeVideoInfo(forFile: path) else {
+      info.finishCachedInfoProbe(for: path, requestID: requestID,
+                                 durationAndProgress: nil, metadata: nil)
+      return
+    }
     let progress: VideoTime? = {
       let url = URL(fileURLWithPath: path)
       let mpvMd5 = Utility.mpvWatchLaterMd5(url, ignorePathInWatchLaterConfig)
       return Utility.playbackProgressFromWatchLater(mpvMd5)
     }()
-    self.info.setCachedVideoDurationAndProgress(path, (
+    let durationAndProgress: (duration: Double?, progress: Double?) = (
       duration: dict["@iina_duration"] as? Double,
       progress: progress?.second
-    ))
-    var result: (title: String?, album: String?, artist: String?)
+    )
+    var result: (title: String?, artist: String?)
     dict.forEach { (k, v) in
       guard let key = k as? String else { return }
       switch key.lowercased() {
       case "title":
         result.title = v as? String
-      case "album":
-        result.album = v as? String
       case "artist":
         result.artist = v as? String
       default:
         break
       }
     }
-    self.info.setCachedMetadata(path, result)
+    self.info.finishCachedInfoProbe(for: path, requestID: requestID,
+                                    durationAndProgress: durationAndProgress,
+                                    metadata: result)
   }
 }
 

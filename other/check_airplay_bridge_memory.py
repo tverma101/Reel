@@ -65,7 +65,10 @@ def main():
         "#import <libswresample/swresample.h>", '#import "pcm_stream_reader.h"', implementation, ""]))
 
     loader = extract(ROOT / "iina/AirPlayAudioBridge.swift", "// MARK: - WAV stream", "// MARK: - Bridge")
-    anchor = "  private func readFrames(at frame: Int64, count: Int) -> Data? {\n"
+    source = (ROOT / "iina/AirPlayAudioBridge.swift").read_text()
+    assert "asset.resourceLoader.setDelegate(loader, queue: loader.delegateQueue)" in source, \
+        "resource-loader cancellation must run outside the potentially blocked FFmpeg pump queue"
+    anchor = "  private func readFrames(at frame: Int64, count: Int, request: Request) -> Data? {\n"
     assert anchor in loader, "the loader's read entry point moved; update this check"
     loader = loader.replace(anchor, anchor + "    AirPlayTrace.read(count: count)\n", 1)
     (work / "loader.swift").write_text("import AVFoundation\nimport Foundation\n\n" + loader + "\n")
@@ -92,11 +95,17 @@ final class AirPlayTrace {
 let arguments = CommandLine.arguments
 guard arguments.count == 5, let streamIndex = Int(arguments[2]), let duration = Double(arguments[3]),
       let playSeconds = Double(arguments[4]) else { exit(2) }
-let frames = Int64((duration + 2) * AirPlayPCMResourceLoader.sampleRate)
+precondition(AirPlayPCMResourceLoader.frameCount(for: .nan) == AirPlayPCMResourceLoader.maximumFrames)
+precondition(AirPlayPCMResourceLoader.frameCount(for: .infinity) == AirPlayPCMResourceLoader.maximumFrames)
+precondition(AirPlayPCMResourceLoader.frameCount(for: Double.greatestFiniteMagnitude) == AirPlayPCMResourceLoader.maximumFrames)
+precondition(!AirPlayPCMResourceLoader.audioClockHasAdvanced(from: nil, to: 2))
+precondition(AirPlayPCMResourceLoader.audioClockHasAdvanced(from: 2, to: 2.2))
+precondition(!AirPlayPCMResourceLoader.audioClockHasAdvanced(from: 2, to: .nan))
+let frames = AirPlayPCMResourceLoader.frameCount(for: duration)
 let loader = AirPlayPCMResourceLoader(source: arguments[1], streamIndex: streamIndex, mediaOrigin: nil,
                                       frameCount: frames) { print("loader failed") }
 let asset = AVURLAsset(url: URL(string: "\\(AirPlayPCMResourceLoader.scheme)://audio/1.wav")!)
-asset.resourceLoader.setDelegate(loader, queue: loader.queue)
+asset.resourceLoader.setDelegate(loader, queue: loader.delegateQueue)
 let item = AVPlayerItem(asset: asset)
 let player = AVPlayer(playerItem: item)
 player.isMuted = true
