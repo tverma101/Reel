@@ -1195,6 +1195,9 @@ static int FFmpegPCMStreamReaderInterrupt(void *opaque);
   /// Decoded samples waiting behind a long gap, and their timeline frame.
   NSData *parkedSamples;
   int64_t parkedPlace;
+  /// Scratch output for swr_convert, grown as needed and reused instead of allocated per frame.
+  int16_t *conversionBuffer;
+  int conversionCapacity;
 }
 @property (nonatomic, copy, nullable) BOOL (^cancellationCheck)(void);
 @property (nonatomic, readwrite) BOOL failed;
@@ -1332,6 +1335,7 @@ static int FFmpegPCMStreamReaderInterrupt(void *opaque) {
 
 - (void)dealloc
 {
+  av_freep(&conversionBuffer);
   if (frame != NULL) av_frame_free(&frame);
   if (packet != NULL) av_packet_free(&packet);
   if (resampler != NULL) swr_free(&resampler);
@@ -1545,7 +1549,7 @@ static int FFmpegPCMStreamReaderInterrupt(void *opaque) {
   if (capacity == 0) {
     return YES;
   }
-  int16_t *samples = av_malloc_array(capacity, FFmpegPCMStreamFrameBytes);
+  int16_t *samples = [self conversionBufferWithCapacity:capacity];
   if (samples == NULL) {
     return NO;
   }
@@ -1555,8 +1559,23 @@ static int FFmpegPCMStreamReaderInterrupt(void *opaque) {
   if (count > 0) {
     [self appendSamples:samples count:count timestampFrame:timestampFrame hasTimestamp:hasTimestamp];
   }
-  av_free(samples);
   return count >= 0;
+}
+
+/// The scratch buffer `swr_convert` writes into, grown to `capacity` frames and kept for reuse.
+- (int16_t *)conversionBufferWithCapacity:(int)capacity
+{
+  if (conversionBuffer != NULL && capacity <= conversionCapacity) {
+    return conversionBuffer;
+  }
+  av_freep(&conversionBuffer);
+  conversionCapacity = 0;
+  conversionBuffer = av_malloc_array(capacity, FFmpegPCMStreamFrameBytes);
+  if (conversionBuffer == NULL) {
+    return NULL;
+  }
+  conversionCapacity = capacity;
+  return conversionBuffer;
 }
 
 - (void)drainResampler
@@ -1564,14 +1583,13 @@ static int FFmpegPCMStreamReaderInterrupt(void *opaque) {
   if (resampler == NULL) return;
   int capacity = swr_get_out_samples(resampler, 0);
   if (capacity <= 0 || capacity > FFmpegPCMStreamMaximumReadFrames) return;
-  int16_t *samples = av_malloc_array(capacity, FFmpegPCMStreamFrameBytes);
+  int16_t *samples = [self conversionBufferWithCapacity:capacity];
   if (samples == NULL) return;
   uint8_t *outputPlanes[] = {(uint8_t *)samples};
   int count = swr_convert(resampler, outputPlanes, capacity, NULL, 0);
   if (count > 0) {
     [self appendSamples:samples count:count timestampFrame:0 hasTimestamp:NO];
   }
-  av_free(samples);
 }
 
 /// Places decoded samples on the timeline. A frame whose timestamp is past the expected position

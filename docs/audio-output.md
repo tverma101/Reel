@@ -18,7 +18,10 @@ picture, subtitles, Live Text and live captions; its own audio output is switche
 
 - **Starting, resuming and seeking.** The picture waits, at mpv's slowest speed, until the speaker is
   playing the matching sound. The speaker's buffering (about two seconds on AirPlay 2) shows as a
-  short wait instead of a lip-sync offset.
+  short wait instead of a lip-sync offset. Selecting a speaker restarts mpv's own audio output, and
+  Reel starts the speaker only once that output is running, so nothing is timed against a clock that
+  has not started. If the picture's clock stops anyway, the speaker pauses with it and re-aligns when
+  it resumes, instead of correcting against the stall.
 - **Keeping sync.** Four times a second Reel compares the picture with AVPlayer's clock. When they
   drift more than 45 ms apart, it adjusts mpv's audio delay, which moves the picture.
 - **What carries over.** Pause, seek, speed, audio-track changes, **Audio Delay**, mute and volume all
