@@ -344,6 +344,7 @@ final class AirPlayAudioBridge: NSObject {
   /// to move again, which cannot happen before the new output starts.
   private var waitingForMPVAudio = false
   private var waitingForMPVAudioSince: Date?
+  private var pendingHoldReason: String?
   private var lastMPVAudioTime: Double?
   /// The picture's clock stopped advancing; the speaker is paused until mpv runs again.
   private var lastPicturePosition: Double?
@@ -534,6 +535,7 @@ final class AirPlayAudioBridge: NSObject {
     replaceItem(with: nil)
     waitingForMPVAudio = false
     waitingForMPVAudioSince = nil
+    pendingHoldReason = nil
     lastMPVAudioTime = nil
     syncTimer?.invalidate()
     syncTimer = nil
@@ -583,6 +585,7 @@ final class AirPlayAudioBridge: NSObject {
     cancelHold()
     waitingForMPVAudio = false
     waitingForMPVAudioSince = nil
+    pendingHoldReason = nil
     lastMPVAudioTime = nil
     resetPictureMotionTracking()
     setCorrection(0)
@@ -617,6 +620,7 @@ final class AirPlayAudioBridge: NSObject {
     // running, so this file's start cannot be postponed by a hold (see `waitingForMPVAudio`).
     waitingForMPVAudio = true
     waitingForMPVAudioSince = Date()
+    pendingHoldReason = nil
     lastMPVAudioTime = nil
     resetPictureMotionTracking()
     let asset = AVURLAsset(url: URL(string: "\(AirPlayPCMResourceLoader.scheme)://audio/\(generation).wav")!)
@@ -658,12 +662,24 @@ final class AirPlayAudioBridge: NSObject {
 
   // MARK: Holding the picture for the speaker
 
+  /// Holds unless mpv's audio output is still starting. Every path that wants a hold goes through
+  /// here, because writing speed while that output is starting postpones it for seconds; `tick`
+  /// then starts the deferred hold as soon as the picture moves.
+  private func requestHold(_ reason: String, realign: Bool) {
+    guard !waitingForMPVAudio else {
+      pendingHoldReason = reason
+      return
+    }
+    beginHold(reason, realign: realign)
+  }
+
   /// Holds mpv's picture nearly still, aligns the speaker with it and starts the speaker. The hold
   /// ends once the speaker is playing the sound that belongs to the picture.
   private func beginHold(_ reason: String, realign: Bool) {
     guard isCarrying, let player, player.info.state.loaded, let mpv = player.mpv else { return }
     waitingForMPVAudio = false
     waitingForMPVAudioSince = nil
+    pendingHoldReason = nil
     lastMPVAudioTime = nil
     resetPictureMotionTracking()
     holdGeneration += 1
@@ -813,7 +829,9 @@ final class AirPlayAudioBridge: NSObject {
       guard let pictureTime = mpv.getDoubleIfAvailable(MPVProperty.timePos) else { return }
       if let previous = lastMPVAudioTime, pictureTime > previous + Self.pictureMotionEpsilon {
         log("mpv audio output running at \(String(format: "%.3f", pictureTime))")
-        beginHold("mpv audio output running", realign: true)
+        let reason = pendingHoldReason ?? "mpv audio output running"
+        pendingHoldReason = nil
+        beginHold(reason, realign: true)
       } else {
         lastMPVAudioTime = pictureTime
       }
@@ -840,15 +858,15 @@ final class AirPlayAudioBridge: NSObject {
       }
       if waitingForPicture {
         waitingForPicture = false
-        beginHold("picture resumed", realign: true)
+        requestHold("picture resumed", realign: true)
         return
       }
     }
     guard avPlayer.timeControlStatus == .playing, let heard = audiblePosition else {
       if avPlayer.rate == 0 {
-        beginHold("speaker stopped", realign: true)
+        requestHold("speaker stopped", realign: true)
       } else if let stalledSince {
-        if Date().timeIntervalSince(stalledSince) > 0.5 { beginHold("speaker stalled", realign: false) }
+        if Date().timeIntervalSince(stalledSince) > 0.5 { requestHold("speaker stalled", realign: false) }
       } else {
         stalledSince = Date()
       }
@@ -868,7 +886,7 @@ final class AirPlayAudioBridge: NSObject {
     guard driftSamples.count >= 4, Date() >= correctionCooldownUntil else { return }
     let median = driftSamples.sorted()[driftSamples.count / 2]
     if abs(median) > Self.resyncThreshold {
-      beginHold("picture \(String(format: "%.2f", median))s off", realign: true)
+      requestHold("picture \(String(format: "%.2f", median))s off", realign: true)
       return
     }
     guard abs(median) > Self.correctionThreshold else { return }
@@ -910,21 +928,20 @@ final class AirPlayAudioBridge: NSObject {
     if paused {
       cancelHold()
       avPlayer?.pause()
-    } else if !waitingForMPVAudio {
-      // While mpv's audio output is still starting, the pending wait in `tick` does the hold.
-      beginHold("resume", realign: true)
+    } else {
+      requestHold("resume", realign: true)
     }
   }
 
   func playbackRestarted() {
-    beginHold("seek", realign: true)
+    requestHold("seek", realign: true)
   }
 
   /// mpv changed speed on the user's behalf; the hold speed, if any, was replaced.
   func userSpeedChanged() {
     guard isCarrying else { return }
     holdSpeedApplied = false
-    beginHold("speed change", realign: true)
+    requestHold("speed change", realign: true)
   }
 
   func volumeChanged() {
@@ -983,6 +1000,7 @@ final class AirPlayAudioBridge: NSObject {
     stopHoldTimer()
     waitingForMPVAudio = false
     waitingForMPVAudioSince = nil
+    pendingHoldReason = nil
     lastMPVAudioTime = nil
     resetPictureMotionTracking()
     if let mpv = player?.mpv, player?.info.state != .shutDown {
