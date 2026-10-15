@@ -808,7 +808,7 @@ final class AirPlayAudioBridge: NSObject {
   @discardableResult
   private func engage() -> Bool {
     guard let mpv = player?.mpv else { return false }
-    let snapshot = resolvePendingRawAudioOutputSelector(from: mpv.airPlayPlaybackSnapshot)
+    let snapshot = mpv.airPlayPlaybackSnapshot
     guard snapshot.audioOutputChangesInFlight == 0 else {
       log("waiting for mpv's audio output change before engaging", level: .verbose)
       return false
@@ -816,10 +816,13 @@ final class AirPlayAudioBridge: NSObject {
     // A fast route reconnect can observe the old event-fed `ao = null` before a queued restore
     // reaches mpv. Keep the last real output as the source for this and later disengages.
     _ = rememberLatestDirectAudioOutput(from: snapshot)
-    if let directAudioOutput = snapshot.directAudioOutput {
+    if snapshot.pendingRawAudioOutputIntents.isEmpty,
+       snapshot.pendingRawAudioOutputSelectors.isEmpty,
+       let directAudioOutput = snapshot.directAudioOutput {
       savedAudioOutput = directAudioOutput
       savedAudioOutputIntentGeneration = snapshot.audioOutputIntentGeneration
-    } else if snapshot.pendingRawAudioOutputSelector == nil,
+    } else if snapshot.pendingRawAudioOutputIntents.isEmpty,
+              snapshot.pendingRawAudioOutputSelectors.isEmpty,
               let audioOutput = snapshot.audioOutput,
               audioOutput != "null" || pendingAudioOutputRestoreValues().isEmpty {
       savedAudioOutput = audioOutput
@@ -851,10 +854,11 @@ final class AirPlayAudioBridge: NSObject {
 
   private func disengage() {
     if let mpv = player?.mpv {
-      let snapshot = resolvePendingRawAudioOutputSelector(from: mpv.airPlayPlaybackSnapshot)
+      let snapshot = mpv.airPlayPlaybackSnapshot
       if snapshot.audioOutputChangesInFlight == 0 {
         _ = rememberLatestDirectAudioOutput(from: snapshot)
-        if snapshot.pendingRawAudioOutputSelector == nil,
+        if snapshot.pendingRawAudioOutputIntents.isEmpty,
+           snapshot.pendingRawAudioOutputSelectors.isEmpty,
            snapshot.directAudioOutput == nil,
            let audioOutput = snapshot.audioOutput, audioOutput != "null",
            !pendingAudioOutputRestoreValues().contains(audioOutput) {
@@ -877,6 +881,13 @@ final class AirPlayAudioBridge: NSObject {
     bridgeEngaged = false
     lastAirPlayAudioOutputDisableGeneration = nil
     guard player?.mpv != nil, let saved = savedAudioOutput else { return }
+    if let snapshot = player?.mpv?.airPlayPlaybackSnapshot,
+       !snapshot.pendingRawAudioOutputIntents.isEmpty ||
+       !snapshot.pendingRawAudioOutputSelectors.isEmpty {
+      log("deferring local-output restore until the accepted async AO request is observed",
+          level: .verbose)
+      return
+    }
     let output = saved.isEmpty ? (Preference.bool(for: .audioDriverEnableAVFoundation) ? "avfoundation" : "coreaudio") : saved
     let intentGeneration = savedAudioOutputIntentGeneration
       ?? player?.mpv?.airPlayPlaybackSnapshot.audioOutputIntentGeneration ?? 0
@@ -1593,8 +1604,9 @@ final class AirPlayAudioBridge: NSObject {
        let expectedGeneration = request.expectedAudioOutputIntentGeneration {
       let snapshot = mpv.airPlayPlaybackSnapshot
       let hasNewerKnownIntent = snapshot.audioOutputIntentGeneration != expectedGeneration &&
-        snapshot.pendingRawAudioOutputSelector == nil &&
-        (snapshot.directAudioOutput != nil || !snapshot.pendingRawAudioOutputIntents.isEmpty)
+        (snapshot.directAudioOutput != nil ||
+          !snapshot.pendingRawAudioOutputIntents.isEmpty ||
+          !snapshot.pendingRawAudioOutputSelectors.isEmpty)
       if hasNewerKnownIntent {
         log("skipping queued audio-output restore; a newer direct AO intent is pending",
             level: .verbose)
@@ -1724,7 +1736,7 @@ final class AirPlayAudioBridge: NSObject {
   /// Retry reconciliation after mpv publishes the metadata needed to select the audio stream.
   func playbackSnapshotChanged() {
     guard let mpv = player?.mpv else { return }
-    let snapshot = resolvePendingRawAudioOutputSelector(from: mpv.airPlayPlaybackSnapshot)
+    let snapshot = mpv.airPlayPlaybackSnapshot
     guard snapshot.audioOutputChangesInFlight == 0 else { return }
     let directAudioOutput = rememberLatestDirectAudioOutput(from: snapshot)
     refreshSavedAudioOutputFromSnapshot()
@@ -1736,7 +1748,10 @@ final class AirPlayAudioBridge: NSObject {
         log("reasserting AirPlay output after local audio-output change", level: .verbose)
       }
     }
-    if !routeActive, let directAudioOutput = snapshot.directAudioOutput {
+    if !routeActive,
+       snapshot.pendingRawAudioOutputIntents.isEmpty,
+       snapshot.pendingRawAudioOutputSelectors.isEmpty,
+       let directAudioOutput = snapshot.directAudioOutput {
       restoreLatestDirectAudioOutputIfNeeded(directAudioOutput, snapshot: snapshot)
     }
     guard routeActive else { return }
@@ -1744,19 +1759,19 @@ final class AirPlayAudioBridge: NSObject {
     if itemSelection == nil { reconcile() }
   }
 
-  /// Resolves a raw async selector from an observed AO value only when no queued bridge setter
-  /// could have produced that value. This keeps restore replies from masquerading as user intent.
-  private func resolvePendingRawAudioOutputSelector(
-    from snapshot: MPVAirPlaySnapshot
-  ) -> MPVAirPlaySnapshot {
-    guard let selector = snapshot.pendingRawAudioOutputSelector,
-          snapshot.audioOutputChangesInFlight == 0,
-          snapshot.audioOutputObservedGeneration > selector.observedGenerationAtAcceptance,
-          let output = snapshot.audioOutput,
-          !pendingBridgeAudioOutputTargets().contains(output),
-          let mpv = player?.mpv else { return snapshot }
-    mpv.resolveRawAudioOutputSelector(output, intentSequence: selector.intentSequence)
-    return mpv.airPlayPlaybackSnapshot
+  /// Resolves selector intent against the AO value captured by this individual observation. Main
+  /// queue callbacks preserve event order, so one property event cannot consume a later selector.
+  func audioOutputObservationChanged(_ output: String?, generation: UInt64) {
+    if let output, let mpv = player?.mpv {
+      let snapshot = mpv.airPlayPlaybackSnapshot
+      if let selector = snapshot.pendingRawAudioOutputSelectors.first,
+         generation > selector.observedGenerationAtAcceptance,
+         !pendingBridgeAudioOutputTargets().contains(output) {
+        mpv.resolveRawAudioOutputSelector(
+          output, intentSequence: selector.intentSequence, observedGeneration: generation)
+      }
+    }
+    playbackSnapshotChanged()
   }
 
   private func pendingBridgeAudioOutputTargets() -> Set<String> {
@@ -1773,6 +1788,8 @@ final class AirPlayAudioBridge: NSObject {
       return nil
     }
     lastProcessedDirectAudioOutputGeneration = snapshot.directAudioOutputGeneration
+    guard snapshot.pendingRawAudioOutputIntents.isEmpty,
+          snapshot.pendingRawAudioOutputSelectors.isEmpty else { return nil }
     guard let audioOutput = snapshot.directAudioOutput else {
       // Preserve the prior target as a fallback until an AO event resolves the accepted selector.
       return nil
@@ -1825,7 +1842,7 @@ final class AirPlayAudioBridge: NSObject {
   /// snapshot check. Save that newly selected local output, then reassert bridge ownership.
   private func keepMPVAudioOutputDisabled() {
     guard bridgeEngaged, let mpv = player?.mpv else { return }
-    let snapshot = resolvePendingRawAudioOutputSelector(from: mpv.airPlayPlaybackSnapshot)
+    let snapshot = mpv.airPlayPlaybackSnapshot
     guard snapshot.audioOutputChangesInFlight == 0,
           let audioOutput = snapshot.audioOutput, audioOutput != "null",
           !(snapshot.directAudioOutput == audioOutput &&
@@ -1833,7 +1850,8 @@ final class AirPlayAudioBridge: NSObject {
           lastAirPlayAudioOutputDisableGeneration != snapshot.audioOutputGeneration else { return }
     // An accepted async selector invalidates the previous explicit target. While a route restore
     // is still pending, do not mistake that bridge-owned value for the newly selected output.
-    if snapshot.pendingRawAudioOutputSelector == nil,
+    if snapshot.pendingRawAudioOutputIntents.isEmpty,
+       snapshot.pendingRawAudioOutputSelectors.isEmpty,
        snapshot.directAudioOutput == nil,
        !pendingAudioOutputRestoreValues().contains(audioOutput) {
       savedAudioOutput = audioOutput
@@ -1853,7 +1871,8 @@ final class AirPlayAudioBridge: NSObject {
           !mpvCommandQueue.contains(where: { $0.restoreAudioOutputToken != nil }),
           let snapshot = player?.mpv?.airPlayPlaybackSnapshot,
           let audioOutput = snapshot.audioOutput else { return }
-    guard snapshot.pendingRawAudioOutputSelector == nil else { return }
+    guard snapshot.pendingRawAudioOutputIntents.isEmpty,
+          snapshot.pendingRawAudioOutputSelectors.isEmpty else { return }
     if let directAudioOutput = snapshot.directAudioOutput {
       guard directAudioOutput == audioOutput else { return }
       savedAudioOutput = audioOutput

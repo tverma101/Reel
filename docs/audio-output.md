@@ -86,11 +86,13 @@ newer confirmed choice. A literal `null` target is recorded at acceptance becaus
 uses that valid output, so a later property event cannot identify which writer selected it. A
 rejected raw async command never leaves a pending target. Accepted async selectors and expanded
 targets have no identifiable completion value, so Reel retires an older explicit target and follows
-mpv's reported AO value without inferring the selector's result from an unrelated change. Reel keeps
-the prior output only as a fallback while the selector is unresolved, ignores a matching event from
-an active bridge setter, and does not replace the fallback from the stale snapshot. A newer accepted
-selector also fences a failed restore's synchronous fallback before it writes. An event-fed
-`ao = null` is retained when no route restore is in flight.
+mpv's reported AO value without inferring the selector's result from an unrelated change. It keeps
+the prior output only as a fallback while selector observations are pending, processes individual AO
+observations in order, and ignores a matching event from an active bridge setter. Pending literal
+targets and selectors also prevent a stale snapshot from refreshing the saved output or a queued
+restore from superseding that intent. The synchronous fallback checks the saved intent epoch under
+the AO setter lock before writing. An event-fed `ao = null` is retained when no route restore is in
+flight.
 A failed queued restore's synchronous fallback must not replace that user intent. Preserve an
 explicit direct `ao = null` choice through disconnect as well. If a local output change races AirPlay
 engagement or arrives while the bridge is carrying audio, retain that output for disconnect and
@@ -102,10 +104,11 @@ timers, and detach its playhead feeder without calling back into the destroyed M
 Keep the cached local output separate from the bridge's engaged state: a fast route reconnect can
 arrive while the event-fed `ao` snapshot still says `null`. Retain the last local output across
 that transition, and refresh it from mpv only after pending route restores have drained. A successful
-bridge `ao` setter reply may fill the cached value if no newer `ao` event or accepted direct output
-request superseded it. Failed direct setter attempts do not invalidate that confirmation; the broader
-snapshot generation still fences readbacks during attempted writes. `ao-reload` completes separately
-and is not treated as a pending output selection.
+bridge `ao` setter reply may fill the cached value when the observed output still matches its
+pre-submit value or has reached the target, provided no newer direct output intent exists. A repeated
+delayed event for the prior value does not veto confirmation. Failed direct setter attempts do not
+invalidate that confirmation; the broader snapshot generation still fences readbacks during attempted
+writes. `ao-reload` completes separately and is not treated as a pending output selection.
 Keep the snapshot
 request-state lock out of libmpv calls so the main-thread timer cannot inherit core-lock waits.
 AVPlayer clock monitoring starts even when its first reported time is invalid, allowing the startup
