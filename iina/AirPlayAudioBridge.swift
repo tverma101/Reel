@@ -550,6 +550,8 @@ final class AirPlayAudioBridge: NSObject {
   private var holdTimer: Timer?
   private var mpvCommandQueue: [MPVCommandRequest] = []
   private var activeMPVCommand: MPVCommandRequest?
+  /// Prevent duplicate synchronous output restores if a real reply and overflow recovery overlap.
+  private var synchronousAudioOutputRestoreReplyUserdata: UInt64?
   private var nextMPVCommandReplyId: UInt64 = 0
   private var nextAudioOutputRestoreToken: UInt64 = 0
   private var waitingForMPVEventOverflowRecovery = false
@@ -1407,6 +1409,7 @@ final class AirPlayAudioBridge: NSObject {
     bridgeEngaged = false
     savedAudioOutput = nil
     activeMPVCommand = nil
+    synchronousAudioOutputRestoreReplyUserdata = nil
     activeMPVCommandNeedsResubmission = false
     activeMPVCommandSubmissionAttempts = 0
     mpvCommandQueue.removeAll()
@@ -1559,6 +1562,8 @@ final class AirPlayAudioBridge: NSObject {
   func mpvCommandCompleted(_ result: Int32, replyUserdata: UInt64) {
     guard let request = activeMPVCommand, request.replyUserdata == replyUserdata else { return }
     if result < 0, let output = request.restoreAudioOutput {
+      guard synchronousAudioOutputRestoreReplyUserdata != replyUserdata else { return }
+      synchronousAudioOutputRestoreReplyUserdata = replyUserdata
       log("async audio-output restore failed; retrying \(output) synchronously off the main thread",
           level: .warning)
       player?.mpv.restoreAirPlayAudioOutput(output) { [weak self] restoreResult in
@@ -1586,6 +1591,7 @@ final class AirPlayAudioBridge: NSObject {
   private func finishSynchronousAudioOutputRestore(_ result: Int32, output: String,
                                                    replyUserdata: UInt64) {
     guard activeMPVCommand?.replyUserdata == replyUserdata else { return }
+    synchronousAudioOutputRestoreReplyUserdata = nil
     if player?.mpv.hasObservedShutdownEvent != true {
       if result < 0 {
         let error = String(cString: mpv_error_string(result))
@@ -1605,6 +1611,7 @@ final class AirPlayAudioBridge: NSObject {
       mpvCommandQueue.removeAll { $0.restoreAudioOutputToken == restoreToken }
     }
     activeMPVCommand = nil
+    synchronousAudioOutputRestoreReplyUserdata = nil
     activeMPVCommandNeedsResubmission = false
     activeMPVCommandSubmissionAttempts = 0
     runNextMPVCommand()

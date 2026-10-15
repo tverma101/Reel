@@ -88,6 +88,8 @@ struct MPVHookValue {
 /// snapshot on the main thread instead of calling synchronous libmpv getters from its timers.
 struct MPVAirPlaySnapshot {
   var audioOutput: String?
+  /// Increments for each event-fed `ao` change so overflow samples cannot overwrite a newer event.
+  var audioOutputGeneration: UInt64 = 0
   var rebaseStartTime: Bool?
   var isPaused: Bool?
   var pausedForCache: Bool?
@@ -1698,6 +1700,9 @@ class MPVController: NSObject {
             self.airPlaySnapshotQueue.async { [weak self] in
               guard let self else { return }
               self.airPlaySnapshotCallLock.lock()
+              let audioOutputGeneration = self.$airPlaySnapshot.withLock {
+                $0.audioOutputGeneration
+              }
               let audioOutput: String?
               if !self.hasReceivedShutdownEvent, self.mpv != nil {
                 audioOutput = self.getString(MPVOption.Audio.ao)
@@ -1709,7 +1714,12 @@ class MPVController: NSObject {
               DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 if !self.hasReceivedShutdownEvent {
-                  self.$airPlaySnapshot.withLock { $0.audioOutput = audioOutput }
+                  self.$airPlaySnapshot.withLock { snapshot in
+                    // An observed ao event after this sample is newer than the queried value.
+                    if snapshot.audioOutputGeneration == audioOutputGeneration {
+                      snapshot.audioOutput = audioOutput
+                    }
+                  }
                 }
                 self.$airPlaySnapshotRequests.withLock { $0.isRecoveringFromQueueOverflow = false }
                 // The shutdown path clears the bridge command queue after draining this reader.
@@ -1747,6 +1757,7 @@ class MPVController: NSObject {
       switch name {
       case MPVOption.Audio.ao:
         snapshot.audioOutput = stringValue(from: property)
+        snapshot.audioOutputGeneration &+= 1
       case MPVOption.PlaybackControl.rebaseStartTime:
         snapshot.rebaseStartTime = flagValue(from: property)
       case MPVOption.PlaybackControl.pause:
