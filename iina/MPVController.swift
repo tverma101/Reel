@@ -94,7 +94,7 @@ struct MPVAirPlaySnapshot {
   var pendingRawAudioOutputIntents: [MPVAirPlayPendingAudioOutputIntent] = []
   /// Raw async selectors have no literal targets; retain them in command order until each AO
   /// observation can be distinguished from an in-flight bridge write.
-  var pendingRawAudioOutputSelectors: [MPVAirPlayPendingAudioOutputSelector] = []
+  var pendingRawAudioOutputCommands: [MPVAirPlayPendingRawAudioOutputCommand] = []
   /// The newest confirmed direct AO intent, cleared if a newer raw async selector has no known
   /// target. Retained across older bridge restores while it remains valid.
   var directAudioOutput: String?
@@ -104,6 +104,8 @@ struct MPVAirPlaySnapshot {
   var audioOutputIntentGeneration: UInt64 = 0
   /// Orders direct AO actions by invocation, independent of property event delivery order.
   var nextDirectAudioOutputIntentSequence: UInt64 = 0
+  var nextRawAudioOutputCommandReplyId: UInt64 = 0
+  var rawAudioOutputResolutionInFlight = false
   var directAudioOutputIntentSequence: UInt64 = 0
   /// Fences snapshot readbacks against observed updates and in-flight direct `ao` write attempts.
   /// Setter-reply confirmation uses the cached value and direct-intent generation instead.
@@ -139,9 +141,12 @@ struct MPVAirPlayPendingAudioOutputIntent {
   let intentSequence: UInt64
 }
 
-struct MPVAirPlayPendingAudioOutputSelector {
+struct MPVAirPlayPendingRawAudioOutputCommand {
   let intentSequence: UInt64
-  let observedGenerationAtAcceptance: UInt64
+  let replyUserdata: UInt64?
+  let requestedOutput: String?
+  let fallbackAudioOutput: String?
+  var commandResult: Int32?
 }
 
 private struct RawAudioOutputCommand {
@@ -170,6 +175,7 @@ class MPVController: NSObject {
     static let preferenceOptionCommand: UInt64 = 1000002
     static let airPlaySnapshotBase: UInt64 = 0xA17A_0000_0000_0000
     static let airPlayAudioCommandBase: UInt64 = 0xA17B_0000_0000_0000
+    static let rawAudioOutputCommandBase: UInt64 = 0xA17C_0000_0000_0000
     private static let airPlayAudioCommandMask: UInt64 = 0xFFFF_0000_0000_0000
 
     static func isAirPlayAudioCommand(_ token: UInt64) -> Bool {
@@ -1040,28 +1046,42 @@ class MPVController: NSObject {
     let lastSynchronousAudioOutputCommand = audioOutputCommands.last { !$0.isAsynchronous }
     let changesPlaylist = MPVPlaylistMutationPolicy.invalidatesSnapshot(in: rawString)
     if changesPlaylist { player.playlistStructureWillChange() }
-    let result = mpv_command_string(mpv, rawString)
-    if result >= 0,
-       let newestAcceptedAsyncIntent = audioOutputCommands
-        .filter({ $0.isAsynchronous })
-        .map(\.intentSequence)
-        .max() {
-      // Fence a waiting synchronous restore before releasing the setter lock. Record the detailed
-      // literal target or selector below, after finishing the synchronous part of this chain.
+    let hasAsyncAudioOutputCommand = audioOutputCommands.contains(where: \.isAsynchronous)
+    let result: Int32
+    let acceptedAsyncAudioOutputCommands: [RawAudioOutputCommand]
+    let completionTrackedSequences: Set<UInt64>
+    if hasAsyncAudioOutputCommand {
+      let execution = executeRawCommandSegments(
+        Self.rawCommandSegments(rawString), audioOutputCommands: audioOutputCommands)
+      result = execution.result
+      acceptedAsyncAudioOutputCommands = execution.acceptedAsyncAudioOutputCommands
+      completionTrackedSequences = execution.completionTrackedSequences
+    } else {
+      result = mpv_command_string(mpv, rawString)
+      acceptedAsyncAudioOutputCommands = result >= 0
+        ? audioOutputCommands.filter(\.isAsynchronous) : []
+      completionTrackedSequences = []
+    }
+    if let newestAcceptedAsyncIntent = acceptedAsyncAudioOutputCommands
+      .map(\.intentSequence).max() {
+      // Fence a waiting synchronous restore before releasing the setter lock. Detailed targets
+      // and completion-tracked selectors are registered below while this write lock is held.
       $airPlaySnapshot.withLock { snapshot in
-        if newestAcceptedAsyncIntent > snapshot.directAudioOutputIntentSequence {
+        if newestAcceptedAsyncIntent > snapshot.directAudioOutputIntentSequence,
+           !completionTrackedSequences.contains(newestAcceptedAsyncIntent) {
           snapshot.audioOutputIntentGeneration &+= 1
         }
       }
     }
-    if let audioOutputWrite {
-      for command in audioOutputCommands where command.isAsynchronous && result >= 0 {
-        if let output = command.output {
+    if audioOutputWrite != nil {
+      for command in acceptedAsyncAudioOutputCommands {
+        if completionTrackedSequences.contains(command.intentSequence) {
+          continue
+        } else if let output = command.output {
           recordAcceptedRawAsyncAudioOutputIntent(output, intentSequence: command.intentSequence)
-        } else {
-          // A selector or expanded target can change AO without exposing a reliable target here.
-          // Retire older direct intent so AirPlay follows mpv's actual reported output instead
-          // of restoring a device selected before this accepted command.
+        } else if !completionTrackedSequences.contains(command.intentSequence) {
+          // Keep compatibility for a syntactically valid but unsupported expanded raw target.
+          // The completion-tracked path handles standard async selectors and expanded AO writes.
           invalidateDirectAudioOutputIntent(intentSequence: command.intentSequence)
         }
       }
@@ -1239,6 +1259,134 @@ class MPVController: NSObject {
     return token
   }
 
+  /// Decodes one input.conf token for the libmpv array API. The selector path is used only for
+  /// accepted async AO writes, so preserve mpv's quoting and property-expansion behavior.
+  private static func rawCommandArgumentToken(_ token: String) -> String? {
+    if token.count >= 2, token.first == "'", token.last == "'" {
+      let value = String(token.dropFirst().dropLast())
+      return value.contains("'") ? nil : value
+    }
+    if token.count >= 2, token.first == "\"", token.last == "\"" {
+      return try? JSONDecoder().decode(String.self, from: Data(token.utf8))
+    }
+    if token.first == "`" {
+      let characters = Array(token)
+      guard characters.count >= 4 else { return nil }
+      let delimiter = characters[1]
+      guard characters[characters.count - 2] == delimiter,
+            characters[characters.count - 1] == "`" else { return nil }
+      let value = String(characters[2..<(characters.count - 2)])
+      guard !value.contains(String([delimiter, "`"])) else { return nil }
+      return value
+    }
+    guard !token.contains("\"") && !token.contains("'") && !token.contains("`") else {
+      return nil
+    }
+    let characters = Array(token)
+    var value = ""
+    var index = 0
+    while index < characters.count {
+      if characters[index] == "\\" {
+        guard index + 1 < characters.count else { return nil }
+        value.append(characters[index + 1])
+        index += 2
+      } else {
+        value.append(characters[index])
+        index += 1
+      }
+    }
+    return value
+  }
+
+  /// Converts an explicit async AO command to libmpv's reply-bearing async API. That gives Reel a
+  /// completion point even when the selector leaves `ao` unchanged and emits no property event.
+  private static func asyncRawAudioOutputCommandArguments(_ segment: String) -> [String]? {
+    let encodedTokens = rawCommandTokens(segment)
+    var commandIndex = 0
+    var asyncPrefixIndex: Int?
+    var prefixes: [String] = []
+    while commandIndex < encodedTokens.count,
+          let prefix = literalRawCommandToken(encodedTokens[commandIndex]),
+          MPVPlaylistMutationPolicy.commandPrefixes.contains(prefix) {
+      prefixes.append(prefix)
+      if prefix == "async" { asyncPrefixIndex = commandIndex }
+      commandIndex += 1
+    }
+    guard asyncPrefixIndex != nil, commandIndex < encodedTokens.count,
+          let command = literalRawCommandToken(encodedTokens[commandIndex]),
+          command == "set" || command == "cycle" || command == "cycle-values" else {
+      return nil
+    }
+    var propertyIndex = commandIndex + 1
+    if command == "cycle-values", propertyIndex < encodedTokens.count,
+       literalRawCommandToken(encodedTokens[propertyIndex]) == "!reverse" {
+      propertyIndex += 1
+    }
+    guard propertyIndex < encodedTokens.count,
+          literalRawCommandToken(encodedTokens[propertyIndex]) == MPVOption.Audio.ao else {
+      return nil
+    }
+    let decoded = encodedTokens.compactMap(rawCommandArgumentToken)
+    guard decoded.count == encodedTokens.count else { return nil }
+    var arguments = decoded.enumerated().compactMap { index, value in
+      index == asyncPrefixIndex ? nil : value
+    }
+    let osdPrefixes: Set<String> = ["osd-auto", "no-osd", "osd-bar", "osd-msg", "osd-msg-bar"]
+    if prefixes.allSatisfy({ !osdPrefixes.contains($0) }) {
+      arguments.insert("osd-auto", at: 0)
+    }
+    if prefixes.contains("raw") {
+      if !arguments.contains("raw") { arguments.insert("raw", at: 0) }
+    } else if !prefixes.contains("expand-properties") {
+      arguments.insert("expand-properties", at: 0)
+    }
+    return arguments
+  }
+
+  private func executeRawCommandSegments(
+    _ segments: [String], audioOutputCommands: [RawAudioOutputCommand]
+  ) -> (result: Int32, acceptedAsyncAudioOutputCommands: [RawAudioOutputCommand],
+        completionTrackedSequences: Set<UInt64>) {
+    var audioOutputCommandIndex = 0
+    var acceptedAsyncAudioOutputCommands: [RawAudioOutputCommand] = []
+    var completionTrackedSequences = Set<UInt64>()
+    for segment in segments {
+      guard !segment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+      let parsedAudioOutputCommand = Self.rawCommandAudioOutputs(segment).first
+      let result: Int32
+      if parsedAudioOutputCommand != nil,
+         audioOutputCommandIndex < audioOutputCommands.count {
+        let audioOutputCommand = audioOutputCommands[audioOutputCommandIndex]
+        audioOutputCommandIndex += 1
+        if audioOutputCommand.isAsynchronous,
+           let arguments = Self.asyncRawAudioOutputCommandArguments(segment),
+           let replyUserdata = registerRawAudioOutputCommand(
+             intentSequence: audioOutputCommand.intentSequence,
+             requestedOutput: audioOutputCommand.output, needsReply: true) {
+          let submitResult = asyncRawCommand(arguments, replyUserdata: replyUserdata)
+          if submitResult < 0 {
+            rejectRawAudioOutputCommand(replyUserdata)
+          } else {
+            completionTrackedSequences.insert(audioOutputCommand.intentSequence)
+            acceptedAsyncAudioOutputCommands.append(audioOutputCommand)
+          }
+          result = submitResult
+        } else {
+          result = mpv_command_string(mpv, segment)
+          if audioOutputCommand.isAsynchronous, result >= 0 {
+            acceptedAsyncAudioOutputCommands.append(audioOutputCommand)
+          }
+        }
+      } else {
+        result = mpv_command_string(mpv, segment)
+      }
+      if result < 0 {
+        return (result, acceptedAsyncAudioOutputCommands, completionTrackedSequences)
+      }
+    }
+    return (0, acceptedAsyncAudioOutputCommands, completionTrackedSequences)
+  }
+
   private static func rawCommandAudioOutputs(_ rawString: String) -> [RawAudioOutputCommand] {
     var commands: [RawAudioOutputCommand] = []
     for segment in rawCommandSegments(rawString) {
@@ -1287,43 +1435,178 @@ class MPVController: NSObject {
     snapshot.directAudioOutputGeneration &+= 1
     snapshot.audioOutputIntentGeneration &+= 1
     snapshot.pendingRawAudioOutputIntents.removeAll { $0.intentSequence <= intentSequence }
-    snapshot.pendingRawAudioOutputSelectors.removeAll { $0.intentSequence <= intentSequence }
+    snapshot.pendingRawAudioOutputCommands.removeAll { $0.intentSequence <= intentSequence }
+    snapshot.rawAudioOutputResolutionInFlight = false
   }
 
   private func invalidateDirectAudioOutputIntent(intentSequence: UInt64) {
+    _ = registerRawAudioOutputCommand(intentSequence: intentSequence, requestedOutput: nil,
+                                       needsReply: false)
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(250)) { [weak self] in
+      self?.scheduleRawAudioOutputCommandReconciliation()
+    }
+  }
+
+  private func registerRawAudioOutputCommand(intentSequence: UInt64,
+                                              requestedOutput: String?,
+                                              needsReply: Bool) -> UInt64? {
     $airPlaySnapshot.withLock { snapshot in
-      guard intentSequence > snapshot.directAudioOutputIntentSequence else { return }
+      guard intentSequence > snapshot.directAudioOutputIntentSequence else { return nil }
+      snapshot.nextRawAudioOutputCommandReplyId &+= 1
+      let replyUserdata = needsReply
+        ? UserData.rawAudioOutputCommandBase &+ snapshot.nextRawAudioOutputCommandReplyId
+        : nil
+      let fallback = snapshot.pendingRawAudioOutputCommands.first?.fallbackAudioOutput
+        ?? [snapshot.directAudioOutput, snapshot.audioOutput]
+          .compactMap({ $0 }).first(where: { $0 != "null" })
       snapshot.directAudioOutput = nil
       snapshot.directAudioOutputIntentSequence = intentSequence
       snapshot.directAudioOutputGeneration &+= 1
       snapshot.audioOutputIntentGeneration &+= 1
       snapshot.pendingRawAudioOutputIntents.removeAll { $0.intentSequence <= intentSequence }
-      snapshot.pendingRawAudioOutputSelectors.append(MPVAirPlayPendingAudioOutputSelector(
+      snapshot.pendingRawAudioOutputCommands.append(MPVAirPlayPendingRawAudioOutputCommand(
         intentSequence: intentSequence,
-        observedGenerationAtAcceptance: snapshot.audioOutputObservedGeneration))
+        replyUserdata: replyUserdata,
+        requestedOutput: requestedOutput,
+        fallbackAudioOutput: fallback,
+        commandResult: needsReply ? nil : 0))
+      snapshot.rawAudioOutputResolutionInFlight = false
+      return replyUserdata
     }
   }
 
-  /// Resolves an accepted async selector only after a reported AO value that does not match an
-  /// output write currently owned by the AirPlay bridge.
-  func resolveRawAudioOutputSelector(_ output: String, intentSequence: UInt64,
-                                    observedGeneration: UInt64) {
+  private func rejectRawAudioOutputCommand(_ replyUserdata: UInt64) {
     $airPlaySnapshot.withLock { snapshot in
-      guard let selector = snapshot.pendingRawAudioOutputSelectors.first,
-            selector.intentSequence == intentSequence,
-            observedGeneration > selector.observedGenerationAtAcceptance else {
+      guard let index = snapshot.pendingRawAudioOutputCommands.firstIndex(
+        where: { $0.replyUserdata == replyUserdata }) else { return }
+      let selector = snapshot.pendingRawAudioOutputCommands.remove(at: index)
+      if snapshot.pendingRawAudioOutputCommands.isEmpty,
+         snapshot.directAudioOutputIntentSequence == selector.intentSequence,
+         !snapshot.pendingRawAudioOutputIntents.contains(where: {
+           $0.intentSequence > selector.intentSequence
+         }) {
+        snapshot.directAudioOutput = selector.fallbackAudioOutput
+        snapshot.directAudioOutputGeneration &+= 1
+        snapshot.audioOutputIntentGeneration &+= 1
+      }
+      snapshot.rawAudioOutputResolutionInFlight = false
+    }
+    DispatchQueue.main.async { [weak self] in
+      self?.player.airPlayAudio.playbackSnapshotChanged()
+    }
+  }
+
+  /// Records command completion; a fresh AO readback after every queued selector has completed
+  /// resolves no-op selectors and coalesced property changes without guessing from event order.
+  @discardableResult
+  private func rawAsyncAudioOutputCommandCompleted(_ replyUserdata: UInt64,
+                                                       result: Int32) -> Bool {
+    let matched = $airPlaySnapshot.withLock { snapshot -> Bool in
+      guard let index = snapshot.pendingRawAudioOutputCommands.firstIndex(
+        where: { $0.replyUserdata == replyUserdata }) else { return false }
+      snapshot.pendingRawAudioOutputCommands[index].commandResult = result
+      return true
+    }
+    if matched { scheduleRawAudioOutputCommandReconciliation() }
+    return matched
+  }
+
+  private func scheduleRawAudioOutputCommandReconciliation() {
+    airPlaySnapshotQueue.async { [weak self] in
+      guard let self else { return }
+      self.airPlaySnapshotCallLock.lock()
+      let sampleState = self.$airPlaySnapshot.withLock { snapshot -> (
+        selectorReplyIds: [UInt64?], latestIntentSequence: UInt64, fallbackAudioOutput: String?,
+        hasSuccessfulCommand: Bool, audioOutputGeneration: UInt64, intentGeneration: UInt64
+      )? in
+        guard !self.hasReceivedShutdownEvent, self.mpv != nil,
+              !snapshot.rawAudioOutputResolutionInFlight,
+              !snapshot.pendingRawAudioOutputCommands.isEmpty,
+              snapshot.pendingRawAudioOutputCommands.allSatisfy({ $0.commandResult != nil }),
+              snapshot.audioOutputChangesInFlight == 0 else { return nil }
+        let latestIntentSequence = snapshot.pendingRawAudioOutputCommands
+          .map(\.intentSequence).max() ?? 0
+        guard !snapshot.pendingRawAudioOutputIntents.contains(where: {
+          $0.intentSequence > latestIntentSequence
+        }) else { return nil }
+        snapshot.rawAudioOutputResolutionInFlight = true
+        return (
+          snapshot.pendingRawAudioOutputCommands.map(\.replyUserdata),
+          latestIntentSequence,
+          snapshot.pendingRawAudioOutputCommands.first?.fallbackAudioOutput,
+          snapshot.pendingRawAudioOutputCommands.contains(where: { ($0.commandResult ?? -1) >= 0 }),
+          snapshot.audioOutputGeneration,
+          snapshot.audioOutputIntentGeneration
+        )
+      }
+      guard let sampleState else {
+        self.airPlaySnapshotCallLock.unlock()
         return
       }
-      snapshot.directAudioOutput = output
-      snapshot.directAudioOutputGeneration &+= 1
-      snapshot.audioOutputIntentGeneration &+= 1
-      snapshot.pendingRawAudioOutputSelectors.removeFirst()
-      if !snapshot.pendingRawAudioOutputSelectors.isEmpty {
-        let nextSelector = snapshot.pendingRawAudioOutputSelectors[0]
-        snapshot.pendingRawAudioOutputSelectors[0] = MPVAirPlayPendingAudioOutputSelector(
-          intentSequence: nextSelector.intentSequence,
-          observedGenerationAtAcceptance:
-            max(nextSelector.observedGenerationAtAcceptance, observedGeneration))
+      let audioOutput = self.getString(MPVOption.Audio.ao)
+      self.airPlaySnapshotCallLock.unlock()
+
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        let observation = self.$airPlaySnapshot.withLock { snapshot -> (String, UInt64)? in
+          guard snapshot.rawAudioOutputResolutionInFlight,
+                snapshot.pendingRawAudioOutputCommands.map(\.replyUserdata)
+                  == sampleState.selectorReplyIds,
+                snapshot.audioOutputGeneration == sampleState.audioOutputGeneration,
+                snapshot.audioOutputIntentGeneration == sampleState.intentGeneration,
+                snapshot.audioOutputChangesInFlight == 0,
+                !snapshot.pendingRawAudioOutputIntents.contains(where: {
+                  $0.intentSequence > sampleState.latestIntentSequence
+                }) else {
+            snapshot.rawAudioOutputResolutionInFlight = false
+            return nil
+          }
+          if let audioOutput {
+            self.observeAudioOutput(audioOutput, in: &snapshot)
+          }
+          let latestSuccessfulCommand = snapshot.pendingRawAudioOutputCommands
+            .last(where: { ($0.commandResult ?? -1) >= 0 })
+          let resolvedOutput: String?
+          if latestSuccessfulCommand?.requestedOutput == "null" {
+            resolvedOutput = "null"
+          } else if sampleState.hasSuccessfulCommand {
+            resolvedOutput = audioOutput.flatMap({ $0 == "null" ? nil : $0 })
+              ?? sampleState.fallbackAudioOutput
+          } else {
+            resolvedOutput = sampleState.fallbackAudioOutput
+          }
+          snapshot.directAudioOutput = resolvedOutput
+          snapshot.directAudioOutputIntentSequence = max(
+            snapshot.directAudioOutputIntentSequence, sampleState.latestIntentSequence)
+          snapshot.directAudioOutputGeneration &+= 1
+          snapshot.audioOutputIntentGeneration &+= 1
+          snapshot.pendingRawAudioOutputCommands.removeAll {
+            $0.intentSequence <= sampleState.latestIntentSequence
+          }
+          snapshot.rawAudioOutputResolutionInFlight = false
+          guard let audioOutput else { return nil }
+          return (audioOutput, snapshot.audioOutputObservedGeneration)
+        }
+        if let (audioOutput, generation) = observation {
+          self.player.airPlayAudio.audioOutputObservationChanged(audioOutput,
+                                                                generation: generation)
+        } else {
+          self.player.airPlayAudio.playbackSnapshotChanged()
+          let shouldRetry = self.$airPlaySnapshot.withLock { snapshot in
+            !snapshot.rawAudioOutputResolutionInFlight
+              && !snapshot.pendingRawAudioOutputCommands.isEmpty
+              && snapshot.pendingRawAudioOutputCommands.allSatisfy({ $0.commandResult != nil })
+              && !snapshot.pendingRawAudioOutputIntents.contains(where: { intent in
+                intent.intentSequence > (snapshot.pendingRawAudioOutputCommands
+                  .map(\.intentSequence).max() ?? 0)
+              })
+          }
+          if shouldRetry {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+              self?.scheduleRawAudioOutputCommandReconciliation()
+            }
+          }
+        }
       }
     }
   }
@@ -1361,10 +1644,54 @@ class MPVController: NSObject {
     }
   }
 
+  /// Resolves the accepted selector batch against one readback after its command replies settle.
+  /// One final value is authoritative for a batch, including when intermediate property events
+  /// were coalesced or the selectors left AO unchanged.
+  private func resolveRawAudioOutputCommandsFromSample(
+    _ sampledOutput: String?, assumeCommandsCompleted: Bool,
+    in snapshot: inout MPVAirPlaySnapshot
+  ) {
+    guard !snapshot.pendingRawAudioOutputCommands.isEmpty else { return }
+    if assumeCommandsCompleted {
+      for index in snapshot.pendingRawAudioOutputCommands.indices
+        where snapshot.pendingRawAudioOutputCommands[index].commandResult == nil {
+        snapshot.pendingRawAudioOutputCommands[index].commandResult = 0
+      }
+    }
+    guard snapshot.pendingRawAudioOutputCommands.allSatisfy({ $0.commandResult != nil }),
+          let latestIntentSequence = snapshot.pendingRawAudioOutputCommands
+            .map(\.intentSequence).max(),
+          !snapshot.pendingRawAudioOutputIntents.contains(where: {
+            $0.intentSequence > latestIntentSequence
+          }) else { return }
+    let selectors = snapshot.pendingRawAudioOutputCommands.filter {
+      $0.intentSequence <= latestIntentSequence
+    }
+    let fallbackOutput = selectors.first?.fallbackAudioOutput
+    let lastSuccessfulCommand = selectors.last(where: { ($0.commandResult ?? -1) >= 0 })
+    let selectedOutput: String?
+    if lastSuccessfulCommand?.requestedOutput == "null" {
+      selectedOutput = "null"
+    } else if lastSuccessfulCommand != nil {
+      selectedOutput = sampledOutput.flatMap({ $0 == "null" ? nil : $0 }) ?? fallbackOutput
+    } else {
+      selectedOutput = fallbackOutput
+    }
+    snapshot.directAudioOutput = selectedOutput
+    snapshot.directAudioOutputIntentSequence = max(
+      snapshot.directAudioOutputIntentSequence, latestIntentSequence)
+    snapshot.directAudioOutputGeneration &+= 1
+    snapshot.audioOutputIntentGeneration &+= 1
+    snapshot.pendingRawAudioOutputCommands.removeAll {
+      $0.intentSequence <= latestIntentSequence
+    }
+    snapshot.rawAudioOutputResolutionInFlight = false
+  }
+
   private func recordAcceptedRawAsyncAudioOutputIntent(_ output: String, intentSequence: UInt64) {
     $airPlaySnapshot.withLock { snapshot in
       guard intentSequence > snapshot.directAudioOutputIntentSequence else { return }
-      snapshot.pendingRawAudioOutputSelectors.removeAll { $0.intentSequence <= intentSequence }
+      snapshot.pendingRawAudioOutputCommands.removeAll { $0.intentSequence <= intentSequence }
       if snapshot.audioOutput == output || output == "null" {
         // `null` is a valid output used by Reel itself, so a later bridge write cannot prove
         // whether a pending request to select it came from the user or from AirPlay.
@@ -1406,6 +1733,19 @@ class MPVController: NSObject {
       chkErr(returnValue)
     }
     return returnValue
+  }
+
+  @discardableResult
+  private func asyncRawCommand(_ arguments: [String], replyUserdata: UInt64) -> Int32 {
+    guard mpv != nil else { return MPV_ERROR_UNINITIALIZED.rawValue }
+    var cargs = arguments.map { UnsafePointer<CChar>(strdup($0)) }
+    cargs.append(nil)
+    defer {
+      for pointer in cargs where pointer != nil {
+        free(UnsafeMutablePointer(mutating: pointer!))
+      }
+    }
+    return mpv_command_async(mpv, replyUserdata, &cargs)
   }
 
   /// Submit an AirPlay request away from AppKit and report immediate errors on the main queue.
@@ -1672,7 +2012,9 @@ class MPVController: NSObject {
     }
     airPlayAudioOutputWriteLock.unlock()
     DispatchQueue.main.async { [weak self] in
-      self?.player.airPlayAudio.playbackSnapshotChanged()
+      guard let self else { return }
+      self.scheduleRawAudioOutputCommandReconciliation()
+      self.player.airPlayAudio.playbackSnapshotChanged()
     }
   }
 
@@ -2089,7 +2431,9 @@ class MPVController: NSObject {
 
     case MPV_EVENT_COMMAND_REPLY:
       let reply = event.pointee.reply_userdata
-      if reply == MPVController.UserData.screenshot {
+      if rawAsyncAudioOutputCommandCompleted(reply, result: event.pointee.error) {
+        break
+      } else if reply == MPVController.UserData.screenshot {
         let code = event.pointee.error
         guard code >= 0 else {
           let error = String(cString: mpv_error_string(code))
@@ -2227,13 +2571,21 @@ class MPVController: NSObject {
                     // An observed ao event after this sample is newer than the queried value.
                     if sampleState.canPublish,
                        snapshot.audioOutputGeneration == sampleState.generation,
-                       snapshot.audioOutputChangesInFlight == 0,
-                       let audioOutput {
-                      // Reconcile raw async AO intent here too: MPV may have dropped the property
-                      // event that would otherwise confirm the pending request.
-                      self.observeAudioOutput(audioOutput, in: &snapshot)
-                      recoveredAudioOutputObservation =
-                        (audioOutput, snapshot.audioOutputObservedGeneration)
+                       snapshot.audioOutputChangesInFlight == 0 {
+                      if let audioOutput {
+                        // Reconcile raw async AO intent here too: MPV may have dropped the property
+                        // event that would otherwise confirm the pending request.
+                        self.observeAudioOutput(audioOutput, in: &snapshot)
+                      }
+                      // mpv_wait_async_requests() has settled every reply-bearing selector, even
+                      // when overflow dropped one or more replies. One final sample resolves the
+                      // entire pending selector batch.
+                      self.resolveRawAudioOutputCommandsFromSample(
+                        audioOutput, assumeCommandsCompleted: true, in: &snapshot)
+                      if let audioOutput {
+                        recoveredAudioOutputObservation =
+                          (audioOutput, snapshot.audioOutputObservedGeneration)
+                      }
                     }
                   }
                 }
@@ -2315,6 +2667,7 @@ class MPVController: NSObject {
             observedAudioOutput.value, generation: observedAudioOutput.generation)
         }
       }
+      scheduleRawAudioOutputCommandReconciliation()
     case MPVOption.PlaybackControl.rebaseStartTime,
          MPVProperty.duration, MPVProperty.demuxerStartTime, MPVProperty.streamOpenFilename:
       DispatchQueue.main.async { self.player.airPlayAudio.playbackSnapshotChanged() }

@@ -82,17 +82,17 @@ saved order matches their libmpv writes. The raw-command scanner respects quoted
 tracks `set`, `cycle`, and `cycle-values` AO actions with each command's own prefixes. An async
 raw `set ao` with a literal target updates the saved intent only after mpv accepts the command and
 reports that value (including after event-queue recovery); an older completion cannot replace a
-newer confirmed choice. A literal `null` target is recorded at acceptance because AirPlay itself
-uses that valid output, so a later property event cannot identify which writer selected it. A
-rejected raw async command never leaves a pending target. Accepted async selectors and expanded
-targets have no identifiable completion value, so Reel retires an older explicit target and follows
-mpv's reported AO value without inferring the selector's result from an unrelated change. It keeps
-the prior output only as a fallback while selector observations are pending, processes individual AO
-observations in order, and ignores a matching event from an active bridge setter. Pending literal
-targets and selectors also prevent a stale snapshot from refreshing the saved output or a queued
-restore from superseding that intent. The synchronous fallback checks the saved intent epoch under
-the AO setter lock before writing. An event-fed `ao = null` is retained when no route restore is in
-flight.
+newer confirmed choice. An explicit literal `null` remains a direct user intent after its async
+command reply confirms it; a property event alone cannot distinguish that value from AirPlay's
+own `null` write. Async AO commands use libmpv's reply-bearing API; after all accepted commands in
+a batch complete, Reel reads AO once and resolves the batch. This settles no-op selectors and
+coalesced changes without using an older queued property event as the selector result. Overflow
+recovery uses its final AO readback to resolve every accepted async AO command in the batch. Reel
+keeps the prior output as a fallback while an async AO command is pending. Pending async AO commands
+also prevent a stale snapshot from refreshing the saved output or a queued restore from superseding
+that intent. The synchronous fallback checks the saved intent epoch under the AO setter lock before
+writing. An event-fed
+`ao = null` is retained when no route restore is in flight.
 A failed queued restore's synchronous fallback must not replace that user intent. Preserve an
 explicit direct `ao = null` choice through disconnect as well. If a local output change races AirPlay
 engagement or arrives while the bridge is carrying audio, retain that output for disconnect and
