@@ -792,7 +792,8 @@ final class AirPlayAudioBridge: NSObject {
     // A fast route reconnect can observe the old event-fed `ao = null` before a queued restore
     // reaches mpv. Keep the last real output as the source for this and later disengages.
     _ = rememberLatestDirectAudioOutput(from: snapshot)
-    if let directAudioOutput = snapshot.directAudioOutput, directAudioOutput != "null" {
+    if let directAudioOutput = snapshot.directAudioOutput,
+       snapshot.directAudioOutputGeneration > 0 {
       savedAudioOutput = directAudioOutput
     } else if let audioOutput = snapshot.audioOutput, audioOutput != "null" {
       savedAudioOutput = audioOutput
@@ -1647,7 +1648,7 @@ final class AirPlayAudioBridge: NSObject {
       }
     }
     if !routeActive, let directAudioOutput = snapshot.directAudioOutput,
-       directAudioOutput != "null" {
+       snapshot.directAudioOutputGeneration > 0 {
       restoreLatestDirectAudioOutputIfNeeded(directAudioOutput, snapshot: snapshot)
     }
     guard routeActive else { return }
@@ -1662,7 +1663,7 @@ final class AirPlayAudioBridge: NSObject {
     }
     lastProcessedDirectAudioOutputGeneration = snapshot.directAudioOutputGeneration
     guard let audioOutput = snapshot.directAudioOutput else { return nil }
-    if audioOutput != "null" { savedAudioOutput = audioOutput }
+    savedAudioOutput = audioOutput
     return audioOutput
   }
 
@@ -1716,11 +1717,13 @@ final class AirPlayAudioBridge: NSObject {
           activeMPVCommand?.restoreAudioOutputToken == nil,
           !mpvCommandQueue.contains(where: { $0.restoreAudioOutputToken != nil }),
           let snapshot = player?.mpv?.airPlayPlaybackSnapshot,
-          let audioOutput = snapshot.audioOutput,
-          audioOutput != "null" else { return }
-    if snapshot.directAudioOutputGeneration > 0,
-       snapshot.directAudioOutput != audioOutput { return }
-    savedAudioOutput = audioOutput
+          let audioOutput = snapshot.audioOutput else { return }
+    if snapshot.directAudioOutputGeneration > 0 {
+      guard snapshot.directAudioOutput == audioOutput else { return }
+      savedAudioOutput = audioOutput
+    } else if audioOutput != "null" {
+      savedAudioOutput = audioOutput
+    }
   }
 
   private static func seconds(_ time: CMTime) -> Double? {

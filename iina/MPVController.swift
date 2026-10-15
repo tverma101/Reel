@@ -978,11 +978,27 @@ class MPVController: NSObject {
 
   func command(rawString: String, level: Logger.Level = .debug) -> Int32 {
     log("Run command: \(rawString)", level: level)
+    // Key-binding actions enter through mpv_command_string instead of command(_:args:). Track
+    // the common direct `set ao VALUE` form with the same ordering as typed synchronous setters.
+    let setsAudioOutput = Self.rawCommandSetsAudioOutput(rawString)
+    let audioOutputGenerationBeforeSet = setsAudioOutput ? beginSynchronousAudioOutputWrite() : nil
     let changesPlaylist = MPVPlaylistMutationPolicy.invalidatesSnapshot(in: rawString)
     if changesPlaylist { player.playlistStructureWillChange() }
     let result = mpv_command_string(mpv, rawString)
+    if let audioOutputGenerationBeforeSet {
+      let output = result >= 0 ? getString(MPVOption.Audio.ao) : nil
+      finishSynchronousAudioOutputWrite(output, result: result,
+                                        generationBeforeSet: audioOutputGenerationBeforeSet,
+                                        recordsDirectAudioOutputIntent: true)
+    }
     if changesPlaylist { player.playlistStructureDidChange() }
     return result
+  }
+
+  private static func rawCommandSetsAudioOutput(_ rawString: String) -> Bool {
+    let command = rawString.trimmingCharacters(in: .whitespacesAndNewlines)
+    return command.range(of: #"^set\s+['\"]?ao['\"]?(?:\s|=)"#,
+                         options: .regularExpression) != nil
   }
 
   @discardableResult
@@ -1051,7 +1067,8 @@ class MPVController: NSObject {
       if self.hasReceivedShutdownEvent || self.mpv == nil {
         result = MPV_ERROR_UNINITIALIZED.rawValue
       } else {
-        let setResult = self.setString(MPVOption.Audio.ao, output, level: .warning)
+        let setResult = self.setString(MPVOption.Audio.ao, output, level: .warning,
+                                       recordsDirectAudioOutputIntent: false)
         result = setResult < 0 ? setResult : self.command(rawString: "ao-reload", level: .warning)
       }
       self.airPlaySnapshotCallLock.unlock()
@@ -1185,13 +1202,20 @@ class MPVController: NSObject {
 
   @discardableResult
   func setString(_ name: String, _ value: String, level: Logger.Level = .debug) -> Int32 {
+    setString(name, value, level: level, recordsDirectAudioOutputIntent: true)
+  }
+
+  @discardableResult
+  private func setString(_ name: String, _ value: String, level: Logger.Level,
+                         recordsDirectAudioOutputIntent: Bool) -> Int32 {
     log("Set property: \(name)=\(value)", level: level)
     let isAudioOutput = name == MPVOption.Audio.ao
     let audioOutputGenerationBeforeSet = isAudioOutput ? beginSynchronousAudioOutputWrite() : nil
     let result = mpv_set_property_string(mpv, name, value)
     if let audioOutputGenerationBeforeSet {
       finishSynchronousAudioOutputWrite(value, result: result,
-                                        generationBeforeSet: audioOutputGenerationBeforeSet)
+                                        generationBeforeSet: audioOutputGenerationBeforeSet,
+                                        recordsDirectAudioOutputIntent: recordsDirectAudioOutputIntent)
     }
     return result
   }
@@ -1207,16 +1231,21 @@ class MPVController: NSObject {
   }
 
   /// Publishes the newest successful direct AO intent and then releases the setter lock.
-  private func finishSynchronousAudioOutputWrite(_ value: String, result: Int32,
-                                                 generationBeforeSet: UInt64) {
+  private func finishSynchronousAudioOutputWrite(_ value: String?, result: Int32,
+                                                 generationBeforeSet: UInt64,
+                                                 recordsDirectAudioOutputIntent: Bool = true) {
     $airPlaySnapshot.withLock { snapshot in
       if result >= 0 {
-        // A newer observed property event may have completed while this caller was in libmpv.
-        if snapshot.audioOutputGeneration == generationBeforeSet {
-          snapshot.audioOutput = value
+        if let value {
+          // A newer observed property event may have completed while this caller was in libmpv.
+          if snapshot.audioOutputGeneration == generationBeforeSet {
+            snapshot.audioOutput = value
+          }
+          if recordsDirectAudioOutputIntent {
+            snapshot.directAudioOutput = value
+            snapshot.directAudioOutputGeneration &+= 1
+          }
         }
-        snapshot.directAudioOutput = value
-        snapshot.directAudioOutputGeneration &+= 1
       }
       snapshot.audioOutputChangesInFlight = max(0, snapshot.audioOutputChangesInFlight - 1)
       snapshot.audioOutputGeneration &+= 1
