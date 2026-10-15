@@ -59,8 +59,9 @@ struct AirPlaySpeakerClock {
 
   @discardableResult
   mutating func observe(position: Double?, at now: Date = Date(), epsilon: Double = 0.001) -> Bool {
-    guard let position = Self.valid(position), epsilon.isFinite, epsilon >= 0 else { return false }
+    guard epsilon.isFinite, epsilon >= 0 else { return false }
     if monitoringStartedAt == nil { monitoringStartedAt = now }
+    guard let position = Self.valid(position) else { return false }
     guard let lastPosition else {
       self.lastPosition = position
       return false
@@ -516,6 +517,11 @@ final class AirPlayAudioBridge: NSObject {
     let operation: Operation
     let requiredForOutput: Bool
     let coalescingKey: String?
+    /// A synchronous recovery value to use if an async restore is rejected or loses its reply.
+    let restoreAudioOutput: String?
+    /// Identifies one disengage pair so its fallback cannot remove a later route's restore.
+    let restoreAudioOutputToken: UInt64?
+    var replyUserdata: UInt64? = nil
   }
 
   private struct Selection: Equatable {
@@ -544,6 +550,13 @@ final class AirPlayAudioBridge: NSObject {
   private var holdTimer: Timer?
   private var mpvCommandQueue: [MPVCommandRequest] = []
   private var activeMPVCommand: MPVCommandRequest?
+  private var nextMPVCommandReplyId: UInt64 = 0
+  private var nextAudioOutputRestoreToken: UInt64 = 0
+  private var waitingForMPVEventOverflowRecovery = false
+  private var activeMPVCommandNeedsResubmission = false
+  private var activeMPVCommandSubmissionAttempts = 0
+  /// Main-thread callbacks that must run after every submitted bridge command has replied.
+  private var mpvCommandDrainCallbacks: [() -> Void] = []
 
   /// The picker sends this player to a speaker other than the Mac's (or the local test is on).
   private var routeActive = false
@@ -551,7 +564,9 @@ final class AirPlayAudioBridge: NSObject {
   private var routeDescription = ""
   /// This file's audio could not be bridged, so mpv plays it on the Mac until the next file.
   private var bridgeFailedForFile = false
-  /// mpv's `ao` from before the bridge switched it to `null`.
+  /// Whether Reel currently owns audio through the AVPlayer bridge.
+  private var bridgeEngaged = false
+  /// The last known local mpv output. Retain it across route transitions while `ao` is `null`.
   private var savedAudioOutput: String?
   private var latencyCompensation = 0.0
 
@@ -582,7 +597,7 @@ final class AirPlayAudioBridge: NSObject {
   private var speakerClock = AirPlaySpeakerClock()
 
   /// mpv's own audio output is off; the hidden AVPlayer is what can be heard.
-  var isEngaged: Bool { savedAudioOutput != nil }
+  var isEngaged: Bool { bridgeEngaged }
 
   /// The hidden AVPlayer is playing the current file's audio.
   var isCarrying: Bool { isEngaged && itemSelection != nil }
@@ -747,10 +762,7 @@ final class AirPlayAudioBridge: NSObject {
         comment: "The bridge cannot read the current audio track"))
       return
     }
-    if !isEngaged {
-      guard player.mpv.airPlayPlaybackSnapshot.audioOutput != nil else { return }
-      engage()
-    }
+    if !isEngaged, !engage() { return }
     switch selection {
     case .pending:
       break
@@ -763,10 +775,20 @@ final class AirPlayAudioBridge: NSObject {
     }
   }
 
-  private func engage() {
-    guard let mpv = player?.mpv else { return }
+  @discardableResult
+  private func engage() -> Bool {
+    guard let mpv = player?.mpv else { return false }
     let snapshot = mpv.airPlayPlaybackSnapshot
-    savedAudioOutput = snapshot.audioOutput ?? ""
+    // A fast route reconnect can observe the old event-fed `ao = null` before a queued restore
+    // reaches mpv. Keep the last real output as the source for this and later disengages.
+    if let audioOutput = snapshot.audioOutput, audioOutput != "null" {
+      savedAudioOutput = audioOutput
+    }
+    guard let savedAudioOutput else {
+      log("cannot engage: mpv has not reported a local audio output", level: .warning)
+      return false
+    }
+    bridgeEngaged = true
     latencyCompensation = UserDefaults.standard.double(forKey: Self.latencyKey)
     enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
     enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
@@ -781,7 +803,8 @@ final class AirPlayAudioBridge: NSObject {
     let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
     RunLoop.main.add(timer, forMode: .common)
     syncTimer = timer
-    log("engaged; mpv audio output \(savedAudioOutput ?? "") switched to null, latency compensation \(latencyCompensation)s")
+    log("engaged; mpv audio output \(savedAudioOutput) switched to null, latency compensation \(latencyCompensation)s")
+    return true
   }
 
   private func disengage() {
@@ -794,11 +817,15 @@ final class AirPlayAudioBridge: NSObject {
     syncTimer = nil
     mpvSnapshotTimer?.invalidate()
     mpvSnapshotTimer = nil
+    bridgeEngaged = false
     guard player?.mpv != nil, let saved = savedAudioOutput else { return }
-    savedAudioOutput = nil
     let output = saved.isEmpty ? (Preference.bool(for: .audioDriverEnableAVFoundation) ? "avfoundation" : "coreaudio") : saved
-    enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, output], requiredForOutput: true)
-    enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
+    nextAudioOutputRestoreToken &+= 1
+    let restoreToken = nextAudioOutputRestoreToken
+    enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, output], requiredForOutput: true,
+                      restoreAudioOutput: output, restoreAudioOutputToken: restoreToken)
+    enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true,
+                      restoreAudioOutput: output, restoreAudioOutputToken: restoreToken)
     log("disengaged; mpv audio output restored to \(output)")
   }
 
@@ -1301,6 +1328,92 @@ final class AirPlayAudioBridge: NSObject {
     releaseFile()
   }
 
+  /// Runs after this bridge's submitted mpv commands have completed, without blocking AppKit.
+  func whenMPVCommandsDrained(_ completion: @escaping () -> Void) {
+    guard activeMPVCommand != nil || !mpvCommandQueue.isEmpty || waitingForMPVEventOverflowRecovery else {
+      DispatchQueue.main.async(execute: completion)
+      return
+    }
+    mpvCommandDrainCallbacks.append(completion)
+  }
+
+  /// Pauses bridge command advancement until libmpv confirms all accepted async requests finished.
+  func beginMPVEventQueueOverflowRecovery() -> UInt64? {
+    waitingForMPVEventOverflowRecovery = true
+    return activeMPVCommand?.replyUserdata
+  }
+
+  /// Completes a possibly lost reply only after MPVController's async-request barrier has returned.
+  func finishMPVEventQueueOverflowRecovery(for replyUserdata: UInt64?) {
+    let activeCommandMatches = replyUserdata != nil &&
+      activeMPVCommand?.replyUserdata == replyUserdata
+    let shouldResubmit = activeCommandMatches && activeMPVCommandNeedsResubmission &&
+      activeMPVCommandSubmissionAttempts < 3
+    if activeCommandMatches && activeMPVCommandNeedsResubmission && !shouldResubmit {
+      log("mpv kept rejecting an AirPlay command after \(activeMPVCommandSubmissionAttempts) submissions; falling back",
+          level: .warning)
+    }
+    if shouldResubmit { activeMPVCommandNeedsResubmission = false }
+    waitingForMPVEventOverflowRecovery = false
+    if shouldResubmit {
+      submitActiveMPVCommand()
+      return
+    }
+    if let replyUserdata, activeMPVCommand?.replyUserdata == replyUserdata {
+      // Timing writes are followed by a final restore during stop/quit. Output switches cannot be
+      // trusted without their reply, so take the normal fallback path if that acknowledgement was
+      // lost in the overflow.
+      mpvCommandCompleted(MPV_ERROR_EVENT_QUEUE_FULL.rawValue, replyUserdata: replyUserdata)
+    }
+    runNextMPVCommand()
+  }
+
+  /// The async API rejected this request because the event queue is full; no command was accepted.
+  func mpvCommandSubmissionWasRejected(replyUserdata: UInt64) {
+    guard activeMPVCommand?.replyUserdata == replyUserdata else { return }
+    activeMPVCommandNeedsResubmission = true
+    activeMPVCommandSubmissionAttempts += 1
+  }
+
+  /// Releases pending drain callbacks when mpv shuts down outside Reel's normal sequence.
+  func playerDidShutDown() {
+    holdGeneration += 1
+    holding = false
+    stopHoldTimer()
+    waitingForMPVAudio = false
+    audioStartupClock.reset()
+    pendingHoldReason = nil
+    lastMPVAudioTime = nil
+    resetAudioClockMotionTracking()
+    syncTimer?.invalidate()
+    syncTimer = nil
+    mpvSnapshotTimer?.invalidate()
+    mpvSnapshotTimer = nil
+
+    // The MPV_EVENT_SHUTDOWN path cannot safely call replaceItem(with:), because that helper
+    // restores timing through libmpv. Tear down the hidden AVPlayer directly so external mpv quit
+    // cannot leave its current AirPlay item audible after Reel's player has shut down.
+    playheadFeeder.attach(nil)
+    loader?.invalidate()
+    loader = nil
+    itemStatusObservation = nil
+    avPlayer?.pause()
+    avPlayer?.replaceCurrentItem(with: nil)
+    itemSelection = nil
+    itemGeneration += 1
+
+    audioDelayCorrection = 0
+    holdSpeedApplied = false
+    bridgeEngaged = false
+    savedAudioOutput = nil
+    activeMPVCommand = nil
+    activeMPVCommandNeedsResubmission = false
+    activeMPVCommandSubmissionAttempts = 0
+    mpvCommandQueue.removeAll()
+    waitingForMPVEventOverflowRecovery = false
+    notifyMPVCommandQueueDrained()
+  }
+
   /// Hands mpv's speed and delay back to the user and drops the item. mpv keeps both options
   /// across files, so this only writes them while they still hold the bridge's values: by now mpv
   /// may already have applied the next file's saved settings.
@@ -1351,15 +1464,21 @@ final class AirPlayAudioBridge: NSObject {
 
   private func enqueueMPVCommand(_ command: MPVCommand, arguments: [String?],
                                  requiredForOutput: Bool = false,
-                                 coalescingKey: String? = nil) {
+                                 coalescingKey: String? = nil,
+                                 restoreAudioOutput: String? = nil,
+                                 restoreAudioOutputToken: UInt64? = nil) {
     enqueueMPVRequest(MPVCommandRequest(operation: .command(command, arguments),
                                     requiredForOutput: requiredForOutput,
-                                    coalescingKey: coalescingKey))
+                                    coalescingKey: coalescingKey,
+                                    restoreAudioOutput: restoreAudioOutput,
+                                    restoreAudioOutputToken: restoreAudioOutputToken))
   }
 
   private func enqueueMPVProperty(_ operation: MPVCommandRequest.Operation, coalescingKey: String) {
     enqueueMPVRequest(MPVCommandRequest(operation: operation, requiredForOutput: false,
-                                        coalescingKey: coalescingKey))
+                                        coalescingKey: coalescingKey,
+                                        restoreAudioOutput: nil,
+                                        restoreAudioOutputToken: nil))
   }
 
   private func hasPendingMPVProperty(_ name: String) -> Bool {
@@ -1385,44 +1504,128 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   private func runNextMPVCommand() {
-    guard activeMPVCommand == nil, !mpvCommandQueue.isEmpty,
-          let player, player.info.state != .shutDown, let mpv = player.mpv else { return }
-    let request = mpvCommandQueue.removeFirst()
-    activeMPVCommand = request
-    let result: Int32
-    switch request.operation {
-    case .command(let command, let arguments):
-      result = mpv.asyncCommand(command, args: arguments, checkError: false,
-                                replyUserdata: MPVController.UserData.airPlayAudioCommand,
-                                level: .verbose)
-    case .stringProperty(let name, let value):
-      result = mpv.setStringAsync(name, value, replyUserdata: MPVController.UserData.airPlayAudioCommand,
-                                  level: .verbose)
-    case .doubleProperty(let name, let value):
-      result = mpv.setDoubleAsync(name, value, replyUserdata: MPVController.UserData.airPlayAudioCommand,
-                                  level: .verbose)
+    guard !waitingForMPVEventOverflowRecovery, activeMPVCommand == nil else { return }
+    guard !mpvCommandQueue.isEmpty else {
+      refreshSavedAudioOutputFromSnapshot()
+      notifyMPVCommandQueueDrained()
+      return
     }
-    if result < 0 { mpvCommandCompleted(result) }
+    guard let player, player.info.state != .shutDown, let mpv = player.mpv else { return }
+    var request = mpvCommandQueue.removeFirst()
+    nextMPVCommandReplyId &+= 1
+    let replyUserdata = MPVController.UserData.airPlayAudioCommandBase &+ nextMPVCommandReplyId
+    request.replyUserdata = replyUserdata
+    activeMPVCommand = request
+    activeMPVCommandNeedsResubmission = false
+    activeMPVCommandSubmissionAttempts = 0
+    submitActiveMPVCommand()
+  }
+
+  private func submitActiveMPVCommand() {
+    guard let player, player.info.state != .shutDown,
+          let mpv = player.mpv, let request = activeMPVCommand,
+          let replyUserdata = request.replyUserdata else { return }
+    let operation = request.operation
+    mpv.submitAirPlayCommand({
+      switch operation {
+      case .command(let command, let arguments):
+        return mpv.asyncCommand(command, args: arguments, checkError: false,
+                                replyUserdata: replyUserdata, level: .verbose)
+      case .stringProperty(let name, let value):
+        return mpv.setStringAsync(name, value, replyUserdata: replyUserdata, level: .verbose)
+      case .doubleProperty(let name, let value):
+        return mpv.setDoubleAsync(name, value, replyUserdata: replyUserdata, level: .verbose)
+      }
+    }, completion: { [weak self] result in
+      guard let self else { return }
+      if result == MPV_ERROR_EVENT_QUEUE_FULL.rawValue {
+        self.mpvCommandSubmissionWasRejected(replyUserdata: replyUserdata)
+      } else if result < 0 {
+        self.mpvCommandCompleted(result, replyUserdata: replyUserdata)
+      }
+    })
+  }
+
+  private func notifyMPVCommandQueueDrained() {
+    guard !waitingForMPVEventOverflowRecovery,
+          activeMPVCommand == nil, mpvCommandQueue.isEmpty,
+          !mpvCommandDrainCallbacks.isEmpty else { return }
+    let callbacks = mpvCommandDrainCallbacks
+    mpvCommandDrainCallbacks.removeAll()
+    DispatchQueue.main.async { callbacks.forEach { $0() } }
   }
 
   /// Completes one serialized libmpv command. Called on the main thread by MPVController.
-  func mpvCommandCompleted(_ result: Int32) {
-    guard let request = activeMPVCommand else { return }
+  func mpvCommandCompleted(_ result: Int32, replyUserdata: UInt64) {
+    guard let request = activeMPVCommand, request.replyUserdata == replyUserdata else { return }
+    if result < 0, let output = request.restoreAudioOutput {
+      log("async audio-output restore failed; retrying \(output) synchronously off the main thread",
+          level: .warning)
+      player?.mpv.restoreAirPlayAudioOutput(output) { [weak self] restoreResult in
+        self?.finishSynchronousAudioOutputRestore(restoreResult, output: output,
+                                                 replyUserdata: replyUserdata)
+      }
+      return
+    }
     activeMPVCommand = nil
+    activeMPVCommandNeedsResubmission = false
+    activeMPVCommandSubmissionAttempts = 0
     if result < 0 {
       let error = String(cString: mpv_error_string(result))
       log("mpv operation \(request.operation.name) failed: \(error)", level: .warning)
       if request.requiredForOutput {
         failForFile("mpv could not switch audio output: \(error)")
+      } else if result == MPV_ERROR_EVENT_QUEUE_FULL.rawValue {
+        failForFile("mpv lost confirmation for \(request.operation.name) during an event queue overflow")
       }
     }
     runNextMPVCommand()
   }
 
+  /// Finishes the fail-safe restore before stop/quit drain callbacks are allowed to proceed.
+  private func finishSynchronousAudioOutputRestore(_ result: Int32, output: String,
+                                                   replyUserdata: UInt64) {
+    guard activeMPVCommand?.replyUserdata == replyUserdata else { return }
+    if player?.mpv.hasObservedShutdownEvent != true {
+      if result < 0 {
+        let error = String(cString: mpv_error_string(result))
+        log("could not restore mpv audio output to \(output): \(error)", level: .error)
+        bridgeFailedForFile = true
+        player?.sendOSD(.custom(NSLocalizedString(
+          "osc_toolbar.airplay_output.restore_failed",
+          value: "AirPlay stopped, but Reel could not restore audio output on this Mac.",
+          comment: "The native AirPlay bridge failed to restore mpv's audio output")))
+      } else {
+        log("synchronous fallback restored mpv audio output to \(output)", level: .warning)
+      }
+    }
+    // The synchronous fallback already applies both the saved output and ao-reload. Remove only
+    // that disengage pair; later route transitions may have queued a restore to the same device.
+    if let restoreToken = activeMPVCommand?.restoreAudioOutputToken {
+      mpvCommandQueue.removeAll { $0.restoreAudioOutputToken == restoreToken }
+    }
+    activeMPVCommand = nil
+    activeMPVCommandNeedsResubmission = false
+    activeMPVCommandSubmissionAttempts = 0
+    runNextMPVCommand()
+  }
+
   /// Retry reconciliation after mpv publishes the metadata needed to select the audio stream.
   func playbackSnapshotChanged() {
+    refreshSavedAudioOutputFromSnapshot()
     guard routeActive, itemSelection == nil else { return }
     reconcile()
+  }
+
+  /// Refresh the local-output cache only after all route restores have settled. An `ao = null`
+  /// snapshot during a disconnect/reconnect cycle is stale bridge state, not the local output.
+  private func refreshSavedAudioOutputFromSnapshot() {
+    guard !bridgeEngaged,
+          activeMPVCommand?.restoreAudioOutputToken == nil,
+          !mpvCommandQueue.contains(where: { $0.restoreAudioOutputToken != nil }),
+          let audioOutput = player?.mpv?.airPlayPlaybackSnapshot.audioOutput,
+          audioOutput != "null" else { return }
+    savedAudioOutput = audioOutput
   }
 
   private static func seconds(_ time: CMTime) -> Double? {

@@ -116,14 +116,20 @@ private struct MPVAirPlaySnapshotRequestState {
   var generation: UInt64 = 0
   var pendingTokens = Set<UInt64>()
   var isDisabled = false
+  var isRecoveringFromQueueOverflow = false
 }
 
 class MPVController: NSObject {
   struct UserData {
     static let screenshot: UInt64 = 1000000
-    static let airPlayAudioCommand: UInt64 = 1000001
     static let preferenceOptionCommand: UInt64 = 1000002
     static let airPlaySnapshotBase: UInt64 = 0xA17A_0000_0000_0000
+    static let airPlayAudioCommandBase: UInt64 = 0xA17B_0000_0000_0000
+    private static let airPlayAudioCommandMask: UInt64 = 0xFFFF_0000_0000_0000
+
+    static func isAirPlayAudioCommand(_ token: UInt64) -> Bool {
+      (token & airPlayAudioCommandMask) == airPlayAudioCommandBase
+    }
   }
 
   // The mpv_handle
@@ -147,6 +153,9 @@ class MPVController: NSObject {
   /// Snapshot queries share libmpv's core lock and must not delay the AppKit event thread.
   private let airPlaySnapshotQueue = DispatchQueue(label: "com.colliderli.iina.airplay-snapshot",
                                                     qos: .userInitiated)
+  /// Gates queued AirPlay/snapshot/quit calls against the terminal marker. The event reader never
+  /// takes this lock while polling so it can always dispatch hooks that unblock libmpv calls.
+  private let airPlaySnapshotCallLock = NSLock()
   /// Accessed only by the serial mpv event queue; pairs START_FILE with FILE_LOADED or END_FILE.
   private var activePlaylistLoadTransition: UInt64?
   @Atomic private var pendingPlaylistLoadTransitions: [UInt64] = []
@@ -159,6 +168,7 @@ class MPVController: NSObject {
   @Atomic private var airPlaySnapshotRequests = MPVAirPlaySnapshotRequestState()
 
   var airPlayPlaybackSnapshot: MPVAirPlaySnapshot { airPlaySnapshot }
+  var hasObservedShutdownEvent: Bool { hasReceivedShutdownEvent }
 
   unowned let player: PlayerCore
 
@@ -835,15 +845,25 @@ class MPVController: NSObject {
 
   /// Shutdown this mpv controller.
   func mpvQuit() {
+    // Stop new snapshots now, then remove observers and quit after any active snapshot call. Keep
+    // this barrier off the AppKit thread: libmpv client calls serialize through the core lock.
+    disableAirPlaySnapshotRequests()
     // Remove observers for IINA preference. Must not attempt to change a mpv setting
     // in response to an IINA preference change while mpv is shutting down.
     removeOptionObservers()
-    // Remove observers for mpv properties. Because 0 was passed for reply_userdata when
-    // registering mpv property observers all observers can be removed in one call.
-    mpv_unobserve_property(mpv, 0)
-    // Start mpv quitting. Even though this command is being sent using the synchronous
-    // command API the quit command is special and will be executed by mpv asynchronously.
-    command(.quit, level: .verbose)
+    airPlaySnapshotQueue.async { [self] in
+      self.airPlaySnapshotCallLock.lock()
+      defer { self.airPlaySnapshotCallLock.unlock() }
+      guard !self.hasReceivedShutdownEvent, self.mpv != nil else {
+        return
+      }
+      // Remove all mpv property observers before quit. Because 0 was passed for reply_userdata
+      // when registering mpv property observers, they can all be removed in one call.
+      mpv_unobserve_property(self.mpv, 0)
+      // The quit command is special and mpv executes it asynchronously. Do not hold the gate while
+      // polling events; the sole reader does not take the gate in its poll or hook path.
+      self.command(.quit, level: .verbose)
+    }
   }
 
   // MARK: - Command & property
@@ -885,6 +905,28 @@ class MPVController: NSObject {
     } else if let cb = returnValueCallback {
       cb(returnValue)
     }
+  }
+
+  /// Runs a shutdown-sensitive state save under the client-call gate if shutdown is not observed.
+  /// The event reader waits for this transaction before it proceeds to shutdown cleanup.
+  @discardableResult
+  func performIfNotShutdown(_ body: () -> Void) -> Bool {
+    airPlaySnapshotCallLock.lock()
+    defer { airPlaySnapshotCallLock.unlock() }
+    guard !hasReceivedShutdownEvent, mpv != nil else { return false }
+    body()
+    return true
+  }
+
+  /// Submits a lifecycle command only if shutdown has not already been observed. The event reader
+  /// does not hold the client-call gate while polling, so synchronous stop can service unload hooks.
+  @discardableResult
+  func commandIfNotShutdown(_ command: MPVCommand, level: Logger.Level = .debug) -> Bool {
+    airPlaySnapshotCallLock.lock()
+    defer { airPlaySnapshotCallLock.unlock() }
+    guard !hasReceivedShutdownEvent, mpv != nil else { return false }
+    self.command(command, level: level)
+    return true
   }
 
   private func reservePlaylistLoadTransition() -> UInt64 {
@@ -942,6 +984,80 @@ class MPVController: NSObject {
     return returnValue
   }
 
+  /// Submit an AirPlay request away from AppKit and report immediate errors on the main queue.
+  /// Snapshot batches, AirPlay requests, and quit share this serial queue and shutdown gate.
+  func submitAirPlayCommand(_ submission: @escaping () -> Int32,
+                            completion: @escaping (Int32) -> Void) {
+    airPlaySnapshotQueue.async { [weak self] in
+      guard let self else { return }
+      self.airPlaySnapshotCallLock.lock()
+      guard !self.hasReceivedShutdownEvent, self.mpv != nil else {
+        self.airPlaySnapshotCallLock.unlock()
+        return
+      }
+      let result = submission()
+      self.airPlaySnapshotCallLock.unlock()
+      guard !self.hasReceivedShutdownEvent else { return }
+      let completionResult: Int32
+      if result == MPV_ERROR_EVENT_QUEUE_FULL.rawValue {
+        completionResult = self.beginAirPlayEventQueueOverflowRecovery()
+          ? result : MPV_ERROR_UNINITIALIZED.rawValue
+      } else {
+        completionResult = result
+      }
+      DispatchQueue.main.async { [weak self] in
+        guard let self, !self.hasReceivedShutdownEvent else { return }
+        completion(completionResult)
+      }
+    }
+  }
+
+  /// Restore Reel's saved local output after async AirPlay restoration hits sustained queue
+  /// pressure. This bypasses the bounded async retry queue, runs away from AppKit, and stays
+  /// serialized with snapshot calls and shutdown. The event reader remains free to drain events.
+  func restoreAirPlayAudioOutput(_ output: String, completion: @escaping (Int32) -> Void) {
+    airPlaySnapshotQueue.async { [weak self] in
+      guard let self else { return }
+      if !self.hasReceivedShutdownEvent, let mpv = self.mpv {
+        // Make sure previous accepted async requests have finished before using the synchronous
+        // client API. The event reader is a separate queue and continues to service their replies.
+        mpv_wait_async_requests(mpv)
+      }
+
+      self.airPlaySnapshotCallLock.lock()
+      let result: Int32
+      if self.hasReceivedShutdownEvent || self.mpv == nil {
+        result = MPV_ERROR_UNINITIALIZED.rawValue
+      } else {
+        let setResult = self.setString(MPVOption.Audio.ao, output, level: .warning)
+        result = setResult < 0 ? setResult : self.command(rawString: "ao-reload", level: .warning)
+      }
+      self.airPlaySnapshotCallLock.unlock()
+
+      DispatchQueue.main.async { [weak self] in
+        guard let self, !self.hasReceivedShutdownEvent else { return }
+        completion(result)
+      }
+    }
+  }
+
+  /// Starts one recovery for either an overflow event or a rejected async submission.
+  /// Returns false only if shutdown already disabled AirPlay polling.
+  @discardableResult
+  private func beginAirPlayEventQueueOverflowRecovery() -> Bool {
+    guard !hasReceivedShutdownEvent else { return false }
+    let recovery = $airPlaySnapshotRequests.withLock { state -> (available: Bool, start: Bool) in
+      state.generation &+= 1
+      state.pendingTokens.removeAll()
+      guard !state.isDisabled else { return (false, false) }
+      guard !state.isRecoveringFromQueueOverflow else { return (true, false) }
+      state.isRecoveringFromQueueOverflow = true
+      return (true, true)
+    }
+    if recovery.start { recoverAirPlayAsyncRequestsAfterQueueOverflow() }
+    return recovery.available
+  }
+
   func observe(property: String, format: mpv_format = MPV_FORMAT_DOUBLE) {
     mpv_observe_property(mpv, 0, property, format)
   }
@@ -957,7 +1073,8 @@ class MPVController: NSObject {
       (MPVProperty.containerFps, MPV_FORMAT_DOUBLE)
     ]
     $airPlaySnapshotRequests.withLock { state in
-      guard !state.isDisabled, !hasReceivedShutdownEvent, state.pendingTokens.isEmpty else { return }
+      guard !state.isDisabled, !state.isRecoveringFromQueueOverflow,
+            !hasReceivedShutdownEvent, state.pendingTokens.isEmpty else { return }
       state.generation &+= 1
       for index in properties.indices {
         state.pendingTokens.insert(Self.airPlaySnapshotToken(state.generation, propertyIndex: index))
@@ -965,15 +1082,23 @@ class MPVController: NSObject {
       let generation = state.generation
       airPlaySnapshotQueue.async { [weak self] in
         guard let self else { return }
-        self.$airPlaySnapshotRequests.withLock { state in
-          guard !state.isDisabled, !self.hasReceivedShutdownEvent, let mpv = self.mpv else {
+        self.airPlaySnapshotCallLock.lock()
+        defer { self.airPlaySnapshotCallLock.unlock() }
+        let mpv = self.$airPlaySnapshotRequests.withLock { state -> OpaquePointer? in
+          guard state.generation == generation, !state.isDisabled,
+                !state.isRecoveringFromQueueOverflow,
+                !self.hasReceivedShutdownEvent, let mpv = self.mpv else {
             if state.generation == generation { state.pendingTokens.removeAll() }
-            return
+            return nil
           }
-          for (index, property) in properties.enumerated() {
-            let token = Self.airPlaySnapshotToken(generation, propertyIndex: index)
-            if mpv_get_property_async(mpv, token, property.0, property.1) < 0 {
-              state.pendingTokens.remove(token)
+          return mpv
+        }
+        guard let mpv else { return }
+        for (index, property) in properties.enumerated() {
+          let token = Self.airPlaySnapshotToken(generation, propertyIndex: index)
+          if mpv_get_property_async(mpv, token, property.0, property.1) < 0 {
+            self.$airPlaySnapshotRequests.withLock { state in
+              if state.generation == generation { state.pendingTokens.remove(token) }
             }
           }
         }
@@ -982,13 +1107,17 @@ class MPVController: NSObject {
   }
 
   /// Stop new snapshots and let an in-flight client call finish before destroying its mpv handle.
-  private func stopAirPlaySnapshotRequests(markShutdown: Bool = false) {
+  private func stopAirPlaySnapshotRequests() {
+    disableAirPlaySnapshotRequests()
+    airPlaySnapshotQueue.sync {}
+  }
+
+  /// Prevent any additional snapshot batches from being submitted.
+  private func disableAirPlaySnapshotRequests() {
     $airPlaySnapshotRequests.withLock { state in
-      if markShutdown { hasReceivedShutdownEvent = true }
       state.isDisabled = true
       state.pendingTokens.removeAll()
     }
-    airPlaySnapshotQueue.sync {}
   }
 
   // Set property
@@ -1275,27 +1404,46 @@ class MPVController: NSObject {
   // Read event and handle it async
   private func readEvents() {
     guard !hasReceivedShutdownEvent else { return }
-    queue.async {
-      guard !self.hasReceivedShutdownEvent, let mpv = self.mpv else { return }
-      while !self.hasReceivedShutdownEvent {
-        let event = mpv_wait_event(mpv, 0)!
-        let eventId = event.pointee.event_id
-        // Do not deal with mpv-event-none
-        if eventId == MPV_EVENT_NONE {
-          break
+    queue.async { self.readEventsOnQueue() }
+  }
+
+  /// The sole event-queue reader. An optional completion runs after draining through MPV_EVENT_NONE.
+  private func readEventsOnQueue(afterDraining completion: (() -> Void)? = nil) {
+    guard !hasReceivedShutdownEvent, let mpv else {
+      completion?()
+      return
+    }
+    while !hasReceivedShutdownEvent {
+      // Keep polling independent of client-call submission: libmpv may be waiting for an event
+      // hook while a queued API call is in progress.
+      let event = mpv_wait_event(mpv, 0)!
+      let eventId = event.pointee.event_id
+      if eventId == MPV_EVENT_SHUTDOWN {
+        // Publish terminal state immediately so work queued behind the call gate cannot begin.
+        hasReceivedShutdownEvent = true
+        airPlaySnapshotCallLock.lock()
+        $airPlaySnapshotRequests.withLock { state in
+          state.isDisabled = true
+          state.pendingTokens.removeAll()
         }
-        if eventId == MPV_EVENT_SHUTDOWN {
-          // Snapshot calls use a separate queue. Close that path and drain it before notifying the
-          // main thread, which may destroy the mpv handle as soon as it handles this event.
-          self.stopAirPlaySnapshotRequests(markShutdown: true)
-        }
-        self.handleEvent(event)
-        // Must stop reading events once the mpv core is shutdown.
-        if eventId == MPV_EVENT_SHUTDOWN {
-          break
-        }
+        airPlaySnapshotCallLock.unlock()
+      }
+      // Do not deal with mpv-event-none
+      if eventId == MPV_EVENT_NONE {
+        break
+      }
+      if eventId == MPV_EVENT_SHUTDOWN {
+        // Snapshot calls use a separate queue. Close that path and drain it before notifying the
+        // main thread, which may destroy the mpv handle as soon as it handles this event.
+        airPlaySnapshotQueue.sync {}
+      }
+      handleEvent(event)
+      // Must stop reading events once the mpv core is shutdown.
+      if eventId == MPV_EVENT_SHUTDOWN {
+        break
       }
     }
+    completion?()
   }
 
   // Handle the event
@@ -1446,16 +1594,20 @@ class MPVController: NSObject {
           break
         }
         DispatchQueue.main.async { self.player.screenshotCallback() }
-      } else if reply == MPVController.UserData.airPlayAudioCommand {
+      } else if MPVController.UserData.isAirPlayAudioCommand(reply) {
         let code = event.pointee.error
-        DispatchQueue.main.async { self.player.airPlayAudio.mpvCommandCompleted(code) }
+        DispatchQueue.main.async {
+          self.player.airPlayAudio.mpvCommandCompleted(code, replyUserdata: reply)
+        }
       }
 
     case MPV_EVENT_SET_PROPERTY_REPLY:
       let reply = event.pointee.reply_userdata
-      if reply == MPVController.UserData.airPlayAudioCommand {
+      if MPVController.UserData.isAirPlayAudioCommand(reply) {
         let code = event.pointee.error
-        DispatchQueue.main.async { self.player.airPlayAudio.mpvCommandCompleted(code) }
+        DispatchQueue.main.async {
+          self.player.airPlayAudio.mpvCommandCompleted(code, replyUserdata: reply)
+        }
       } else if reply == MPVController.UserData.preferenceOptionCommand, event.pointee.error < 0 {
         let error = String(cString: mpv_error_string(event.pointee.error))
         log("Asynchronous preference update failed: \(error)", level: .warning)
@@ -1468,10 +1620,11 @@ class MPVController: NSObject {
       // some types of mpv events, but certain mpv events are critical. If a critical event is
       // discarded IINA will experience severe malfunctions. For this reason most of the work of
       // processing an event is dispatched to other queues so that MPVController can move on to
-      // reading the next event. This event indicates something went wrong and IINA failed to read
-      // events fast enough. As IINA has been ignoring this event we don't know if this has been
-      // occurring. For now log this as an error. May want to switch to an alert in the future.
-      log("Critical failure, mpv events lost, queue overflowed", level: .error)
+      // reading the next event. Snapshot polling and serialized AirPlay command replies both need
+      // explicit recovery because either kind of response may have been dropped.
+      log("Critical failure, mpv events lost, queue overflowed; recovering AirPlay requests",
+          level: .error)
+      beginAirPlayEventQueueOverflowRecovery()
 
     default: break
       // let eventName = String(cString: mpv_event_name(eventId))
@@ -1494,6 +1647,7 @@ class MPVController: NSObject {
       guard state.pendingTokens.remove(token) != nil else { return false }
       return state.generation == generation
     }
+    // Consume stale private replies too, so they never fall through to generic/plugin dispatch.
     guard isCurrentSample else { return true }
 
     let property: mpv_event_property? = {
@@ -1518,6 +1672,59 @@ class MPVController: NSObject {
       }
     }
     return true
+  }
+
+  /// Recovers accepted asynchronous AirPlay commands whose reply events may have been dropped.
+  /// Keep this wait off AppKit and the event-reader queue; the latter must continue draining events.
+  private func recoverAirPlayAsyncRequestsAfterQueueOverflow() {
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      let activeReplyToken = self.player.airPlayAudio.beginMPVEventQueueOverflowRecovery()
+      self.airPlaySnapshotQueue.async { [weak self] in
+        guard let self else { return }
+        if !self.hasReceivedShutdownEvent, let mpv = self.mpv {
+          // This API waits off-main until every accepted asynchronous request has produced its
+          // reply event. Do not hold the call gate: the event reader must keep draining the queue.
+          mpv_wait_async_requests(mpv)
+        }
+        self.queue.async { [weak self] in
+          guard let self else { return }
+          // The async barrier guarantees replies were emitted, not that the event reader has
+          // delivered them to the bridge yet. Drain the event queue before treating one as lost.
+          self.readEventsOnQueue {
+            // The overflow may have discarded the ao property-change event. Re-read the actual
+            // value after the accepted async requests and their replies have drained, before the
+            // bridge resumes and makes another route decision.
+            self.airPlaySnapshotQueue.async { [weak self] in
+              guard let self else { return }
+              self.airPlaySnapshotCallLock.lock()
+              let audioOutput: String?
+              if !self.hasReceivedShutdownEvent, self.mpv != nil {
+                audioOutput = self.getString(MPVOption.Audio.ao)
+              } else {
+                audioOutput = nil
+              }
+              self.airPlaySnapshotCallLock.unlock()
+
+              DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if !self.hasReceivedShutdownEvent {
+                  self.$airPlaySnapshot.withLock { $0.audioOutput = audioOutput }
+                }
+                self.$airPlaySnapshotRequests.withLock { $0.isRecoveringFromQueueOverflow = false }
+                // The shutdown path clears the bridge command queue after draining this reader.
+                guard !self.hasReceivedShutdownEvent else { return }
+                self.player.airPlayAudio.finishMPVEventQueueOverflowRecovery(
+                  for: activeReplyToken
+                )
+                self.player.airPlayAudio.playbackSnapshotChanged()
+                self.requestAirPlayPlaybackSnapshot()
+              }
+            }
+          }
+        }
+      }
+    }
   }
 
   private static func airPlaySnapshotToken(_ generation: UInt64, propertyIndex: Int) -> UInt64 {

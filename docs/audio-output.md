@@ -49,12 +49,42 @@ timeline is checked by `python3 other/test_pcm_stream_reader.py`. Audible routin
 output and speaker disconnects need a real receiver.
 
 Maintenance note: bridge timers must read the event-fed mpv snapshot rather than call synchronous
-libmpv getters. Snapshot requests run on a dedicated serial queue because libmpv serializes its
-client API through a shared core lock. The AVPlayer time observer feeds the WAV loader on its own
-serial queue, independent of AppKit and mpv snapshot latency. Audio-output changes and routine
-speed/delay adjustments use the bridge's serialized async command queue; speed and delay updates
-are coalesced while a prior mpv command is pending. Snapshot requests are disabled and drained
-before the mpv handle is destroyed; preserve that order during shutdown changes.
+libmpv getters. Snapshot requests and AirPlay command submissions run on a dedicated serial queue
+because libmpv serializes its client API through a shared core lock; AppKit does not wait for those
+submissions. The AVPlayer time observer feeds the WAV loader on its own serial queue, independent
+of AppKit and mpv snapshot latency. Audio-output changes and routine speed/delay adjustments use
+the bridge's serialized async command queue; speed and delay updates are coalesced while a prior
+mpv command is pending. Snapshot requests are disabled and drained
+before sending quit or destroying the mpv handle. The quit command is queued behind outstanding
+snapshot submissions so shutdown does not synchronously wait on the AppKit thread. If mpv reports an
+event queue overflow, discard that snapshot generation, wait off-main for accepted async requests to
+finish, and request a fresh sample. This lets the bridge command queue recover if a dropped event
+was a command reply. Each bridge command uses a distinct reply token so late replies cannot
+complete a later command. AirPlay submissions share a gate with the terminal
+shutdown marker, preventing a recovered command from being submitted after MPV reports shutdown.
+If the bridge still has an unconfirmed command after the drain, it conservatively marks AirPlay
+failed for that file and returns its audio to the Mac; overflow does not identify the dropped event.
+Rejected async requests get at most three submissions total: the initial submission plus two
+retries. If an async request to restore the saved local audio output fails, Reel waits for earlier
+async requests and performs the saved `ao` change plus `ao-reload` synchronously on the serial
+background queue. Stop/quit drain callbacks remain pending until that fallback completes, and the
+event reader remains free to service MPV.
+After overflow recovery drains the event reader, sample `ao` directly on the background MPV queue
+before resuming route reconciliation; the overflow may have dropped its property-change event.
+Unexpected MPV shutdown must pause and remove the hidden AVPlayer item, invalidate its loader and
+timers, and detach its playhead feeder without calling back into the destroyed MPV core.
+Keep the cached local output separate from the bridge's engaged state: a fast route reconnect can
+arrive while the event-fed `ao` snapshot still says `null`. Retain the last local output across
+that transition, and refresh it from mpv only after pending route restores have drained.
+Keep the snapshot
+request-state lock out of libmpv calls so the main-thread timer cannot inherit core-lock waits.
+AVPlayer clock monitoring starts even when its first reported time is invalid, allowing the startup
+timeout to trigger the normal fallback. Player stop and quit
+must also wait asynchronously for the bridge command queue to finish its final timing restores
+before sending mpv's stop or quit command. The event reader stays free to service unload hooks while
+stop runs, and quit remains queued behind snapshot submissions. This preserves the user's speed and
+audio delay for watch-later files; the bridge-drain wait is asynchronous, while the final watch-later
+state save still runs synchronously.
 Keep the queue order intact. File teardown queues its final speed/delay restore behind pending
 bridge writes and also writes synchronously so stop/quit can persist watch-later state. `withUserTiming`
 remains synchronous because its caller immediately writes a watch-later file between temporary timing

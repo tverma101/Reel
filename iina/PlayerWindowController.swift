@@ -223,6 +223,8 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
 
     self.playSlider = PlaySlider()
     playSlider.translatesAutoresizingMaskIntoConstraints = false
+    // Seeking and thumbnail previews use a left-to-right timeline in every language.
+    playSlider.userInterfaceLayoutDirection = .leftToRight
     playSlider.refusesFirstResponder = true
     playSlider.minValue = 0
     playSlider.maxValue = 100

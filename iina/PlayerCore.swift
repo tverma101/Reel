@@ -1011,8 +1011,11 @@ class PlayerCore: NSObject {
     info.state = .shuttingDown
     guard !backgroundTaskInUse else { return }
     log("Shutting down")
-    savePlayerState()
-    mpv.mpvQuit()
+    airPlayAudio.whenMPVCommandsDrained { [weak self] in
+      guard let self, self.info.state == .shuttingDown else { return }
+      guard self.mpv.performIfNotShutdown({ self.savePlayerState() }) else { return }
+      self.mpv.mpvQuit()
+    }
   }
 
   /// Notify the task running in the background queue it should stop.
@@ -1039,6 +1042,7 @@ class PlayerCore: NSObject {
     let suffix = isMPVInitiated ? " (initiated by mpv)" : ""
     log("Player has shutdown\(suffix)")
     info.state = .shutDown
+    airPlayAudio.playerDidShutDown()
     if isMPVInitiated {
       // The user must have used mpv's IPC interface to send a quit command directly to mpv. Must
       // perform the actions that were skipped when IINA's normal shutdown process was bypassed.
@@ -1297,7 +1301,8 @@ class PlayerCore: NSObject {
   ///     and call this method again to continue the process of stopping. It is important to stop the background task as if it is still
   ///     running when the mpv core is shutdown it may call into mpv triggering a crash.
   func stop() {
-    guard info.state != .shutDown else { return }
+    guard info.state != .shuttingDown, info.state != .shutDown,
+          !mpv.hasObservedShutdownEvent else { return }
     savePlaybackPosition()
     airPlayAudio.stopPlayback()
     if mainWindow.loaded { mainWindow.liveCaptions.stop() }
@@ -1340,7 +1345,10 @@ class PlayerCore: NSObject {
 
     // Do not send a stop command to mpv if it is already stopped.
     guard info.state != .idle else { return }
-    mpv.command(.stop, level: .verbose)
+    airPlayAudio.whenMPVCommandsDrained { [weak self] in
+      guard let self, self.info.state == .stopping else { return }
+      self.mpv.commandIfNotShutdown(.stop, level: .verbose)
+    }
   }
 
   func toggleMute(_ set: Bool? = nil) {

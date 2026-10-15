@@ -1093,3 +1093,4 @@
 "osc_toolbar.airplay_output.disconnected" = "Reel audio: this Mac";
 "osc_toolbar.airplay_output.unsupported" = "This file's audio can't be sent over AirPlay, so it plays on this Mac.";
 "osc_toolbar.airplay_output.failed" = "AirPlay stopped playing this file's audio, so it plays on this Mac.";
+"osc_toolbar.airplay_output.restore_failed" = "AirPlay stopped, but Reel could not restore audio output on this Mac.";
