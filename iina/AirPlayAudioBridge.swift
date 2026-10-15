@@ -1540,7 +1540,8 @@ final class AirPlayAudioBridge: NSObject {
     enqueueMPVRequest(MPVCommandRequest(operation: operation, requiredForOutput: false,
                                         coalescingKey: coalescingKey,
                                         restoreAudioOutput: nil,
-                                        restoreAudioOutputToken: nil))
+                                        restoreAudioOutputToken: nil,
+                                        expectedAudioOutputIntentGeneration: nil))
   }
 
   private func hasPendingMPVProperty(_ name: String) -> Bool {
