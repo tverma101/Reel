@@ -84,15 +84,26 @@ raw `set ao` with a literal target updates the saved intent only after mpv accep
 reports that value (including after event-queue recovery); an older completion cannot replace a
 newer confirmed choice. An explicit literal `null` remains a direct user intent after its async
 command reply confirms it; a property event alone cannot distinguish that value from AirPlay's
-own `null` write. Async AO commands use libmpv's reply-bearing API; after all accepted commands in
-a batch complete, Reel reads AO once and resolves the batch. This settles no-op selectors and
-coalesced changes without using an older queued property event as the selector result. Overflow
-recovery uses its final AO readback to resolve every accepted async AO command in the batch. Reel
-keeps the prior output as a fallback while an async AO command is pending. Pending async AO commands
-also prevent a stale snapshot from refreshing the saved output or a queued restore from superseding
-that intent. The synchronous fallback checks the saved intent epoch under the AO setter lock before
-writing. An event-fed
-`ao = null` is retained when no route restore is in flight.
+own `null` write. The raw-command scanner follows mpv's delimiter rules: unquoted semicolons always
+separate commands, including after a backslash, while quoted semicolons stay inside their argument.
+A decodable single raw async AO action uses libmpv's reply-bearing API; after
+completion, Reel reads AO once to resolve selectors and coalesced changes without using an older
+queued property event as the selector result. For a semicolon-separated raw command list, Reel
+submits the original string so mpv can validate the whole list before executing any part; AO
+property commands run inline even with the `async` prefix, so Reel samples AO after the string
+returns. The compatibility path for AO tokens Reel cannot translate samples only after that
+command string returns.
+Overflow recovery uses its final AO readback to resolve every accepted async AO command in the batch.
+Reel keeps the prior output as a fallback while an async AO command is pending. Pending async AO
+commands prevent a stale snapshot from refreshing the saved output or the bridge from reasserting
+`ao = null` over the new choice. The synchronous fallback checks the saved intent epoch under the AO
+setter lock before writing; queued restores recheck the same epoch atomically with submission. Reel
+also waits for pending direct AO commands before engaging the AirPlay bridge. If the route disconnects
+while one is pending, Reel waits for its result before restoring the selected output, and retains the
+previous local output if the command fails. If AirPlay reconnects before that result arrives, Reel
+reconciles route ownership first and avoids briefly restoring local output while the bridge can carry
+the file; unsupported audio still falls back to the saved local output. An event-fed `ao = null` is
+retained when no route restore is in flight.
 A failed queued restore's synchronous fallback must not replace that user intent. Preserve an
 explicit direct `ao = null` choice through disconnect as well. If a local output change races AirPlay
 engagement or arrives while the bridge is carrying audio, retain that output for disconnect and

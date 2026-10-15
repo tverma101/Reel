@@ -594,6 +594,8 @@ final class AirPlayAudioBridge: NSObject {
   /// The last known local mpv output. Retain it across route transitions while `ao` is `null`.
   private var savedAudioOutput: String?
   private var savedAudioOutputIntentGeneration: UInt64?
+  /// Preserve a disconnect restore until a direct AO command accepted by mpv has settled.
+  private var restoreLocalAudioOutputAfterPendingRawCommand = false
   /// Snapshot generation for which Reel most recently queued `ao = null` while connected.
   private var lastAirPlayAudioOutputDisableGeneration: UInt64?
   /// Prevents a late main-thread callback from replaying one direct output change more than once.
@@ -813,17 +815,18 @@ final class AirPlayAudioBridge: NSObject {
       log("waiting for mpv's audio output change before engaging", level: .verbose)
       return false
     }
+    guard snapshot.pendingRawAudioOutputIntents.isEmpty,
+          snapshot.pendingRawAudioOutputCommands.isEmpty else {
+      log("waiting for an accepted direct AO command before engaging", level: .verbose)
+      return false
+    }
     // A fast route reconnect can observe the old event-fed `ao = null` before a queued restore
     // reaches mpv. Keep the last real output as the source for this and later disengages.
     _ = rememberLatestDirectAudioOutput(from: snapshot)
-    if snapshot.pendingRawAudioOutputIntents.isEmpty,
-       snapshot.pendingRawAudioOutputCommands.isEmpty,
-       let directAudioOutput = snapshot.directAudioOutput {
+    if let directAudioOutput = snapshot.directAudioOutput {
       savedAudioOutput = directAudioOutput
       savedAudioOutputIntentGeneration = snapshot.audioOutputIntentGeneration
-    } else if snapshot.pendingRawAudioOutputIntents.isEmpty,
-              snapshot.pendingRawAudioOutputCommands.isEmpty,
-              let audioOutput = snapshot.audioOutput,
+    } else if let audioOutput = snapshot.audioOutput,
               audioOutput != "null" || pendingAudioOutputRestoreValues().isEmpty {
       savedAudioOutput = audioOutput
       savedAudioOutputIntentGeneration = snapshot.audioOutputIntentGeneration
@@ -884,6 +887,7 @@ final class AirPlayAudioBridge: NSObject {
     if let snapshot = player?.mpv?.airPlayPlaybackSnapshot,
        !snapshot.pendingRawAudioOutputIntents.isEmpty ||
        !snapshot.pendingRawAudioOutputCommands.isEmpty {
+      restoreLocalAudioOutputAfterPendingRawCommand = true
       log("deferring local-output restore until the accepted async AO request is observed",
           level: .verbose)
       return
@@ -1474,6 +1478,7 @@ final class AirPlayAudioBridge: NSObject {
     lastAirPlayAudioOutputDisableGeneration = nil
     savedAudioOutput = nil
     savedAudioOutputIntentGeneration = nil
+    restoreLocalAudioOutputAfterPendingRawCommand = false
     activeMPVCommand = nil
     synchronousAudioOutputRestoreReplyUserdata = nil
     activeMPVCommandNeedsResubmission = false
@@ -1627,24 +1632,44 @@ final class AirPlayAudioBridge: NSObject {
       activeMPVCommand?.audioOutputIntentGenerationBeforeSubmission =
         request.expectedAudioOutputIntentGeneration ?? snapshot.audioOutputIntentGeneration
     }
-    mpv.submitAirPlayCommand({
-      switch operation {
-      case .command(let command, let arguments):
-        return mpv.asyncCommand(command, args: arguments, checkError: false,
-                                replyUserdata: replyUserdata, level: .verbose)
-      case .stringProperty(let name, let value):
-        return mpv.setStringAsync(name, value, replyUserdata: replyUserdata, level: .verbose)
-      case .doubleProperty(let name, let value):
-        return mpv.setDoubleAsync(name, value, replyUserdata: replyUserdata, level: .verbose)
-      }
-    }, completion: { [weak self] result in
-      guard let self else { return }
-      if result == MPV_ERROR_EVENT_QUEUE_FULL.rawValue {
-        self.mpvCommandSubmissionWasRejected(replyUserdata: replyUserdata)
-      } else if result < 0 {
-        self.mpvCommandCompleted(result, replyUserdata: replyUserdata)
-      }
-    })
+    mpv.submitAirPlayCommand(
+      ifAudioOutputIntentGeneration: request.restoreAudioOutputToken == nil
+        ? nil : request.expectedAudioOutputIntentGeneration,
+      submission: {
+        switch operation {
+        case .command(let command, let arguments):
+          return mpv.asyncCommand(command, args: arguments, checkError: false,
+                                  replyUserdata: replyUserdata, level: .verbose)
+        case .stringProperty(let name, let value):
+          return mpv.setStringAsync(name, value, replyUserdata: replyUserdata, level: .verbose)
+        case .doubleProperty(let name, let value):
+          return mpv.setDoubleAsync(name, value, replyUserdata: replyUserdata, level: .verbose)
+        }
+      }, completion: { [weak self] result, wasSuperseded in
+        guard let self else { return }
+        if wasSuperseded {
+          self.mpvCommandSubmissionWasSuperseded(replyUserdata: replyUserdata)
+        } else if result == MPV_ERROR_EVENT_QUEUE_FULL.rawValue {
+          self.mpvCommandSubmissionWasRejected(replyUserdata: replyUserdata)
+        } else if result < 0 {
+          self.mpvCommandCompleted(result, replyUserdata: replyUserdata)
+        }
+      })
+  }
+
+  /// Retire an AO restore that became stale between main-thread preflight and queue submission.
+  /// It was never sent to mpv, so it must not enter the synchronous failure fallback.
+  private func mpvCommandSubmissionWasSuperseded(replyUserdata: UInt64) {
+    guard let request = activeMPVCommand, request.replyUserdata == replyUserdata else { return }
+    if let restoreToken = request.restoreAudioOutputToken {
+      mpvCommandQueue.removeAll { $0.restoreAudioOutputToken == restoreToken }
+    }
+    log("skipping queued audio-output restore; a newer AO intent arrived before submission",
+        level: .verbose)
+    activeMPVCommand = nil
+    activeMPVCommandNeedsResubmission = false
+    activeMPVCommandSubmissionAttempts = 0
+    runNextMPVCommand()
   }
 
   private func notifyMPVCommandQueueDrained() {
@@ -1739,6 +1764,36 @@ final class AirPlayAudioBridge: NSObject {
     let snapshot = mpv.airPlayPlaybackSnapshot
     guard snapshot.audioOutputChangesInFlight == 0 else { return }
     let directAudioOutput = rememberLatestDirectAudioOutput(from: snapshot)
+    if restoreLocalAudioOutputAfterPendingRawCommand,
+       snapshot.pendingRawAudioOutputIntents.isEmpty,
+       snapshot.pendingRawAudioOutputCommands.isEmpty {
+      restoreLocalAudioOutputAfterPendingRawCommand = false
+      let output = snapshot.directAudioOutput ?? savedAudioOutput
+      if let output {
+        if snapshot.directAudioOutput != nil {
+          savedAudioOutput = output
+          savedAudioOutputIntentGeneration = snapshot.audioOutputIntentGeneration
+        }
+        // A route may return before the pending AO request settles. Let the live route reclaim
+        // ownership before restoring local output, or this queue will briefly enable mpv audio
+        // immediately before `engage()` disables it again.
+        let routeWillResolveAudioOutput: Bool
+        if bridgeEngaged {
+          routeWillResolveAudioOutput = true
+        } else if routeActive && !bridgeFailedForFile {
+          if case .unsupported = audioSelection() {
+            routeWillResolveAudioOutput = false
+          } else {
+            routeWillResolveAudioOutput = true
+          }
+        } else {
+          routeWillResolveAudioOutput = false
+        }
+        if !routeWillResolveAudioOutput {
+          restoreLatestDirectAudioOutputIfNeeded(output, snapshot: snapshot)
+        }
+      }
+    }
     refreshSavedAudioOutputFromSnapshot()
     if let directAudioOutput, directAudioOutput != "null" {
       if routeActive && bridgeEngaged {
@@ -1826,6 +1881,10 @@ final class AirPlayAudioBridge: NSObject {
   private func keepMPVAudioOutputDisabled() {
     guard bridgeEngaged, let mpv = player?.mpv else { return }
     let snapshot = mpv.airPlayPlaybackSnapshot
+    // Let an accepted direct AO choice finish and be saved before reasserting bridge ownership.
+    // Otherwise the bridge's `null` write can become the command's readback and erase that choice.
+    guard snapshot.pendingRawAudioOutputIntents.isEmpty,
+          snapshot.pendingRawAudioOutputCommands.isEmpty else { return }
     guard snapshot.audioOutputChangesInFlight == 0,
           let audioOutput = snapshot.audioOutput, audioOutput != "null",
           !(snapshot.directAudioOutput == audioOutput &&
