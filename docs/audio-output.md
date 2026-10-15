@@ -15,6 +15,8 @@ macOS routes one app's audio only through an AVPlayer bound to an
 cannot open most files mpv plays. While a speaker is selected, Reel therefore decodes the selected
 audio track with FFmpeg (to 48 kHz stereo) and plays it in a hidden AVPlayer. mpv keeps the
 picture, subtitles, Live Text and live captions; its own audio output is switched to `null`.
+When playback stops or reaches idle, Reel restores mpv's saved local output. If the speaker remains
+selected, Reel engages the bridge again when the next supported file loads.
 
 - **Starting, resuming and seeking.** The picture waits, at mpv's slowest speed, until the speaker is
   playing the matching sound. The speaker's buffering (about two seconds on AirPlay 2) shows as a
@@ -93,17 +95,40 @@ submits the original string so mpv can validate the whole list before executing 
 property commands run inline even with the `async` prefix, so Reel samples AO after the string
 returns. The compatibility path for AO tokens Reel cannot translate samples only after that
 command string returns.
+mpv's command-list result does not propagate every child setter failure, so Reel accepts the
+sampled AO if it changed from the pre-command value, matches the final literal AO target, or a
+valid selector chain can be shown to leave it unchanged. For an unchanged sample, literal
+`set`/`cycle-values` chains are simulated when every state-changing command is a recognized AO
+operation; `show-text` and `print-text` may accompany the chain. `cycle` is accepted only as a
+single selector because its available choices depend on runtime state. Dynamic values, duplicate
+cycle values, and lists containing other commands fail closed.
+A failed literal setter list that leaves AO unchanged cannot replace the saved local-output choice.
 Overflow recovery uses its final AO readback to resolve every accepted async AO command in the batch.
 Reel keeps the prior output as a fallback while an async AO command is pending. Pending async AO
 commands prevent a stale snapshot from refreshing the saved output or the bridge from reasserting
 `ao = null` over the new choice. The synchronous fallback checks the saved intent epoch under the AO
-setter lock before writing; queued restores recheck the same epoch atomically with submission. Reel
+setter lock before writing; queued restore setters recheck that epoch atomically with submission.
+Route or track-metadata changes that alter ownership advance a separate epoch. Queued AO setters
+and reloads compare it before submission, while the synchronous fallback checks it before writing
+and before `ao-reload`; route handling never waits for the blocking fallback call. A route change
+after that fallback has started cannot cancel its in-flight `ao-reload`; main-thread reconciliation
+checks ownership again as soon as the call returns.
+After a restore setter is accepted, its paired `ao-reload` finishes unless a route takes ownership;
+a failed reload's synchronous fallback still checks the saved intent epoch. Reel
 also waits for pending direct AO commands before engaging the AirPlay bridge. If the route disconnects
 while one is pending, Reel waits for its result before restoring the selected output, and retains the
 previous local output if the command fails. If AirPlay reconnects before that result arrives, Reel
 reconciles route ownership first and avoids briefly restoring local output while the bridge can carry
 the file; unsupported audio still falls back to the saved local output. An event-fed `ao = null` is
 retained when no route restore is in flight.
+A queued local-output restore canceled by a reconnect keeps its target until route ownership is known:
+a supported route takes ownership, pending track metadata keeps the decision open, and an inactive or
+unsupported route restores the saved output. Route ownership stays pending through `loading` and
+`starting`, before mpv has supplied the track metadata used to decide support. If the restore setter
+already ran when the route took ownership, the retained target records that a local `ao-reload` is
+still due if AirPlay later proves unavailable. Bridge-owned `ao = null` writes and their
+`ao-reload` commands each carry the current AO-intent generation, so a stale command is discarded
+if a newer user choice arrives before its submission.
 A failed queued restore's synchronous fallback must not replace that user intent. Preserve an
 explicit direct `ao = null` choice through disconnect as well. If a local output change races AirPlay
 engagement or arrives while the bridge is carrying audio, retain that output for disconnect and

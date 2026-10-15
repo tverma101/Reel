@@ -2788,6 +2788,9 @@ class PlayerCore: NSObject {
   }
 
   func idleActiveChanged() {
+    // A property event may already be queued when application shutdown begins. Do not let its
+    // delayed main-thread callback replace the terminal state and cancel the shutdown drain.
+    guard info.state != .shuttingDown, info.state != .shutDown else { return }
     if receivedEndFileWhileLoading && info.state == .starting {
       DispatchQueue.main.async { [unowned self] in
         currentController.close()
@@ -2814,6 +2817,7 @@ class PlayerCore: NSObject {
     if info.state != .loading {
       log("Playback has stopped")
       info.state = .idle
+      airPlayAudio.stopPlayback()
       postNotification(.iinaPlayerStopped)
       schedulePlaylistSnapshotRefresh()
       if let pendingUrl {
@@ -3004,6 +3008,7 @@ class PlayerCore: NSObject {
       getTrackInfo()
       getSelectedTracks()
     }
+    airPlayAudio.audioTrackChanged()
     // Property changes are delivered before mpv's loading hooks have necessarily completed.
     // Keep the snapshot, then let fileLoaded() perform UI and metadata work when queries are safe.
     guard info.state.loaded else { return }

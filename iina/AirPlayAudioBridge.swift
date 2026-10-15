@@ -537,7 +537,7 @@ final class AirPlayAudioBridge: NSObject {
     let restoreAudioOutput: String?
     /// Identifies one disengage pair so its fallback cannot remove a later route's restore.
     let restoreAudioOutputToken: UInt64?
-    /// Intent epoch for the output being restored; reused by retries and synchronous fallback.
+    /// Intent epoch that fences this bridge-owned AO write; restore retries keep the same epoch.
     let expectedAudioOutputIntentGeneration: UInt64?
     var replyUserdata: UInt64? = nil
     /// Used to publish the confirmed AO value if the cached output is still the pre-submit value
@@ -545,6 +545,8 @@ final class AirPlayAudioBridge: NSObject {
     var audioOutputBeforeSubmission: String? = nil
     var capturedAudioOutputBeforeSubmission = false
     var audioOutputIntentGenerationBeforeSubmission: UInt64? = nil
+    /// Route epoch checked by background AO submission and queue-pressure recovery.
+    var routeOwnershipGenerationBeforeSubmission: UInt64? = nil
   }
 
   private struct Selection: Equatable {
@@ -552,6 +554,12 @@ final class AirPlayAudioBridge: NSObject {
     let streamIndex: Int
     /// The container time of mpv's 0, or nil for the file's own start time.
     let origin: Double?
+  }
+
+  private enum RouteAudioOwnership: Equatable {
+    case available
+    case waitingForTrack
+    case unavailable
   }
 
   private weak var player: PlayerCore?
@@ -591,11 +599,25 @@ final class AirPlayAudioBridge: NSObject {
   private var bridgeFailedForFile = false
   /// Whether Reel currently owns audio through the AVPlayer bridge.
   private var bridgeEngaged = false
+  /// Prevents a route callback from re-engaging audio while stop/quit is draining MPV work.
+  private var stoppingOrQuitting = false
   /// The last known local mpv output. Retain it across route transitions while `ao` is `null`.
   private var savedAudioOutput: String?
   private var savedAudioOutputIntentGeneration: UInt64?
   /// Preserve a disconnect restore until a direct AO command accepted by mpv has settled.
   private var restoreLocalAudioOutputAfterPendingRawCommand = false
+  /// Retry bridge engagement after an already queued local-output restore has drained.
+  private var routeEngagementDeferredForAudioOutputRestore = false
+  /// Last ownership class observed as route and track metadata change.
+  private var lastObservedRouteAudioOwnership: RouteAudioOwnership?
+  /// Remember a canceled local restore until route ownership is settled.
+  private var deferredAudioOutputRestoreAfterRouteCheck:
+    (output: String, generation: UInt64, needsReload: Bool)?
+  private var hasDeferredAudioOutputResolution: Bool {
+    restoreLocalAudioOutputAfterPendingRawCommand ||
+      routeEngagementDeferredForAudioOutputRestore ||
+      deferredAudioOutputRestoreAfterRouteCheck != nil
+  }
   /// Snapshot generation for which Reel most recently queued `ao = null` while connected.
   private var lastAirPlayAudioOutputDisableGeneration: UInt64?
   /// Prevents a late main-thread callback from replaying one direct output change more than once.
@@ -753,6 +775,7 @@ final class AirPlayAudioBridge: NSObject {
     let namesChanged = route.names != routeNames
     routeNames = route.names
     guard active != routeActive || (active && namesChanged) else { return }
+    player?.mpv?.advanceAirPlayRouteOwnershipGeneration()
     let wasActive = routeActive
     routeActive = active
     if active && !wasActive {
@@ -778,20 +801,37 @@ final class AirPlayAudioBridge: NSObject {
 
   /// Brings the bridge in line with the route, the file and its audio track.
   private func reconcile() {
-    guard let player, player.info.state.active, player.mpv != nil else { return }
+    guard !stoppingOrQuitting, let player, player.info.state.active, player.mpv != nil else { return }
+    _ = routeAudioOwnershipNow()
     guard routeActive && !bridgeFailedForFile else {
       if isEngaged { disengage() }
+      if hasDeferredAudioOutputResolution {
+        runNextMPVCommand()
+      }
       return
     }
-    guard player.info.state.loaded else { return }
+    guard player.info.state.loaded else {
+      if hasDeferredAudioOutputResolution {
+        runNextMPVCommand()
+      }
+      return
+    }
     let selection = audioSelection()
-    if case .pending = selection { return }
+    if case .pending = selection {
+      if hasDeferredAudioOutputResolution {
+        runNextMPVCommand()
+      }
+      return
+    }
     if case .unsupported(let reason) = selection {
       // Leaves mpv's own output on, without switching it off first.
       failForFile(reason, message: NSLocalizedString(
         "osc_toolbar.airplay_output.unsupported",
         value: "This file's audio can't be sent over AirPlay, so it plays on this Mac.",
         comment: "The bridge cannot read the current audio track"))
+      if hasDeferredAudioOutputResolution {
+        runNextMPVCommand()
+      }
       return
     }
     if !isEngaged, !engage() { return }
@@ -820,6 +860,11 @@ final class AirPlayAudioBridge: NSObject {
       log("waiting for an accepted direct AO command before engaging", level: .verbose)
       return false
     }
+    guard !hasPendingAudioOutputRestore() else {
+      routeEngagementDeferredForAudioOutputRestore = true
+      log("waiting for the queued local-output restore before engaging", level: .verbose)
+      return false
+    }
     // A fast route reconnect can observe the old event-fed `ao = null` before a queued restore
     // reaches mpv. Keep the last real output as the source for this and later disengages.
     _ = rememberLatestDirectAudioOutput(from: snapshot)
@@ -827,7 +872,8 @@ final class AirPlayAudioBridge: NSObject {
       savedAudioOutput = directAudioOutput
       savedAudioOutputIntentGeneration = snapshot.audioOutputIntentGeneration
     } else if let audioOutput = snapshot.audioOutput,
-              audioOutput != "null" || pendingAudioOutputRestoreValues().isEmpty {
+              audioOutput != "null" ||
+                (savedAudioOutput == nil && pendingAudioOutputRestoreValues().isEmpty) {
       savedAudioOutput = audioOutput
       savedAudioOutputIntentGeneration = snapshot.audioOutputIntentGeneration
     }
@@ -836,10 +882,14 @@ final class AirPlayAudioBridge: NSObject {
       return false
     }
     bridgeEngaged = true
+    deferredAudioOutputRestoreAfterRouteCheck = nil
+    routeEngagementDeferredForAudioOutputRestore = false
     lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
     latencyCompensation = UserDefaults.standard.double(forKey: Self.latencyKey)
-    enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
-    enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
+    enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true,
+                      expectedAudioOutputIntentGeneration: snapshot.audioOutputIntentGeneration)
+    enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true,
+                      expectedAudioOutputIntentGeneration: snapshot.audioOutputIntentGeneration)
     makePlayerIfNeeded()
     mpv.requestAirPlayPlaybackSnapshot()
     // A four-Hz sample is enough for sync correction. Keep libmpv's shared core lock off the UI thread.
@@ -1322,8 +1372,9 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   func audioTrackChanged() {
-    guard isEngaged, player?.info.state.loaded == true else { return }
-    reconcile()
+    _ = routeAudioOwnershipNow()
+    guard player?.info.state.loaded == true else { return }
+    if isEngaged || routeActive { reconcile() }
   }
 
   func pauseChanged(_ paused: Bool) {
@@ -1386,7 +1437,9 @@ final class AirPlayAudioBridge: NSObject {
 
   func fileStarted() {
     releaseFile()
+    stoppingOrQuitting = false
     bridgeFailedForFile = false
+    _ = routeAudioOwnershipNow()
   }
 
   func fileEnded() {
@@ -1395,16 +1448,22 @@ final class AirPlayAudioBridge: NSObject {
 
   /// The player is stopping or quitting; mpv may write a watch-later file with its timing.
   func stopPlayback() {
+    stoppingOrQuitting = true
+    _ = routeAudioOwnershipNow()
     releaseFile()
+    if bridgeEngaged { disengage() }
   }
 
   /// Runs after this bridge's submitted mpv commands have completed, without blocking AppKit.
   func whenMPVCommandsDrained(_ completion: @escaping () -> Void) {
-    guard activeMPVCommand != nil || !mpvCommandQueue.isEmpty || waitingForMPVEventOverflowRecovery else {
+    let hasPendingCommands = activeMPVCommand != nil || !mpvCommandQueue.isEmpty ||
+      waitingForMPVEventOverflowRecovery
+    guard hasPendingCommands || hasDeferredAudioOutputResolution else {
       DispatchQueue.main.async(execute: completion)
       return
     }
     mpvCommandDrainCallbacks.append(completion)
+    if !hasPendingCommands { runNextMPVCommand() }
   }
 
   /// Pauses bridge command advancement until libmpv confirms all accepted async requests finished.
@@ -1479,6 +1538,8 @@ final class AirPlayAudioBridge: NSObject {
     savedAudioOutput = nil
     savedAudioOutputIntentGeneration = nil
     restoreLocalAudioOutputAfterPendingRawCommand = false
+    routeEngagementDeferredForAudioOutputRestore = false
+    deferredAudioOutputRestoreAfterRouteCheck = nil
     activeMPVCommand = nil
     synchronousAudioOutputRestoreReplyUserdata = nil
     activeMPVCommandNeedsResubmission = false
@@ -1586,6 +1647,83 @@ final class AirPlayAudioBridge: NSObject {
     guard !waitingForMPVEventOverflowRecovery, activeMPVCommand == nil else { return }
     guard !mpvCommandQueue.isEmpty else {
       refreshSavedAudioOutputFromSnapshot()
+      if restoreLocalAudioOutputAfterPendingRawCommand {
+        guard let snapshot = player?.mpv?.airPlayPlaybackSnapshot else {
+          restoreLocalAudioOutputAfterPendingRawCommand = false
+          deferredAudioOutputRestoreAfterRouteCheck = nil
+          routeEngagementDeferredForAudioOutputRestore = false
+          notifyMPVCommandQueueDrained()
+          return
+        }
+        guard snapshot.pendingRawAudioOutputIntents.isEmpty,
+              snapshot.pendingRawAudioOutputCommands.isEmpty else {
+          // Keep stop/quit drain callbacks pending until the raw AO write settles and its saved
+          // output can be restored or the returning route can reclaim ownership.
+          return
+        }
+        switch routeAudioOwnershipNow() {
+        case .available:
+          restoreLocalAudioOutputAfterPendingRawCommand = false
+        case .waitingForTrack:
+          routeEngagementDeferredForAudioOutputRestore = true
+        case .unavailable:
+          restoreLocalAudioOutputAfterPendingRawCommand = false
+          let needsReload = deferredAudioOutputRestoreAfterRouteCheck?.needsReload ?? false
+          deferredAudioOutputRestoreAfterRouteCheck = nil
+          routeEngagementDeferredForAudioOutputRestore = false
+          if let output = snapshot.directAudioOutput ?? savedAudioOutput {
+            restoreLatestDirectAudioOutputIfNeeded(output, snapshot: snapshot,
+                                                  forceReload: needsReload)
+          }
+        }
+        if activeMPVCommand != nil || !mpvCommandQueue.isEmpty { return }
+      }
+      if let deferredRestore = deferredAudioOutputRestoreAfterRouteCheck {
+        switch routeAudioOwnershipNow() {
+        case .available:
+          routeEngagementDeferredForAudioOutputRestore = true
+          reconcile()
+          if bridgeEngaged {
+            deferredAudioOutputRestoreAfterRouteCheck = nil
+            routeEngagementDeferredForAudioOutputRestore = false
+          }
+        case .waitingForTrack:
+          // Keep the saved output until track metadata decides whether this route can carry it.
+          routeEngagementDeferredForAudioOutputRestore = true
+        case .unavailable:
+          if let snapshot = player?.mpv?.airPlayPlaybackSnapshot {
+            if !snapshot.pendingRawAudioOutputIntents.isEmpty ||
+                !snapshot.pendingRawAudioOutputCommands.isEmpty {
+              restoreLocalAudioOutputAfterPendingRawCommand = true
+              // Keep stop/quit drain callbacks pending until the raw AO request settles.
+              return
+            } else {
+              deferredAudioOutputRestoreAfterRouteCheck = nil
+              routeEngagementDeferredForAudioOutputRestore = false
+              let output = snapshot.directAudioOutput ?? deferredRestore.output
+              restoreLatestDirectAudioOutputIfNeeded(output, snapshot: snapshot,
+                                                    forceReload: deferredRestore.needsReload)
+            }
+          } else {
+            deferredAudioOutputRestoreAfterRouteCheck = nil
+            routeEngagementDeferredForAudioOutputRestore = false
+          }
+        }
+        if activeMPVCommand != nil || !mpvCommandQueue.isEmpty { return }
+      }
+      if routeEngagementDeferredForAudioOutputRestore {
+        switch routeAudioOwnershipNow() {
+        case .available:
+          routeEngagementDeferredForAudioOutputRestore = false
+          reconcile()
+          if !bridgeEngaged { routeEngagementDeferredForAudioOutputRestore = true }
+        case .waitingForTrack:
+          break
+        case .unavailable:
+          routeEngagementDeferredForAudioOutputRestore = false
+        }
+        if activeMPVCommand != nil || !mpvCommandQueue.isEmpty { return }
+      }
       notifyMPVCommandQueueDrained()
       return
     }
@@ -1605,15 +1743,28 @@ final class AirPlayAudioBridge: NSObject {
           let mpv = player.mpv, let request = activeMPVCommand,
           let replyUserdata = request.replyUserdata else { return }
     let operation = request.operation
+    if operation.name == "ao-reload", request.restoreAudioOutputToken == nil,
+       (!bridgeEngaged || !routeMayOwnAudioOutputNow()) {
+      // The preceding bridge setter may have been accepted before a disconnect, but its separate
+      // reload is no longer needed. Let the queued local restore own the next AO restart.
+      log("skipping stale bridge ao-reload after route ownership changed", level: .verbose)
+      activeMPVCommand = nil
+      activeMPVCommandNeedsResubmission = false
+      activeMPVCommandSubmissionAttempts = 0
+      runNextMPVCommand()
+      return
+    }
     if let restoreToken = request.restoreAudioOutputToken,
        let expectedGeneration = request.expectedAudioOutputIntentGeneration {
       let snapshot = mpv.airPlayPlaybackSnapshot
-      let hasNewerKnownIntent = snapshot.audioOutputIntentGeneration != expectedGeneration &&
-        (snapshot.directAudioOutput != nil ||
-          !snapshot.pendingRawAudioOutputIntents.isEmpty ||
-          !snapshot.pendingRawAudioOutputCommands.isEmpty)
-      if hasNewerKnownIntent {
-        log("skipping queued audio-output restore; a newer direct AO intent is pending",
+      if routeMayOwnAudioOutputNow() {
+        if let output = request.restoreAudioOutput {
+          deferredAudioOutputRestoreAfterRouteCheck = (
+            output: output, generation: expectedGeneration,
+            needsReload: !operation.isAudioOutputSetter)
+        }
+        routeEngagementDeferredForAudioOutputRestore = true
+        log("deferring queued local-output restore while AirPlay ownership is active or pending",
             level: .verbose)
         mpvCommandQueue.removeAll { $0.restoreAudioOutputToken == restoreToken }
         activeMPVCommand = nil
@@ -1622,8 +1773,26 @@ final class AirPlayAudioBridge: NSObject {
         runNextMPVCommand()
         return
       }
+      let hasNewerKnownIntent = snapshot.audioOutputIntentGeneration != expectedGeneration &&
+        (snapshot.directAudioOutput != nil ||
+          !snapshot.pendingRawAudioOutputIntents.isEmpty ||
+          !snapshot.pendingRawAudioOutputCommands.isEmpty)
+      if operation.isAudioOutputSetter && hasNewerKnownIntent {
+        log("skipping queued audio-output restore; a newer direct AO intent is pending",
+            level: .verbose)
+        mpvCommandQueue.removeAll { $0.restoreAudioOutputToken == restoreToken }
+        if deferredAudioOutputRestoreAfterRouteCheck?.generation == expectedGeneration {
+          deferredAudioOutputRestoreAfterRouteCheck = nil
+        }
+        activeMPVCommand = nil
+        activeMPVCommandNeedsResubmission = false
+        activeMPVCommandSubmissionAttempts = 0
+        runNextMPVCommand()
+        return
+      }
     }
-    if operation.isAudioOutputSetter || request.restoreAudioOutput != nil {
+    if operation.isAudioOutputSetter || request.restoreAudioOutput != nil ||
+        operation.name == "ao-reload" {
       let snapshot = mpv.airPlayPlaybackSnapshot
       if operation.isAudioOutputSetter {
         activeMPVCommand?.audioOutputBeforeSubmission = snapshot.audioOutput
@@ -1632,9 +1801,19 @@ final class AirPlayAudioBridge: NSObject {
       activeMPVCommand?.audioOutputIntentGenerationBeforeSubmission =
         request.expectedAudioOutputIntentGeneration ?? snapshot.audioOutputIntentGeneration
     }
+    let routeOwnershipGeneration: UInt64? =
+      operation.isAudioOutputSetter || operation.name == "ao-reload"
+        ? mpv.airPlayRouteOwnershipGenerationSnapshot() : nil
+    activeMPVCommand?.routeOwnershipGenerationBeforeSubmission = routeOwnershipGeneration
+    // Once the restore setter was accepted, its paired reload must finish unless a live route
+    // took ownership. A newer AO intent can safely be the value reloaded; fencing this second
+    // half could strand mpv after the setter already switched its configured output.
+    let submissionIntentGeneration: UInt64? =
+      request.restoreAudioOutputToken != nil && !operation.isAudioOutputSetter
+        ? nil : request.expectedAudioOutputIntentGeneration
     mpv.submitAirPlayCommand(
-      ifAudioOutputIntentGeneration: request.restoreAudioOutputToken == nil
-        ? nil : request.expectedAudioOutputIntentGeneration,
+      ifAudioOutputIntentGeneration: submissionIntentGeneration,
+      ifRouteOwnershipGeneration: routeOwnershipGeneration,
       submission: {
         switch operation {
         case .command(let command, let arguments):
@@ -1657,19 +1836,58 @@ final class AirPlayAudioBridge: NSObject {
       })
   }
 
-  /// Retire an AO restore that became stale between main-thread preflight and queue submission.
+  /// Retire a bridge AO write that became stale between main-thread preflight and queue submission.
   /// It was never sent to mpv, so it must not enter the synchronous failure fallback.
   private func mpvCommandSubmissionWasSuperseded(replyUserdata: UInt64) {
     guard let request = activeMPVCommand, request.replyUserdata == replyUserdata else { return }
+    let routeOwnershipChanged = request.routeOwnershipGenerationBeforeSubmission.map {
+      player?.mpv?.airPlayRouteOwnershipGenerationSnapshot() != $0
+    } ?? false
     if let restoreToken = request.restoreAudioOutputToken {
+      if routeOwnershipChanged, let output = request.restoreAudioOutput {
+        deferAudioOutputRestoreAfterRouteChange(
+          output, basedOn: request, needsReload: !request.operation.isAudioOutputSetter)
+      }
       mpvCommandQueue.removeAll { $0.restoreAudioOutputToken == restoreToken }
     }
-    log("skipping queued audio-output restore; a newer AO intent arrived before submission",
+    if routeOwnershipChanged, request.restoreAudioOutputToken == nil,
+       bridgeEngaged, routeMayOwnAudioOutputNow(),
+       let mpv = player?.mpv,
+       request.expectedAudioOutputIntentGeneration ==
+         mpv.airPlayPlaybackSnapshot.audioOutputIntentGeneration {
+      // The route still needs this command, but its main-thread preflight went stale. Rebase it
+      // ahead of later queued work so a paired AO setter cannot be overtaken by its reload.
+      activeMPVCommand?.routeOwnershipGenerationBeforeSubmission = nil
+      activeMPVCommand?.audioOutputIntentGenerationBeforeSubmission = nil
+      activeMPVCommand?.audioOutputBeforeSubmission = nil
+      activeMPVCommand?.capturedAudioOutputBeforeSubmission = false
+      submitActiveMPVCommand()
+      return
+    }
+    if routeOwnershipChanged, request.restoreAudioOutputToken == nil,
+       request.operation.audioOutputTarget == "null",
+       mpvCommandQueue.first?.operation.name == "ao-reload",
+       mpvCommandQueue.first?.restoreAudioOutputToken == nil {
+      // This setter never reached mpv. Its immediately paired reload is stale too; leave the
+      // route-disconnect restore pair to restore and reload the local output in order.
+      mpvCommandQueue.removeFirst()
+    }
+    log("skipping stale bridge AO write; a newer AO intent arrived before submission",
         level: .verbose)
     activeMPVCommand = nil
     activeMPVCommandNeedsResubmission = false
     activeMPVCommandSubmissionAttempts = 0
     runNextMPVCommand()
+  }
+
+  private func deferAudioOutputRestoreAfterRouteChange(
+    _ output: String, basedOn request: MPVCommandRequest, needsReload: Bool
+  ) {
+    let intentGeneration = player?.mpv?.airPlayPlaybackSnapshot.audioOutputIntentGeneration ??
+      request.expectedAudioOutputIntentGeneration ?? 0
+    deferredAudioOutputRestoreAfterRouteCheck = (
+      output: output, generation: intentGeneration, needsReload: needsReload)
+    routeEngagementDeferredForAudioOutputRestore = true
   }
 
   private func notifyMPVCommandQueueDrained() {
@@ -1702,7 +1920,11 @@ final class AirPlayAudioBridge: NSObject {
       synchronousAudioOutputRestoreReplyUserdata = replyUserdata
       log("async audio-output restore failed; retrying \(output) synchronously off the main thread",
           level: .warning)
-      player?.mpv.restoreAirPlayAudioOutput(output, ifNoNewerIntentThan: intentGeneration) {
+      let routeGeneration = request.routeOwnershipGenerationBeforeSubmission ??
+        player?.mpv?.airPlayRouteOwnershipGenerationSnapshot() ?? 0
+      player?.mpv.restoreAirPlayAudioOutput(
+        output, ifNoNewerIntentThan: intentGeneration,
+        ifRouteOwnershipUnchangedSince: routeGeneration) {
         [weak self] restoreResult, wasSuperseded in
         self?.finishSynchronousAudioOutputRestore(restoreResult, wasSuperseded: wasSuperseded,
                                                  output: output, replyUserdata: replyUserdata)
@@ -1728,20 +1950,45 @@ final class AirPlayAudioBridge: NSObject {
   private func finishSynchronousAudioOutputRestore(_ result: Int32, wasSuperseded: Bool,
                                                    output: String,
                                                    replyUserdata: UInt64) {
-    guard activeMPVCommand?.replyUserdata == replyUserdata else { return }
+    guard let request = activeMPVCommand, request.replyUserdata == replyUserdata else { return }
     synchronousAudioOutputRestoreReplyUserdata = nil
-    if wasSuperseded {
-      log("skipped synchronous audio-output restore to \(output); a newer AO intent took over",
+    let routeOwnershipChanged = request.routeOwnershipGenerationBeforeSubmission.map {
+      player?.mpv?.airPlayRouteOwnershipGenerationSnapshot() != $0
+    } ?? false
+    if routeOwnershipChanged, routeMayOwnAudioOutputNow() {
+      // Route ownership changed while fallback ran or before its callback reached main. Do not
+      // let a stale local restore error mark this file unbridgeable; preserve its reload debt and
+      // resolve the current route/track state below.
+      deferAudioOutputRestoreAfterRouteChange(output, basedOn: request, needsReload: true)
+      log("deferring synchronous local-output fallback after route ownership changed",
           level: .verbose)
+    } else if wasSuperseded {
+      if routeOwnershipChanged {
+        // An inactive/unsupported route requeues the complete restore after ownership is checked.
+        deferAudioOutputRestoreAfterRouteChange(output, basedOn: request, needsReload: true)
+        log("deferring synchronous local-output fallback after route ownership changed",
+            level: .verbose)
+      } else {
+        log("skipped synchronous audio-output restore to \(output); a newer AO intent took over",
+            level: .verbose)
+      }
     } else if player?.mpv.hasObservedShutdownEvent != true {
       if result < 0 {
-        let error = String(cString: mpv_error_string(result))
-        log("could not restore mpv audio output to \(output): \(error)", level: .error)
-        bridgeFailedForFile = true
-        player?.sendOSD(.custom(NSLocalizedString(
-          "osc_toolbar.airplay_output.restore_failed",
-          value: "AirPlay stopped, but Reel could not restore audio output on this Mac.",
-          comment: "The native AirPlay bridge failed to restore mpv's audio output")))
+        if routeMayOwnAudioOutputNow() {
+          // Track/file ownership can change before a main-thread callback observes its epoch.
+          // Give the current supported or pending route a chance before marking the file failed.
+          deferAudioOutputRestoreAfterRouteChange(output, basedOn: request, needsReload: true)
+          log("deferring failed local-output fallback while the AirPlay route can own audio",
+              level: .verbose)
+        } else {
+          let error = String(cString: mpv_error_string(result))
+          log("could not restore mpv audio output to \(output): \(error)", level: .error)
+          bridgeFailedForFile = true
+          player?.sendOSD(.custom(NSLocalizedString(
+            "osc_toolbar.airplay_output.restore_failed",
+            value: "AirPlay stopped, but Reel could not restore audio output on this Mac.",
+            comment: "The native AirPlay bridge failed to restore mpv's audio output")))
+        }
       } else {
         log("synchronous fallback restored mpv audio output to \(output)", level: .warning)
       }
@@ -1767,30 +2014,28 @@ final class AirPlayAudioBridge: NSObject {
     if restoreLocalAudioOutputAfterPendingRawCommand,
        snapshot.pendingRawAudioOutputIntents.isEmpty,
        snapshot.pendingRawAudioOutputCommands.isEmpty {
-      restoreLocalAudioOutputAfterPendingRawCommand = false
       let output = snapshot.directAudioOutput ?? savedAudioOutput
       if let output {
         if snapshot.directAudioOutput != nil {
           savedAudioOutput = output
           savedAudioOutputIntentGeneration = snapshot.audioOutputIntentGeneration
         }
-        // A route may return before the pending AO request settles. Let the live route reclaim
-        // ownership before restoring local output, or this queue will briefly enable mpv audio
-        // immediately before `engage()` disables it again.
-        let routeWillResolveAudioOutput: Bool
-        if bridgeEngaged {
-          routeWillResolveAudioOutput = true
-        } else if routeActive && !bridgeFailedForFile {
-          if case .unsupported = audioSelection() {
-            routeWillResolveAudioOutput = false
-          } else {
-            routeWillResolveAudioOutput = true
-          }
-        } else {
-          routeWillResolveAudioOutput = false
-        }
-        if !routeWillResolveAudioOutput {
-          restoreLatestDirectAudioOutputIfNeeded(output, snapshot: snapshot)
+        switch routeAudioOwnershipNow() {
+        case .available:
+          // Let the route own audio without briefly restoring mpv immediately before engage.
+          restoreLocalAudioOutputAfterPendingRawCommand = false
+          deferredAudioOutputRestoreAfterRouteCheck = nil
+          routeEngagementDeferredForAudioOutputRestore = false
+        case .waitingForTrack:
+          // Keep the decision pending until metadata confirms support or requires local fallback.
+          break
+        case .unavailable:
+          restoreLocalAudioOutputAfterPendingRawCommand = false
+          let needsReload = deferredAudioOutputRestoreAfterRouteCheck?.needsReload ?? false
+          deferredAudioOutputRestoreAfterRouteCheck = nil
+          routeEngagementDeferredForAudioOutputRestore = false
+          restoreLatestDirectAudioOutputIfNeeded(output, snapshot: snapshot,
+                                                forceReload: needsReload)
         }
       }
     }
@@ -1798,8 +2043,12 @@ final class AirPlayAudioBridge: NSObject {
     if let directAudioOutput, directAudioOutput != "null" {
       if routeActive && bridgeEngaged {
         lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
-        enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
-        enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
+        enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true,
+                          expectedAudioOutputIntentGeneration:
+                            snapshot.audioOutputIntentGeneration)
+        enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true,
+                          expectedAudioOutputIntentGeneration:
+                            snapshot.audioOutputIntentGeneration)
         log("reasserting AirPlay output after local audio-output change", level: .verbose)
       }
     }
@@ -1808,6 +2057,9 @@ final class AirPlayAudioBridge: NSObject {
        snapshot.pendingRawAudioOutputCommands.isEmpty,
        let directAudioOutput = snapshot.directAudioOutput {
       restoreLatestDirectAudioOutputIfNeeded(directAudioOutput, snapshot: snapshot)
+    }
+    if hasDeferredAudioOutputResolution {
+      runNextMPVCommand()
     }
     guard routeActive else { return }
     if bridgeEngaged { keepMPVAudioOutputDisabled() }
@@ -1840,13 +2092,14 @@ final class AirPlayAudioBridge: NSObject {
   /// A direct write can finish after disconnect queued its restore. Append the newer intent after
   /// that pair, or repair the output if the older pair has already completed.
   private func restoreLatestDirectAudioOutputIfNeeded(_ audioOutput: String,
-                                                       snapshot: MPVAirPlaySnapshot) {
+                                                       snapshot: MPVAirPlaySnapshot,
+                                                       forceReload: Bool = false) {
     let pendingRestores = pendingAudioOutputRestoreValues()
     // The restore queue is ordered. An earlier matching entry cannot satisfy a newer intent when
     // a different restore is still queued behind it.
     if let lastPendingRestore = pendingRestores.last {
       guard lastPendingRestore != audioOutput else { return }
-    } else if snapshot.audioOutput == audioOutput {
+    } else if snapshot.audioOutput == audioOutput, !forceReload {
       return
     }
     enqueueAudioOutputRestore(audioOutput, intentGeneration: snapshot.audioOutputIntentGeneration)
@@ -1863,6 +2116,49 @@ final class AirPlayAudioBridge: NSObject {
       return request.restoreAudioOutput
     })
     return outputs
+  }
+
+  private func hasPendingAudioOutputRestore() -> Bool {
+    activeMPVCommand?.restoreAudioOutputToken != nil ||
+      mpvCommandQueue.contains { $0.restoreAudioOutputToken != nil }
+  }
+
+  private func routeAudioOwnershipNow() -> RouteAudioOwnership {
+    guard routeActive, !bridgeFailedForFile, !stoppingOrQuitting,
+          let player, player.info.state.active, player.mpv != nil else {
+      return observeRouteAudioOwnership(.unavailable)
+    }
+    switch player.info.state {
+    case .loading, .starting:
+      // File metadata decides whether the selected route can carry this track. Keep the local
+      // output restore pending until FILE_LOADED rather than briefly enabling Mac audio.
+      return observeRouteAudioOwnership(.waitingForTrack)
+    case .loaded, .playing, .paused:
+      break
+    default:
+      return observeRouteAudioOwnership(.unavailable)
+    }
+    let ownership: RouteAudioOwnership
+    switch audioSelection() {
+    case .supported(_), .noAudio:
+      ownership = .available
+    case .pending:
+      ownership = .waitingForTrack
+    case .unsupported:
+      ownership = .unavailable
+    }
+    return observeRouteAudioOwnership(ownership)
+  }
+
+  private func observeRouteAudioOwnership(_ ownership: RouteAudioOwnership) -> RouteAudioOwnership {
+    guard ownership != lastObservedRouteAudioOwnership else { return ownership }
+    lastObservedRouteAudioOwnership = ownership
+    player?.mpv?.advanceAirPlayRouteOwnershipGeneration()
+    return ownership
+  }
+
+  private func routeMayOwnAudioOutputNow() -> Bool {
+    routeAudioOwnershipNow() != .unavailable
   }
 
   private func enqueueAudioOutputRestore(_ output: String, intentGeneration: UInt64) {
@@ -1900,8 +2196,10 @@ final class AirPlayAudioBridge: NSObject {
       savedAudioOutputIntentGeneration = snapshot.audioOutputIntentGeneration
     }
     lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
-    enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
-    enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
+    enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true,
+                      expectedAudioOutputIntentGeneration: snapshot.audioOutputIntentGeneration)
+    enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true,
+                      expectedAudioOutputIntentGeneration: snapshot.audioOutputIntentGeneration)
     log("reasserting AirPlay output after local audio-output change", level: .verbose)
   }
 
@@ -1919,7 +2217,7 @@ final class AirPlayAudioBridge: NSObject {
       guard directAudioOutput == audioOutput else { return }
       savedAudioOutput = audioOutput
       savedAudioOutputIntentGeneration = snapshot.audioOutputIntentGeneration
-    } else {
+    } else if audioOutput != "null" || savedAudioOutput == nil {
       savedAudioOutput = audioOutput
       savedAudioOutputIntentGeneration = snapshot.audioOutputIntentGeneration
     }

@@ -16,7 +16,11 @@ assert "mpv.setDouble" not in bridge.split("private func pollHold(", 1)[1].split
 assert "mpv.setDouble" not in bridge.split("private func engage()", 1)[1].split("private func disengage()", 1)[0]
 timing_scope = bridge.split("func withUserTiming", 1)[1].split("func fileStarted", 1)[0]
 assert timing_scope.count("mpv.setDouble") == 4, "watch-later timing writes must remain synchronous"
-assert bridge.count('enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)') == 3
+ao_reload_count = bridge.count('MPVCommand("ao-reload")')
+assert ao_reload_count > 0, "the bridge must retain its AO reload operations"
+assert ao_reload_count == bridge.count(
+    'enqueueMPVCommand(MPVCommand("ao-reload")'
+), "every ao-reload must go through the serialized async command queue"
 assert "activeMPVCommand == nil" in bridge, "bridge mpv commands must be serialized"
 assert "replyUserdata: replyUserdata" in bridge
 assert "airPlayAudioCommandBase &+ nextMPVCommandReplyId" in bridge
