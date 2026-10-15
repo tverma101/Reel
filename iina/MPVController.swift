@@ -996,9 +996,15 @@ class MPVController: NSObject {
   }
 
   private static func rawCommandSetsAudioOutput(_ rawString: String) -> Bool {
-    let command = rawString.trimmingCharacters(in: .whitespacesAndNewlines)
-    return command.range(of: #"^set\s+['\"]?ao['\"]?(?:\s|=)"#,
-                         options: .regularExpression) != nil
+    let tokens = rawString.split(whereSeparator: \.isWhitespace)
+    var commandIndex = 0
+    while commandIndex < tokens.count,
+          MPVPlaylistMutationPolicy.commandPrefixes.contains(String(tokens[commandIndex])) {
+      commandIndex += 1
+    }
+    guard commandIndex + 1 < tokens.count, tokens[commandIndex] == "set" else { return false }
+    let property = tokens[commandIndex + 1].trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+    return property == "ao" || property.hasPrefix("ao=")
   }
 
   @discardableResult

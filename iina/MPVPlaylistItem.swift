@@ -128,7 +128,7 @@ struct MPVPlaylistTitleUpdate {
 /// Playlist commands exposed to plugins can bypass PlayerCore's typed mutation methods. Keep the
 /// incremental playback snapshot safe when one of those commands can change row order/content.
 enum MPVPlaylistMutationPolicy {
-  private static let commandPrefixes: Set<String> = [
+  static let commandPrefixes: Set<String> = [
     "osd-auto", "no-osd", "osd-bar", "osd-msg", "osd-msg-bar", "raw", "expand-properties",
     "repeatable", "nonrepeatable", "nonscalable", "async", "sync"
   ]

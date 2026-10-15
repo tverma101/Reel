@@ -76,7 +76,8 @@ reached the main thread yet, and defer route engagement while a direct `ao` writ
 Publish a direct setter's cached output only if no newer `ao` generation appeared while its
 libmpv call ran. Retain the newest successful direct `ao` setter intent separately from event-fed
 bridge state, including `mpv.command("set", ["ao", value])` and a custom key binding using
-`set ao VALUE`; serialize synchronous setters so their saved order matches their libmpv writes.
+`set ao VALUE` with mpv command prefixes such as `no-osd`; serialize synchronous setters so their
+saved order matches their libmpv writes.
 A failed queued restore's synchronous fallback must not replace that user intent. Preserve an
 explicit direct `ao = null` choice through disconnect as well. If a local output change races AirPlay
 engagement or arrives while the bridge is carrying audio, retain that output for disconnect and
