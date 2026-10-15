@@ -979,14 +979,15 @@ class MPVController: NSObject {
   func command(rawString: String, level: Logger.Level = .debug) -> Int32 {
     log("Run command: \(rawString)", level: level)
     // Key-binding actions enter through mpv_command_string instead of command(_:args:). Track
-    // the common direct `set ao VALUE` form with the same ordering as typed synchronous setters.
-    let setsAudioOutput = Self.rawCommandSetsAudioOutput(rawString)
-    let audioOutputGenerationBeforeSet = setsAudioOutput ? beginSynchronousAudioOutputWrite() : nil
+    // direct AO changes in single or semicolon-separated raw actions, including `async` prefixes.
+    let audioOutputCommand = Self.rawCommandAudioOutput(rawString)
+    let audioOutputGenerationBeforeSet = audioOutputCommand.map { _ in beginSynchronousAudioOutputWrite() }
     let changesPlaylist = MPVPlaylistMutationPolicy.invalidatesSnapshot(in: rawString)
     if changesPlaylist { player.playlistStructureWillChange() }
     let result = mpv_command_string(mpv, rawString)
-    if let audioOutputGenerationBeforeSet {
-      let output = result >= 0 ? getString(MPVOption.Audio.ao) : nil
+    if let audioOutputGenerationBeforeSet, let audioOutputCommand {
+      let output = result < 0 ? nil : (audioOutputCommand.isAsynchronous
+        ? audioOutputCommand.output : getString(MPVOption.Audio.ao))
       finishSynchronousAudioOutputWrite(output, result: result,
                                         generationBeforeSet: audioOutputGenerationBeforeSet,
                                         recordsDirectAudioOutputIntent: true)
@@ -995,16 +996,38 @@ class MPVController: NSObject {
     return result
   }
 
-  private static func rawCommandSetsAudioOutput(_ rawString: String) -> Bool {
-    let tokens = rawString.split(whereSeparator: \.isWhitespace)
-    var commandIndex = 0
-    while commandIndex < tokens.count,
-          MPVPlaylistMutationPolicy.commandPrefixes.contains(String(tokens[commandIndex])) {
-      commandIndex += 1
+  private static func rawCommandAudioOutput(_ rawString: String) ->
+    (output: String, isAsynchronous: Bool)? {
+    var latestAudioOutputCommand: (output: String, isAsynchronous: Bool)?
+    var containsAsyncAudioOutputCommand = false
+    for segment in rawString.split(separator: ";") {
+      let tokens = segment.split(whereSeparator: \.isWhitespace)
+      var commandIndex = 0
+      var isAsynchronous = false
+      while commandIndex < tokens.count,
+            MPVPlaylistMutationPolicy.commandPrefixes.contains(String(tokens[commandIndex])) {
+        if tokens[commandIndex] == "async" { isAsynchronous = true }
+        commandIndex += 1
+      }
+      guard commandIndex + 2 < tokens.count, tokens[commandIndex] == "set" else { continue }
+      let property = tokens[commandIndex + 1].trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+      guard property == "ao" else { continue }
+      containsAsyncAudioOutputCommand = containsAsyncAudioOutputCommand || isAsynchronous
+      let firstValueToken = String(tokens[commandIndex + 2])
+      var output = firstValueToken
+      if let quote = firstValueToken.first, quote == "\"" || quote == "'" {
+        output = String(firstValueToken.dropFirst())
+        if !firstValueToken.dropFirst().hasSuffix(String(quote)) {
+          for token in tokens.dropFirst(commandIndex + 3) {
+            output += " \(token)"
+            if String(token).hasSuffix(String(quote)) { break }
+          }
+        }
+        if output.hasSuffix(String(quote)) { output.removeLast() }
+      }
+      latestAudioOutputCommand = (output, containsAsyncAudioOutputCommand)
     }
-    guard commandIndex + 1 < tokens.count, tokens[commandIndex] == "set" else { return false }
-    let property = tokens[commandIndex + 1].trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-    return property == "ao" || property.hasPrefix("ao=")
+    return latestAudioOutputCommand
   }
 
   @discardableResult
