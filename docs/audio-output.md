@@ -81,11 +81,12 @@ saved order matches their libmpv writes. The raw-command scanner respects quoted
 tracks `set`, `cycle`, and `cycle-values` AO actions with each command's own prefixes. An async
 raw `set ao` with a literal target updates the saved intent only after mpv accepts the command and
 reports that value (including after event-queue recovery); an older completion cannot replace a
-newer confirmed choice. A rejected raw async command never leaves a pending target. Successful
-accepted async selectors and expanded targets have no identifiable completion value, so Reel retires an
-older explicit target and follows mpv's reported AO value without inferring the selector's result
-from an unrelated change. Before Reel writes `ao = null` for AirPlay, it drops a pending literal
-`null` request that could otherwise be mistaken for the bridge's own output change.
+newer confirmed choice. A literal `null` target is recorded at acceptance because AirPlay itself
+uses that valid output, so a later property event cannot identify which writer selected it. A
+rejected raw async command never leaves a pending target. Accepted async selectors and expanded
+targets have no identifiable completion value, so Reel retires an older explicit target and follows
+mpv's reported AO value without inferring the selector's result from an unrelated change. An
+event-fed `ao = null` is retained when no route restore is in flight.
 A failed queued restore's synchronous fallback must not replace that user intent. Preserve an
 explicit direct `ao = null` choice through disconnect as well. If a local output change races AirPlay
 engagement or arrives while the bridge is carrying audio, retain that output for disconnect and

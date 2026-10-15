@@ -794,7 +794,8 @@ final class AirPlayAudioBridge: NSObject {
     _ = rememberLatestDirectAudioOutput(from: snapshot)
     if let directAudioOutput = snapshot.directAudioOutput {
       savedAudioOutput = directAudioOutput
-    } else if let audioOutput = snapshot.audioOutput, audioOutput != "null" {
+    } else if let audioOutput = snapshot.audioOutput,
+              audioOutput != "null" || pendingAudioOutputRestoreValues().isEmpty {
       savedAudioOutput = audioOutput
     }
     guard let savedAudioOutput else {
@@ -804,7 +805,6 @@ final class AirPlayAudioBridge: NSObject {
     bridgeEngaged = true
     lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
     latencyCompensation = UserDefaults.standard.double(forKey: Self.latencyKey)
-    mpv.discardPendingRawAudioOutputIntent(matching: "null")
     enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
     enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
     makePlayerIfNeeded()
@@ -826,6 +826,13 @@ final class AirPlayAudioBridge: NSObject {
     if let snapshot = player?.mpv?.airPlayPlaybackSnapshot,
        snapshot.audioOutputChangesInFlight == 0 {
       _ = rememberLatestDirectAudioOutput(from: snapshot)
+      if snapshot.directAudioOutput == nil,
+         let audioOutput = snapshot.audioOutput, audioOutput != "null",
+         !pendingAudioOutputRestoreValues().contains(audioOutput) {
+        // A newer async selector may have changed the event-fed AO value before its queued main
+        // callback runs. Capture it before enqueueing the disconnect restore.
+        savedAudioOutput = audioOutput
+      }
     }
     replaceItem(with: nil)
     waitingForMPVAudio = false
@@ -1642,7 +1649,6 @@ final class AirPlayAudioBridge: NSObject {
     if let directAudioOutput, directAudioOutput != "null" {
       if routeActive && bridgeEngaged {
         lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
-        mpv.discardPendingRawAudioOutputIntent(matching: "null")
         enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
         enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
         log("reasserting AirPlay output after local audio-output change", level: .verbose)
@@ -1689,9 +1695,6 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   private func enqueueAudioOutputRestore(_ output: String) {
-    if output == "null" {
-      player?.mpv?.discardPendingRawAudioOutputIntent(matching: output)
-    }
     nextAudioOutputRestoreToken &+= 1
     let restoreToken = nextAudioOutputRestoreToken
     enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, output], requiredForOutput: true,
@@ -1717,14 +1720,13 @@ final class AirPlayAudioBridge: NSObject {
       savedAudioOutput = audioOutput
     }
     lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
-    mpv.discardPendingRawAudioOutputIntent(matching: "null")
     enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
     enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
     log("reasserting AirPlay output after local audio-output change", level: .verbose)
   }
 
-  /// Refresh the local-output cache only after all route restores have settled. An `ao = null`
-  /// snapshot during a disconnect/reconnect cycle is stale bridge state, not the local output.
+  /// Refresh the local-output cache only after all route restores have settled. While a restore is
+  /// pending, an event-fed `ao = null` may still be the bridge's disabled output.
   private func refreshSavedAudioOutputFromSnapshot() {
     guard !bridgeEngaged,
           activeMPVCommand?.restoreAudioOutputToken == nil,
@@ -1734,7 +1736,7 @@ final class AirPlayAudioBridge: NSObject {
     if let directAudioOutput = snapshot.directAudioOutput {
       guard directAudioOutput == audioOutput else { return }
       savedAudioOutput = audioOutput
-    } else if audioOutput != "null" {
+    } else {
       savedAudioOutput = audioOutput
     }
   }

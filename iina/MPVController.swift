@@ -1259,13 +1259,6 @@ class MPVController: NSObject {
     }
   }
 
-  /// Drops only an intent that could be falsely confirmed by a bridge-owned AO write.
-  func discardPendingRawAudioOutputIntent(matching output: String) {
-    $airPlaySnapshot.withLock { snapshot in
-      snapshot.pendingRawAudioOutputIntents.removeAll { $0.output == output }
-    }
-  }
-
   /// Applies an observed AO value and consumes only the newest matching raw async request.
   private func observeAudioOutput(_ output: String?, in snapshot: inout MPVAirPlaySnapshot) {
     snapshot.audioOutput = output
@@ -1288,8 +1281,9 @@ class MPVController: NSObject {
   private func recordAcceptedRawAsyncAudioOutputIntent(_ output: String, intentSequence: UInt64) {
     $airPlaySnapshot.withLock { snapshot in
       guard intentSequence > snapshot.directAudioOutputIntentSequence else { return }
-      if snapshot.audioOutput == output {
-        // The current property already confirms this literal target, including an explicit null.
+      if snapshot.audioOutput == output || output == "null" {
+        // `null` is a valid output used by Reel itself, so a later bridge write cannot prove
+        // whether a pending request to select it came from the user or from AirPlay.
         recordDirectAudioOutputIntent(output, intentSequence: intentSequence, in: &snapshot)
         return
       }
