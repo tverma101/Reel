@@ -538,8 +538,9 @@ final class AirPlayAudioBridge: NSObject {
     /// Identifies one disengage pair so its fallback cannot remove a later route's restore.
     let restoreAudioOutputToken: UInt64?
     var replyUserdata: UInt64? = nil
-    /// Used to publish the confirmed AO value if its property event is not yet in the snapshot.
-    var audioOutputGenerationBeforeSubmission: UInt64? = nil
+    /// Used to publish the confirmed AO value if no newer event or direct intent superseded it.
+    var audioOutputObservedGenerationBeforeSubmission: UInt64? = nil
+    var audioOutputIntentGenerationBeforeSubmission: UInt64? = nil
   }
 
   private struct Selection: Equatable {
@@ -1570,8 +1571,11 @@ final class AirPlayAudioBridge: NSObject {
           let replyUserdata = request.replyUserdata else { return }
     let operation = request.operation
     if operation.isAudioOutputSetter {
-      activeMPVCommand?.audioOutputGenerationBeforeSubmission =
-        mpv.airPlayPlaybackSnapshot.audioOutputGeneration
+      let snapshot = mpv.airPlayPlaybackSnapshot
+      activeMPVCommand?.audioOutputObservedGenerationBeforeSubmission =
+        snapshot.audioOutputObservedGeneration
+      activeMPVCommand?.audioOutputIntentGenerationBeforeSubmission =
+        snapshot.audioOutputIntentGeneration
     }
     mpv.submitAirPlayCommand({
       switch operation {
@@ -1606,9 +1610,11 @@ final class AirPlayAudioBridge: NSObject {
   func mpvCommandCompleted(_ result: Int32, replyUserdata: UInt64) {
     guard let request = activeMPVCommand, request.replyUserdata == replyUserdata else { return }
     if result >= 0,
-       let generation = request.audioOutputGenerationBeforeSubmission,
+       let observedGeneration = request.audioOutputObservedGenerationBeforeSubmission,
+       let intentGeneration = request.audioOutputIntentGenerationBeforeSubmission,
        let output = request.operation.audioOutputTarget {
-      player?.mpv?.confirmAirPlayAudioOutput(output, ifUnchangedSince: generation)
+      player?.mpv?.confirmAirPlayAudioOutput(
+        output, ifUnchangedSince: observedGeneration, andNoNewerIntentThan: intentGeneration)
     }
     if result < 0, let output = request.restoreAudioOutput {
       guard synchronousAudioOutputRestoreReplyUserdata != replyUserdata else { return }
