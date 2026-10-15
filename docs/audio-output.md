@@ -97,7 +97,9 @@ Unexpected MPV shutdown must pause and remove the hidden AVPlayer item, invalida
 timers, and detach its playhead feeder without calling back into the destroyed MPV core.
 Keep the cached local output separate from the bridge's engaged state: a fast route reconnect can
 arrive while the event-fed `ao` snapshot still says `null`. Retain the last local output across
-that transition, and refresh it from mpv only after pending route restores have drained.
+that transition, and refresh it from mpv only after pending route restores have drained. A successful
+bridge `ao` setter reply may fill the cached value if no newer `ao` event arrived while it ran;
+`ao-reload` completes separately and is not treated as a pending output selection.
 Keep the snapshot
 request-state lock out of libmpv calls so the main-thread timer cannot inherit core-lock waits.
 AVPlayer clock monitoring starts even when its first reported time is invalid, allowing the startup

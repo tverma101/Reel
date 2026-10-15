@@ -1197,6 +1197,16 @@ class MPVController: NSObject {
       guard !value.contains(first) else { return nil }
       return value
     }
+    if token.first == "`" {
+      let characters = Array(token)
+      guard characters.count >= 4 else { return nil }
+      let delimiter = characters[1]
+      guard characters[characters.count - 2] == delimiter,
+            characters[characters.count - 1] == "`" else { return nil }
+      let value = String(characters[2..<(characters.count - 2)])
+      guard !value.contains(String([delimiter, "`"])) else { return nil }
+      return value
+    }
     guard !token.contains("\""), !token.contains("'"), !token.contains("`") else { return nil }
     return token
   }
@@ -1208,12 +1218,13 @@ class MPVController: NSObject {
       var commandIndex = 0
       var isAsynchronous = false
       while commandIndex < tokens.count,
-            MPVPlaylistMutationPolicy.commandPrefixes.contains(String(tokens[commandIndex])) {
-        if tokens[commandIndex] == "async" { isAsynchronous = true }
+            let prefix = literalRawCommandToken(tokens[commandIndex]),
+            MPVPlaylistMutationPolicy.commandPrefixes.contains(prefix) {
+        if prefix == "async" { isAsynchronous = true }
         commandIndex += 1
       }
-      guard commandIndex < tokens.count else { continue }
-      let command = tokens[commandIndex]
+      guard commandIndex < tokens.count,
+            let command = literalRawCommandToken(tokens[commandIndex]) else { continue }
       var propertyIndex = commandIndex + 1
       if command == "cycle-values",
          propertyIndex < tokens.count,
@@ -1256,6 +1267,16 @@ class MPVController: NSObject {
       snapshot.directAudioOutputIntentSequence = intentSequence
       snapshot.directAudioOutputGeneration &+= 1
       snapshot.pendingRawAudioOutputIntents.removeAll { $0.intentSequence <= intentSequence }
+    }
+  }
+
+  /// Confirms a bridge-owned `ao` write if no newer property event arrived since it was submitted.
+  /// This closes the gap where an async setter reply precedes its queued property notification.
+  func confirmAirPlayAudioOutput(_ output: String, ifUnchangedSince generation: UInt64) {
+    $airPlaySnapshot.withLock { snapshot in
+      guard snapshot.audioOutputGeneration == generation else { return }
+      snapshot.audioOutput = output
+      snapshot.audioOutputGeneration &+= 1
     }
   }
 

@@ -513,17 +513,21 @@ final class AirPlayAudioBridge: NSObject {
         }
       }
 
-      var isAudioOutputSetter: Bool {
+      var audioOutputTarget: String? {
         switch self {
         case .command(let command, let arguments):
-          return command.rawValue == MPVCommand.set.rawValue &&
-            arguments.first == MPVOption.Audio.ao
-        case .stringProperty(let name, _):
-          return name == MPVOption.Audio.ao
+          guard command.rawValue == MPVCommand.set.rawValue,
+                arguments.first == MPVOption.Audio.ao,
+                arguments.count > 1 else { return nil }
+          return arguments[1]
+        case .stringProperty(let name, let value):
+          return name == MPVOption.Audio.ao ? value : nil
         case .doubleProperty:
-          return false
+          return nil
         }
       }
+
+      var isAudioOutputSetter: Bool { audioOutputTarget != nil }
     }
 
     let operation: Operation
@@ -534,6 +538,8 @@ final class AirPlayAudioBridge: NSObject {
     /// Identifies one disengage pair so its fallback cannot remove a later route's restore.
     let restoreAudioOutputToken: UInt64?
     var replyUserdata: UInt64? = nil
+    /// Used to publish the confirmed AO value if its property event is not yet in the snapshot.
+    var audioOutputGenerationBeforeSubmission: UInt64? = nil
   }
 
   private struct Selection: Equatable {
@@ -1563,6 +1569,10 @@ final class AirPlayAudioBridge: NSObject {
           let mpv = player.mpv, let request = activeMPVCommand,
           let replyUserdata = request.replyUserdata else { return }
     let operation = request.operation
+    if operation.isAudioOutputSetter {
+      activeMPVCommand?.audioOutputGenerationBeforeSubmission =
+        mpv.airPlayPlaybackSnapshot.audioOutputGeneration
+    }
     mpv.submitAirPlayCommand({
       switch operation {
       case .command(let command, let arguments):
@@ -1595,6 +1605,11 @@ final class AirPlayAudioBridge: NSObject {
   /// Completes one serialized libmpv command. Called on the main thread by MPVController.
   func mpvCommandCompleted(_ result: Int32, replyUserdata: UInt64) {
     guard let request = activeMPVCommand, request.replyUserdata == replyUserdata else { return }
+    if result >= 0,
+       let generation = request.audioOutputGenerationBeforeSubmission,
+       let output = request.operation.audioOutputTarget {
+      player?.mpv?.confirmAirPlayAudioOutput(output, ifUnchangedSince: generation)
+    }
     if result < 0, let output = request.restoreAudioOutput {
       guard synchronousAudioOutputRestoreReplyUserdata != replyUserdata else { return }
       synchronousAudioOutputRestoreReplyUserdata = replyUserdata
