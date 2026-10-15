@@ -88,6 +88,8 @@ struct MPVHookValue {
 /// snapshot on the main thread instead of calling synchronous libmpv getters from its timers.
 struct MPVAirPlaySnapshot {
   var audioOutput: String?
+  /// Literal raw async AO requests are intent only after mpv reports the matching value.
+  var pendingRawAudioOutputIntents: [MPVAirPlayPendingAudioOutputIntent] = []
   /// The newest successful synchronous AO setter, retained even if an older queued bridge restore runs later.
   var directAudioOutput: String?
   var directAudioOutputGeneration: UInt64 = 0
@@ -117,6 +119,16 @@ struct MPVAirPlaySnapshot {
     estimatedVideoFPS = nil
     containerFPS = nil
   }
+}
+
+struct MPVAirPlayPendingAudioOutputIntent {
+  let output: String
+  let expiresAt: Date
+}
+
+private struct RawAudioOutputCommand {
+  let output: String?
+  let isAsynchronous: Bool
 }
 
 private struct MPVAirPlaySnapshotRequestState {
@@ -980,28 +992,179 @@ class MPVController: NSObject {
     log("Run command: \(rawString)", level: level)
     // Key-binding actions enter through mpv_command_string instead of command(_:args:). Track
     // direct AO changes in single or semicolon-separated raw actions, including `async` prefixes.
-    let audioOutputCommand = Self.rawCommandAudioOutput(rawString)
-    let audioOutputGenerationBeforeSet = audioOutputCommand.map { _ in beginSynchronousAudioOutputWrite() }
+    let audioOutputCommands = Self.rawCommandAudioOutputs(rawString)
+    let hasSynchronousAudioOutputCommand = audioOutputCommands.contains { !$0.isAsynchronous }
+    let audioOutputGenerationBeforeSet = audioOutputCommands.isEmpty ? nil : beginSynchronousAudioOutputWrite()
     let changesPlaylist = MPVPlaylistMutationPolicy.invalidatesSnapshot(in: rawString)
     if changesPlaylist { player.playlistStructureWillChange() }
     let result = mpv_command_string(mpv, rawString)
-    if let audioOutputGenerationBeforeSet, let audioOutputCommand {
-      let output = result < 0 ? nil : (audioOutputCommand.isAsynchronous
-        ? audioOutputCommand.output : getString(MPVOption.Audio.ao))
+    if let audioOutputGenerationBeforeSet {
+      // mpv_command_string only confirms that an `async` command was accepted. Never publish its
+      // source text as current AO state. Synchronous setters can be read back after execution.
+      let output = result >= 0 && hasSynchronousAudioOutputCommand
+        ? getString(MPVOption.Audio.ao) : nil
       finishSynchronousAudioOutputWrite(output, result: result,
                                         generationBeforeSet: audioOutputGenerationBeforeSet,
-                                        recordsDirectAudioOutputIntent: true)
+                                        recordsDirectAudioOutputIntent: hasSynchronousAudioOutputCommand)
+    }
+    if result >= 0 {
+      for command in audioOutputCommands where command.isAsynchronous {
+        if let output = command.output {
+          recordAcceptedRawAsyncAudioOutputIntent(output)
+        }
+      }
     }
     if changesPlaylist { player.playlistStructureDidChange() }
     return result
   }
 
-  private static func rawCommandAudioOutput(_ rawString: String) ->
-    (output: String, isAsynchronous: Bool)? {
-    var latestAudioOutputCommand: (output: String, isAsynchronous: Bool)?
-    var containsAsyncAudioOutputCommand = false
-    for segment in rawString.split(separator: ";") {
-      let tokens = segment.split(whereSeparator: \.isWhitespace)
+  /// Splits key-binding commands only at unquoted semicolons. mpv accepts single, double and
+  /// custom-quoted arguments; escaped characters cannot terminate a quoted value.
+  private static func rawCommandSegments(_ rawString: String) -> [String] {
+    let characters = Array(rawString)
+    var segments: [String] = []
+    var segment = ""
+    var quote: Character?
+    var customQuoteDelimiter: Character?
+    var index = 0
+
+    while index < characters.count {
+      let character = characters[index]
+      if let delimiter = customQuoteDelimiter {
+        if character == delimiter, index + 1 < characters.count, characters[index + 1] == "`" {
+          segment.append(character)
+          segment.append("`")
+          customQuoteDelimiter = nil
+          index += 2
+        } else {
+          segment.append(character)
+          index += 1
+        }
+        continue
+      }
+
+      if let currentQuote = quote {
+        segment.append(character)
+        if currentQuote == "\"", character == "\\", index + 1 < characters.count {
+          segment.append(characters[index + 1])
+          index += 2
+        } else {
+          if character == currentQuote { quote = nil }
+          index += 1
+        }
+        continue
+      }
+
+      if character == "\\", index + 1 < characters.count {
+        segment.append(character)
+        segment.append(characters[index + 1])
+        index += 2
+      } else if character == "\"" || character == "'" {
+        quote = character
+        segment.append(character)
+        index += 1
+      } else if character == "`", index + 1 < characters.count {
+        segment.append(character)
+        segment.append(characters[index + 1])
+        customQuoteDelimiter = characters[index + 1]
+        index += 2
+      } else if character == ";" {
+        segments.append(segment)
+        segment = ""
+        index += 1
+      } else {
+        segment.append(character)
+        index += 1
+      }
+    }
+    segments.append(segment)
+    return segments
+  }
+
+  /// Preserves quoted whitespace while splitting one already-delimited mpv command into tokens.
+  private static func rawCommandTokens(_ command: String) -> [String] {
+    let characters = Array(command)
+    var tokens: [String] = []
+    var token = ""
+    var quote: Character?
+    var customQuoteDelimiter: Character?
+    var index = 0
+
+    func finishToken() {
+      if !token.isEmpty {
+        tokens.append(token)
+        token = ""
+      }
+    }
+
+    while index < characters.count {
+      let character = characters[index]
+      if let delimiter = customQuoteDelimiter {
+        token.append(character)
+        if character == delimiter, index + 1 < characters.count, characters[index + 1] == "`" {
+          token.append("`")
+          customQuoteDelimiter = nil
+          index += 2
+        } else {
+          index += 1
+        }
+        continue
+      }
+
+      if let currentQuote = quote {
+        token.append(character)
+        if currentQuote == "\"", character == "\\", index + 1 < characters.count {
+          token.append(characters[index + 1])
+          index += 2
+        } else {
+          if character == currentQuote { quote = nil }
+          index += 1
+        }
+        continue
+      }
+
+      if character == "\\", index + 1 < characters.count {
+        token.append(character)
+        token.append(characters[index + 1])
+        index += 2
+      } else if character == "\"" || character == "'" {
+        quote = character
+        token.append(character)
+        index += 1
+      } else if character == "`", index + 1 < characters.count {
+        customQuoteDelimiter = characters[index + 1]
+        token.append(character)
+        token.append(characters[index + 1])
+        index += 2
+      } else if character.isWhitespace {
+        finishToken()
+        index += 1
+      } else {
+        token.append(character)
+        index += 1
+      }
+    }
+    finishToken()
+    return tokens
+  }
+
+  /// Decodes only literal tokens we can restore exactly. Expansion and escape syntax is deferred
+  /// to mpv and therefore cannot safely be recorded as the requested AO string.
+  private static func literalRawCommandToken(_ token: String) -> String? {
+    guard !token.contains("\\"), !token.contains("$") else { return nil }
+    if token.count >= 2, let first = token.first, (first == "\"" || first == "'"), token.last == first {
+      let value = String(token.dropFirst().dropLast())
+      guard !value.contains(first) else { return nil }
+      return value
+    }
+    guard !token.contains("\""), !token.contains("'"), !token.contains("`") else { return nil }
+    return token
+  }
+
+  private static func rawCommandAudioOutputs(_ rawString: String) -> [RawAudioOutputCommand] {
+    var commands: [RawAudioOutputCommand] = []
+    for segment in rawCommandSegments(rawString) {
+      let tokens = rawCommandTokens(segment)
       var commandIndex = 0
       var isAsynchronous = false
       while commandIndex < tokens.count,
@@ -1009,25 +1172,35 @@ class MPVController: NSObject {
         if tokens[commandIndex] == "async" { isAsynchronous = true }
         commandIndex += 1
       }
-      guard commandIndex + 2 < tokens.count, tokens[commandIndex] == "set" else { continue }
-      let property = tokens[commandIndex + 1].trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-      guard property == "ao" else { continue }
-      containsAsyncAudioOutputCommand = containsAsyncAudioOutputCommand || isAsynchronous
-      let firstValueToken = String(tokens[commandIndex + 2])
-      var output = firstValueToken
-      if let quote = firstValueToken.first, quote == "\"" || quote == "'" {
-        output = String(firstValueToken.dropFirst())
-        if !firstValueToken.dropFirst().hasSuffix(String(quote)) {
-          for token in tokens.dropFirst(commandIndex + 3) {
-            output += " \(token)"
-            if String(token).hasSuffix(String(quote)) { break }
-          }
-        }
-        if output.hasSuffix(String(quote)) { output.removeLast() }
-      }
-      latestAudioOutputCommand = (output, containsAsyncAudioOutputCommand)
+      guard commandIndex + 2 < tokens.count,
+            tokens[commandIndex] == "set",
+            literalRawCommandToken(tokens[commandIndex + 1]) == MPVOption.Audio.ao else { continue }
+      let output = literalRawCommandToken(tokens[commandIndex + 2])
+      commands.append(RawAudioOutputCommand(output: output, isAsynchronous: isAsynchronous))
     }
-    return latestAudioOutputCommand
+    return commands
+  }
+
+  private func recordAcceptedRawAsyncAudioOutputIntent(_ output: String) {
+    let now = Date()
+    $airPlaySnapshot.withLock { snapshot in
+      snapshot.pendingRawAudioOutputIntents.removeAll { $0.expiresAt <= now }
+      if snapshot.audioOutput == output {
+        // The current property already confirms this literal target, including an explicit null.
+        snapshot.directAudioOutput = output
+        snapshot.directAudioOutputGeneration &+= 1
+        return
+      }
+      snapshot.pendingRawAudioOutputIntents.append(
+        MPVAirPlayPendingAudioOutputIntent(output: output, expiresAt: now.addingTimeInterval(5)))
+      if snapshot.pendingRawAudioOutputIntents.count > 16 {
+        snapshot.pendingRawAudioOutputIntents.removeFirst(
+          snapshot.pendingRawAudioOutputIntents.count - 16)
+      }
+    }
+    DispatchQueue.main.async { [weak self] in
+      self?.player.airPlayAudio.playbackSnapshotChanged()
+    }
   }
 
   @discardableResult
@@ -1875,8 +2048,21 @@ class MPVController: NSObject {
     $airPlaySnapshot.withLock { snapshot in
       switch name {
       case MPVOption.Audio.ao:
-        snapshot.audioOutput = stringValue(from: property)
+        let audioOutput = stringValue(from: property)
+        snapshot.audioOutput = audioOutput
         snapshot.audioOutputGeneration &+= 1
+        snapshot.pendingRawAudioOutputIntents.removeAll { $0.expiresAt <= Date() }
+        if let audioOutput,
+           let pendingIntentIndex = snapshot.pendingRawAudioOutputIntents.firstIndex(
+             where: { $0.output == audioOutput }) {
+          // An accepted raw async command has no completion reply. Promote it only once mpv's
+          // property event confirms its literal value; failed commands therefore cannot poison
+          // the local-output restore target. Consume one request so repeated targets remain
+          // correlated with later property changes.
+          snapshot.directAudioOutput = audioOutput
+          snapshot.directAudioOutputGeneration &+= 1
+          snapshot.pendingRawAudioOutputIntents.remove(at: pendingIntentIndex)
+        }
       case MPVOption.PlaybackControl.rebaseStartTime:
         snapshot.rebaseStartTime = flagValue(from: property)
       case MPVOption.PlaybackControl.pause:

@@ -16,9 +16,10 @@ assert "mpv.setDouble" not in bridge.split("private func pollHold(", 1)[1].split
 assert "mpv.setDouble" not in bridge.split("private func engage()", 1)[1].split("private func disengage()", 1)[0]
 timing_scope = bridge.split("func withUserTiming", 1)[1].split("func fileStarted", 1)[0]
 assert timing_scope.count("mpv.setDouble") == 4, "watch-later timing writes must remain synchronous"
-assert bridge.count('enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)') == 2
+assert bridge.count('enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)') == 3
 assert "activeMPVCommand == nil" in bridge, "bridge mpv commands must be serialized"
-assert "replyUserdata: MPVController.UserData.airPlayAudioCommand" in bridge
+assert "replyUserdata: replyUserdata" in bridge
+assert "airPlayAudioCommandBase &+ nextMPVCommandReplyId" in bridge
 snapshot_request = controller_source.split("func requestAirPlayPlaybackSnapshot()", 1)[1].split("// Set property", 1)[0]
 assert '(MPVProperty.timePos, MPV_FORMAT_DOUBLE)' in snapshot_request
 assert '(MPVProperty.audioPts, MPV_FORMAT_DOUBLE)' in snapshot_request

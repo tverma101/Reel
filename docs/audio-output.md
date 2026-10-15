@@ -77,8 +77,10 @@ Publish a direct setter's cached output only if no newer `ao` generation appeare
 libmpv call ran. Retain the newest successful direct `ao` setter intent separately from event-fed
 bridge state, including `mpv.command("set", ["ao", value])` and a custom key binding using
 `set ao VALUE` with mpv command prefixes such as `no-osd`; serialize synchronous setters so their
-saved order matches their libmpv writes. Raw actions with the `async` prefix retain their stated AO
-target, and semicolon-separated actions track the last AO setter.
+saved order matches their libmpv writes. The raw-command scanner respects quoted semicolons and
+tracks each setter's own prefixes. For an `async` setter with a literal target, Reel updates the
+saved intent only after mpv reports that value; it never treats unexpanded source text as the
+applied output.
 A failed queued restore's synchronous fallback must not replace that user intent. Preserve an
 explicit direct `ao = null` choice through disconnect as well. If a local output change races AirPlay
 engagement or arrives while the bridge is carrying audio, retain that output for disconnect and

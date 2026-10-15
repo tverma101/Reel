@@ -1672,9 +1672,13 @@ final class AirPlayAudioBridge: NSObject {
   private func restoreLatestDirectAudioOutputIfNeeded(_ audioOutput: String,
                                                        snapshot: MPVAirPlaySnapshot) {
     let pendingRestores = pendingAudioOutputRestoreValues()
-    let hasConflictingRestore = pendingRestores.contains { $0 != audioOutput }
-    guard (hasConflictingRestore || snapshot.audioOutput != audioOutput),
-          !pendingRestores.contains(audioOutput) else { return }
+    // The restore queue is ordered. An earlier matching entry cannot satisfy a newer intent when
+    // a different restore is still queued behind it.
+    if let lastPendingRestore = pendingRestores.last {
+      guard lastPendingRestore != audioOutput else { return }
+    } else if snapshot.audioOutput == audioOutput {
+      return
+    }
     enqueueAudioOutputRestore(audioOutput)
   }
 
@@ -1703,7 +1707,7 @@ final class AirPlayAudioBridge: NSObject {
           !(snapshot.directAudioOutput == audioOutput &&
             snapshot.directAudioOutputGeneration <= lastProcessedDirectAudioOutputGeneration),
           lastAirPlayAudioOutputDisableGeneration != snapshot.audioOutputGeneration else { return }
-    if snapshot.directAudioOutputGeneration == 0 { savedAudioOutput = audioOutput }
+    if snapshot.directAudioOutput != audioOutput { savedAudioOutput = audioOutput }
     lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
     enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
     enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
@@ -1718,10 +1722,9 @@ final class AirPlayAudioBridge: NSObject {
           !mpvCommandQueue.contains(where: { $0.restoreAudioOutputToken != nil }),
           let snapshot = player?.mpv?.airPlayPlaybackSnapshot,
           let audioOutput = snapshot.audioOutput else { return }
-    if snapshot.directAudioOutputGeneration > 0 {
-      guard snapshot.directAudioOutput == audioOutput else { return }
+    if audioOutput != "null" {
       savedAudioOutput = audioOutput
-    } else if audioOutput != "null" {
+    } else if snapshot.directAudioOutput == "null" {
       savedAudioOutput = audioOutput
     }
   }
