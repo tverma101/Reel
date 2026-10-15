@@ -572,6 +572,8 @@ final class AirPlayAudioBridge: NSObject {
   private var savedAudioOutput: String?
   /// Snapshot generation for which Reel most recently queued `ao = null` while connected.
   private var lastAirPlayAudioOutputDisableGeneration: UInt64?
+  /// Prevents a late main-thread callback from replaying one direct output change more than once.
+  private var lastProcessedDirectAudioOutputGeneration: UInt64 = 0
   private var latencyCompensation = 0.0
 
   private var speedWrites = InternalWrites()
@@ -789,7 +791,10 @@ final class AirPlayAudioBridge: NSObject {
     }
     // A fast route reconnect can observe the old event-fed `ao = null` before a queued restore
     // reaches mpv. Keep the last real output as the source for this and later disengages.
-    if let audioOutput = snapshot.audioOutput, audioOutput != "null" {
+    _ = rememberLatestDirectAudioOutput(from: snapshot)
+    if let directAudioOutput = snapshot.directAudioOutput, directAudioOutput != "null" {
+      savedAudioOutput = directAudioOutput
+    } else if let audioOutput = snapshot.audioOutput, audioOutput != "null" {
       savedAudioOutput = audioOutput
     }
     guard let savedAudioOutput else {
@@ -817,6 +822,10 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   private func disengage() {
+    if let snapshot = player?.mpv?.airPlayPlaybackSnapshot,
+       snapshot.audioOutputChangesInFlight == 0 {
+      _ = rememberLatestDirectAudioOutput(from: snapshot)
+    }
     replaceItem(with: nil)
     waitingForMPVAudio = false
     audioStartupClock.reset()
@@ -830,12 +839,7 @@ final class AirPlayAudioBridge: NSObject {
     lastAirPlayAudioOutputDisableGeneration = nil
     guard player?.mpv != nil, let saved = savedAudioOutput else { return }
     let output = saved.isEmpty ? (Preference.bool(for: .audioDriverEnableAVFoundation) ? "avfoundation" : "coreaudio") : saved
-    nextAudioOutputRestoreToken &+= 1
-    let restoreToken = nextAudioOutputRestoreToken
-    enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, output], requiredForOutput: true,
-                      restoreAudioOutput: output, restoreAudioOutputToken: restoreToken)
-    enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true,
-                      restoreAudioOutput: output, restoreAudioOutputToken: restoreToken)
+    enqueueAudioOutputRestore(output)
     log("disengaged; mpv audio output restored to \(output)")
   }
 
@@ -1423,6 +1427,7 @@ final class AirPlayAudioBridge: NSObject {
     activeMPVCommandSubmissionAttempts = 0
     mpvCommandQueue.removeAll()
     waitingForMPVEventOverflowRecovery = false
+    lastProcessedDirectAudioOutputGeneration = 0
     notifyMPVCommandQueueDrained()
   }
 
@@ -1628,11 +1633,63 @@ final class AirPlayAudioBridge: NSObject {
 
   /// Retry reconciliation after mpv publishes the metadata needed to select the audio stream.
   func playbackSnapshotChanged() {
-    guard player?.mpv?.airPlayPlaybackSnapshot.audioOutputChangesInFlight == 0 else { return }
+    guard let mpv = player?.mpv else { return }
+    let snapshot = mpv.airPlayPlaybackSnapshot
+    guard snapshot.audioOutputChangesInFlight == 0 else { return }
+    let directAudioOutput = rememberLatestDirectAudioOutput(from: snapshot)
     refreshSavedAudioOutputFromSnapshot()
+    if let directAudioOutput, directAudioOutput != "null" {
+      if routeActive && bridgeEngaged {
+        lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
+        enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
+        enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
+        log("reasserting AirPlay output after local audio-output change", level: .verbose)
+      }
+    }
+    if !routeActive, let directAudioOutput = snapshot.directAudioOutput,
+       directAudioOutput != "null" {
+      restoreLatestDirectAudioOutputIfNeeded(directAudioOutput, snapshot: snapshot)
+    }
     guard routeActive else { return }
     if bridgeEngaged { keepMPVAudioOutputDisabled() }
     if itemSelection == nil { reconcile() }
+  }
+
+  /// Captures a completed direct AO write before a delayed route callback can replace its restore value.
+  private func rememberLatestDirectAudioOutput(from snapshot: MPVAirPlaySnapshot) -> String? {
+    guard snapshot.directAudioOutputGeneration > lastProcessedDirectAudioOutputGeneration else {
+      return nil
+    }
+    lastProcessedDirectAudioOutputGeneration = snapshot.directAudioOutputGeneration
+    guard let audioOutput = snapshot.directAudioOutput else { return nil }
+    if audioOutput != "null" { savedAudioOutput = audioOutput }
+    return audioOutput
+  }
+
+  /// A direct write can finish after disconnect queued its restore. Append the newer intent after
+  /// that pair, or repair the output if the older pair has already completed.
+  private func restoreLatestDirectAudioOutputIfNeeded(_ audioOutput: String,
+                                                       snapshot: MPVAirPlaySnapshot) {
+    let pendingRestores = pendingAudioOutputRestoreValues()
+    let hasConflictingRestore = pendingRestores.contains { $0 != audioOutput }
+    guard (hasConflictingRestore || snapshot.audioOutput != audioOutput),
+          !pendingRestores.contains(audioOutput) else { return }
+    enqueueAudioOutputRestore(audioOutput)
+  }
+
+  private func pendingAudioOutputRestoreValues() -> [String] {
+    var outputs = activeMPVCommand?.restoreAudioOutput.map { [$0] } ?? []
+    outputs.append(contentsOf: mpvCommandQueue.compactMap(\.restoreAudioOutput))
+    return outputs
+  }
+
+  private func enqueueAudioOutputRestore(_ output: String) {
+    nextAudioOutputRestoreToken &+= 1
+    let restoreToken = nextAudioOutputRestoreToken
+    enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, output], requiredForOutput: true,
+                      restoreAudioOutput: output, restoreAudioOutputToken: restoreToken)
+    enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true,
+                      restoreAudioOutput: output, restoreAudioOutputToken: restoreToken)
   }
 
   /// A synchronous preference or plugin write can race the queued engage command after its
@@ -1642,8 +1699,10 @@ final class AirPlayAudioBridge: NSObject {
     let snapshot = mpv.airPlayPlaybackSnapshot
     guard snapshot.audioOutputChangesInFlight == 0,
           let audioOutput = snapshot.audioOutput, audioOutput != "null",
+          !(snapshot.directAudioOutput == audioOutput &&
+            snapshot.directAudioOutputGeneration <= lastProcessedDirectAudioOutputGeneration),
           lastAirPlayAudioOutputDisableGeneration != snapshot.audioOutputGeneration else { return }
-    savedAudioOutput = audioOutput
+    if snapshot.directAudioOutputGeneration == 0 { savedAudioOutput = audioOutput }
     lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
     enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
     enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
@@ -1656,8 +1715,11 @@ final class AirPlayAudioBridge: NSObject {
     guard !bridgeEngaged,
           activeMPVCommand?.restoreAudioOutputToken == nil,
           !mpvCommandQueue.contains(where: { $0.restoreAudioOutputToken != nil }),
-          let audioOutput = player?.mpv?.airPlayPlaybackSnapshot.audioOutput,
+          let snapshot = player?.mpv?.airPlayPlaybackSnapshot,
+          let audioOutput = snapshot.audioOutput,
           audioOutput != "null" else { return }
+    if snapshot.directAudioOutputGeneration > 0,
+       snapshot.directAudioOutput != audioOutput { return }
     savedAudioOutput = audioOutput
   }
 

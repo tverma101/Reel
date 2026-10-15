@@ -88,6 +88,9 @@ struct MPVHookValue {
 /// snapshot on the main thread instead of calling synchronous libmpv getters from its timers.
 struct MPVAirPlaySnapshot {
   var audioOutput: String?
+  /// The newest successful synchronous AO setter, retained even if an older queued bridge restore runs later.
+  var directAudioOutput: String?
+  var directAudioOutputGeneration: UInt64 = 0
   /// Increments for each observed or direct `ao` update so overflow samples cannot overwrite it.
   var audioOutputGeneration: UInt64 = 0
   /// Prevents route reconciliation while a synchronous `ao` write has not settled yet.
@@ -160,6 +163,8 @@ class MPVController: NSObject {
   /// Gates queued AirPlay/snapshot/quit calls against the terminal marker. The event reader never
   /// takes this lock while polling so it can always dispatch hooks that unblock libmpv calls.
   private let airPlaySnapshotCallLock = NSLock()
+  /// Serializes synchronous `ao` setters so the retained local-output intent follows libmpv write order.
+  private let airPlayAudioOutputWriteLock = NSLock()
   /// Accessed only by the serial mpv event queue; pairs START_FILE with FILE_LOADED or END_FILE.
   private var activePlaylistLoadTransition: UInt64?
   @Atomic private var pendingPlaylistLoadTransitions: [UInt64] = []
@@ -887,6 +892,15 @@ class MPVController: NSObject {
                level: Logger.Level = .debug, returnValueCallback: ((Int32) -> Void)? = nil) {
     guard mpv != nil else { return }
     log("Run command: \(command.rawValue) \(args.compactMap{$0}.joined(separator: " "))", level: level)
+    let directAudioOutput: String?
+    if command.rawValue == "set", args.count >= 2, args[0] == MPVOption.Audio.ao {
+      directAudioOutput = args[1]
+    } else {
+      directAudioOutput = nil
+    }
+    let audioOutputGenerationBeforeSet = directAudioOutput.map { _ in
+      beginSynchronousAudioOutputWrite()
+    }
     var cargs = makeCArgs(command, args).map { $0.flatMap { UnsafePointer<CChar>(strdup($0)) } }
     defer {
       for ptr in cargs {
@@ -903,6 +917,10 @@ class MPVController: NSObject {
     if changesPlaylist { player.playlistStructureDidChange() }
     if returnValue < 0, let loadTransitionToken {
       cancelPendingPlaylistLoadTransition(loadTransitionToken)
+    }
+    if let directAudioOutput, let audioOutputGenerationBeforeSet {
+      finishSynchronousAudioOutputWrite(directAudioOutput, result: returnValue,
+                                        generationBeforeSet: audioOutputGenerationBeforeSet)
     }
     if checkError {
       chkErr(returnValue)
@@ -1169,33 +1187,44 @@ class MPVController: NSObject {
   func setString(_ name: String, _ value: String, level: Logger.Level = .debug) -> Int32 {
     log("Set property: \(name)=\(value)", level: level)
     let isAudioOutput = name == MPVOption.Audio.ao
-    let audioOutputGenerationBeforeSet: UInt64?
-    if isAudioOutput {
-      audioOutputGenerationBeforeSet = $airPlaySnapshot.withLock { snapshot in
-        snapshot.audioOutputChangesInFlight += 1
-        snapshot.audioOutputGeneration &+= 1
-        return snapshot.audioOutputGeneration
-      }
-    } else {
-      audioOutputGenerationBeforeSet = nil
-    }
+    let audioOutputGenerationBeforeSet = isAudioOutput ? beginSynchronousAudioOutputWrite() : nil
     let result = mpv_set_property_string(mpv, name, value)
-    if isAudioOutput {
-      $airPlaySnapshot.withLock { snapshot in
-        // A newer direct write or observed property event may have completed while this caller
-        // was inside libmpv. Do not let this older return path overwrite that newer snapshot.
-        if let generationBeforeSet = audioOutputGenerationBeforeSet,
-           result >= 0, snapshot.audioOutputGeneration == generationBeforeSet {
-          snapshot.audioOutput = value
-        }
-        snapshot.audioOutputChangesInFlight = max(0, snapshot.audioOutputChangesInFlight - 1)
-        snapshot.audioOutputGeneration &+= 1
-      }
-      DispatchQueue.main.async { [weak self] in
-        self?.player.airPlayAudio.playbackSnapshotChanged()
-      }
+    if let audioOutputGenerationBeforeSet {
+      finishSynchronousAudioOutputWrite(value, result: result,
+                                        generationBeforeSet: audioOutputGenerationBeforeSet)
     }
     return result
+  }
+
+  /// Marks a synchronous AO change before libmpv runs and serializes direct setters with one another.
+  private func beginSynchronousAudioOutputWrite() -> UInt64 {
+    airPlayAudioOutputWriteLock.lock()
+    return $airPlaySnapshot.withLock { snapshot in
+      snapshot.audioOutputChangesInFlight += 1
+      snapshot.audioOutputGeneration &+= 1
+      return snapshot.audioOutputGeneration
+    }
+  }
+
+  /// Publishes the newest successful direct AO intent and then releases the setter lock.
+  private func finishSynchronousAudioOutputWrite(_ value: String, result: Int32,
+                                                 generationBeforeSet: UInt64) {
+    $airPlaySnapshot.withLock { snapshot in
+      if result >= 0 {
+        // A newer observed property event may have completed while this caller was in libmpv.
+        if snapshot.audioOutputGeneration == generationBeforeSet {
+          snapshot.audioOutput = value
+        }
+        snapshot.directAudioOutput = value
+        snapshot.directAudioOutputGeneration &+= 1
+      }
+      snapshot.audioOutputChangesInFlight = max(0, snapshot.audioOutputChangesInFlight - 1)
+      snapshot.audioOutputGeneration &+= 1
+    }
+    airPlayAudioOutputWriteLock.unlock()
+    DispatchQueue.main.async { [weak self] in
+      self?.player.airPlayAudio.playbackSnapshotChanged()
+    }
   }
 
   @discardableResult
