@@ -781,6 +781,10 @@ final class AirPlayAudioBridge: NSObject {
   private func engage() -> Bool {
     guard let mpv = player?.mpv else { return false }
     let snapshot = mpv.airPlayPlaybackSnapshot
+    guard snapshot.audioOutputChangesInFlight == 0 else {
+      log("waiting for mpv's audio output change before engaging", level: .verbose)
+      return false
+    }
     // A fast route reconnect can observe the old event-fed `ao = null` before a queued restore
     // reaches mpv. Keep the last real output as the source for this and later disengages.
     if let audioOutput = snapshot.audioOutput, audioOutput != "null" {
@@ -1619,6 +1623,7 @@ final class AirPlayAudioBridge: NSObject {
 
   /// Retry reconciliation after mpv publishes the metadata needed to select the audio stream.
   func playbackSnapshotChanged() {
+    guard player?.mpv?.airPlayPlaybackSnapshot.audioOutputChangesInFlight == 0 else { return }
     refreshSavedAudioOutputFromSnapshot()
     guard routeActive, itemSelection == nil else { return }
     reconcile()

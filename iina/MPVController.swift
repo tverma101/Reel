@@ -88,8 +88,10 @@ struct MPVHookValue {
 /// snapshot on the main thread instead of calling synchronous libmpv getters from its timers.
 struct MPVAirPlaySnapshot {
   var audioOutput: String?
-  /// Increments for each event-fed `ao` change so overflow samples cannot overwrite a newer event.
+  /// Increments for each observed or direct `ao` update so overflow samples cannot overwrite it.
   var audioOutputGeneration: UInt64 = 0
+  /// Prevents route reconciliation while a synchronous `ao` write has not settled yet.
+  var audioOutputChangesInFlight = 0
   var rebaseStartTime: Bool?
   var isPaused: Bool?
   var pausedForCache: Bool?
@@ -1166,7 +1168,25 @@ class MPVController: NSObject {
   @discardableResult
   func setString(_ name: String, _ value: String, level: Logger.Level = .debug) -> Int32 {
     log("Set property: \(name)=\(value)", level: level)
-    return mpv_set_property_string(mpv, name, value)
+    let isAudioOutput = name == MPVOption.Audio.ao
+    if isAudioOutput {
+      $airPlaySnapshot.withLock { snapshot in
+        snapshot.audioOutputChangesInFlight += 1
+        snapshot.audioOutputGeneration &+= 1
+      }
+    }
+    let result = mpv_set_property_string(mpv, name, value)
+    if isAudioOutput {
+      $airPlaySnapshot.withLock { snapshot in
+        if result >= 0 { snapshot.audioOutput = value }
+        snapshot.audioOutputChangesInFlight = max(0, snapshot.audioOutputChangesInFlight - 1)
+        snapshot.audioOutputGeneration &+= 1
+      }
+      DispatchQueue.main.async { [weak self] in
+        self?.player.airPlayAudio.playbackSnapshotChanged()
+      }
+    }
+    return result
   }
 
   @discardableResult
@@ -1700,8 +1720,9 @@ class MPVController: NSObject {
             self.airPlaySnapshotQueue.async { [weak self] in
               guard let self else { return }
               self.airPlaySnapshotCallLock.lock()
-              let audioOutputGeneration = self.$airPlaySnapshot.withLock {
-                $0.audioOutputGeneration
+              let sampleState = self.$airPlaySnapshot.withLock { snapshot in
+                (generation: snapshot.audioOutputGeneration,
+                 canPublish: snapshot.audioOutputChangesInFlight == 0)
               }
               let audioOutput: String?
               if !self.hasReceivedShutdownEvent, self.mpv != nil {
@@ -1716,7 +1737,9 @@ class MPVController: NSObject {
                 if !self.hasReceivedShutdownEvent {
                   self.$airPlaySnapshot.withLock { snapshot in
                     // An observed ao event after this sample is newer than the queried value.
-                    if snapshot.audioOutputGeneration == audioOutputGeneration {
+                    if sampleState.canPublish,
+                       snapshot.audioOutputGeneration == sampleState.generation,
+                       snapshot.audioOutputChangesInFlight == 0 {
                       snapshot.audioOutput = audioOutput
                     }
                   }

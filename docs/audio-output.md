@@ -70,9 +70,10 @@ async requests and performs the saved `ao` change plus `ao-reload` synchronously
 background queue. Stop/quit drain callbacks remain pending until that fallback completes, and the
 event reader remains free to service MPV.
 After overflow recovery drains the event reader, sample `ao` directly on the background MPV queue
-before resuming route reconciliation; the overflow may have dropped its property-change event. Tag
-event-fed `ao` changes so a later event wins over a recovery sample that has not reached the main
-thread yet, and allow only one synchronous restore per failed command reply.
+before resuming route reconciliation; the overflow may have dropped its property-change event.
+Tag event-fed and direct `ao` changes so a later write wins over a recovery sample that has not
+reached the main thread yet, and defer route engagement while a direct `ao` write is in flight.
+Allow only one synchronous restore per failed command reply.
 Unexpected MPV shutdown must pause and remove the hidden AVPlayer item, invalidate its loader and
 timers, and detach its playhead feeder without calling back into the destroyed MPV core.
 Keep the cached local output separate from the bridge's engaged state: a fast route reconnect can
