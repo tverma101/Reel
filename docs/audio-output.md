@@ -73,9 +73,10 @@ After overflow recovery drains the event reader, sample `ao` directly on the bac
 before resuming route reconciliation; the overflow may have dropped its property-change event.
 Tag event-fed and direct `ao` changes so a later write wins over a recovery sample that has not
 reached the main thread yet, and defer route engagement while a direct `ao` write is in flight.
-Publish a direct setter's cached output only if no newer `ao` generation appeared while its
-libmpv call ran. Retain the newest successful direct `ao` setter intent separately from event-fed
-bridge state, including `mpv.command("set", ["ao", value])` and a custom key binding using
+Publish a direct setter's cached output only while the observed value remains at its pre-write
+value (or has reached the setter target) and no newer direct output intent appeared. Retain the
+newest successful direct `ao` setter intent separately from event-fed bridge state, including
+`mpv.command("set", ["ao", value])` and a custom key binding using
 `set ao VALUE` with mpv command prefixes such as `no-osd`; serialize synchronous setters so their
 saved order matches their libmpv writes. The raw-command scanner respects quoted semicolons and
 tracks `set`, `cycle`, and `cycle-values` AO actions with each command's own prefixes. An async
@@ -85,8 +86,11 @@ newer confirmed choice. A literal `null` target is recorded at acceptance becaus
 uses that valid output, so a later property event cannot identify which writer selected it. A
 rejected raw async command never leaves a pending target. Accepted async selectors and expanded
 targets have no identifiable completion value, so Reel retires an older explicit target and follows
-mpv's reported AO value without inferring the selector's result from an unrelated change. An
-event-fed `ao = null` is retained when no route restore is in flight.
+mpv's reported AO value without inferring the selector's result from an unrelated change. Reel keeps
+the prior output only as a fallback while the selector is unresolved, ignores a matching event from
+an active bridge setter, and does not replace the fallback from the stale snapshot. A newer accepted
+selector also fences a failed restore's synchronous fallback before it writes. An event-fed
+`ao = null` is retained when no route restore is in flight.
 A failed queued restore's synchronous fallback must not replace that user intent. Preserve an
 explicit direct `ao = null` choice through disconnect as well. If a local output change races AirPlay
 engagement or arrives while the bridge is carrying audio, retain that output for disconnect and
