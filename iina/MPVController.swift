@@ -125,11 +125,8 @@ struct MPVAirPlaySnapshot {
 }
 
 struct MPVAirPlayPendingAudioOutputIntent {
-  /// `nil` means the command selects an output dynamically (for example, `cycle ao`).
-  let output: String?
+  let output: String
   let intentSequence: UInt64
-  /// Dynamic commands must observe a changed value, not a delayed event for the prior state.
-  let previousOutput: String?
 }
 
 private struct RawAudioOutputCommand {
@@ -141,7 +138,6 @@ private struct RawAudioOutputCommand {
 private struct MPVAirPlayAudioOutputWriteToken {
   let generationBeforeWrite: UInt64
   let intentSequences: [UInt64]
-  let initialAudioOutput: String?
 }
 
 private struct MPVAirPlaySnapshotRequestState {
@@ -1046,9 +1042,9 @@ class MPVController: NSObject {
     }
     if let audioOutputWrite {
       for command in audioOutputCommands where command.isAsynchronous {
-        recordAcceptedRawAsyncAudioOutputIntent(command.output,
-                                                intentSequence: command.intentSequence,
-                                                writeToken: audioOutputWrite)
+        if let output = command.output {
+          recordAcceptedRawAsyncAudioOutputIntent(output, intentSequence: command.intentSequence)
+        }
       }
     }
     if changesPlaylist { player.playlistStructureDidChange() }
@@ -1252,11 +1248,7 @@ class MPVController: NSObject {
     snapshot.audioOutputGeneration &+= 1
     guard let output,
           let matchingIndex = snapshot.pendingRawAudioOutputIntents.indices
-            .filter({
-              let intent = snapshot.pendingRawAudioOutputIntents[$0]
-              if let intentOutput = intent.output { return intentOutput == output }
-              return intent.previousOutput != output
-            })
+            .filter({ snapshot.pendingRawAudioOutputIntents[$0].output == output })
             .max(by: {
               snapshot.pendingRawAudioOutputIntents[$0].intentSequence
                 < snapshot.pendingRawAudioOutputIntents[$1].intentSequence
@@ -1269,26 +1261,16 @@ class MPVController: NSObject {
     }
   }
 
-  private func recordAcceptedRawAsyncAudioOutputIntent(_ output: String?, intentSequence: UInt64,
-                                                       writeToken: MPVAirPlayAudioOutputWriteToken) {
+  private func recordAcceptedRawAsyncAudioOutputIntent(_ output: String, intentSequence: UInt64) {
     $airPlaySnapshot.withLock { snapshot in
       guard intentSequence > snapshot.directAudioOutputIntentSequence else { return }
-      if let output, snapshot.audioOutput == output {
+      if snapshot.audioOutput == output {
         // The current property already confirms this literal target, including an explicit null.
         recordDirectAudioOutputIntent(output, intentSequence: intentSequence, in: &snapshot)
         return
       }
-      if output == nil, let observedOutput = snapshot.audioOutput,
-         observedOutput != writeToken.initialAudioOutput,
-         observedOutput != snapshot.directAudioOutput,
-         snapshot.audioOutputGeneration > writeToken.generationBeforeWrite + 1 {
-        // An asynchronous selector may finish before this call returns and its property event
-        // may already have been consumed. The changed snapshot is the best available confirmation.
-        recordDirectAudioOutputIntent(observedOutput, intentSequence: intentSequence, in: &snapshot)
-        return
-      }
       snapshot.pendingRawAudioOutputIntents.append(MPVAirPlayPendingAudioOutputIntent(
-        output: output, intentSequence: intentSequence, previousOutput: snapshot.audioOutput))
+        output: output, intentSequence: intentSequence))
       snapshot.pendingRawAudioOutputIntents.sort { $0.intentSequence < $1.intentSequence }
       if snapshot.pendingRawAudioOutputIntents.count > 16 {
         snapshot.pendingRawAudioOutputIntents.removeFirst(
@@ -1529,7 +1511,6 @@ class MPVController: NSObject {
   ) -> MPVAirPlayAudioOutputWriteToken {
     airPlayAudioOutputWriteLock.lock()
     return $airPlaySnapshot.withLock { snapshot in
-      let initialAudioOutput = snapshot.audioOutput
       snapshot.audioOutputChangesInFlight += 1
       snapshot.audioOutputGeneration &+= 1
       var intentSequences: [UInt64] = []
@@ -1541,8 +1522,7 @@ class MPVController: NSObject {
       }
       return MPVAirPlayAudioOutputWriteToken(
         generationBeforeWrite: snapshot.audioOutputGeneration,
-        intentSequences: intentSequences,
-        initialAudioOutput: initialAudioOutput)
+        intentSequences: intentSequences)
     }
   }
 

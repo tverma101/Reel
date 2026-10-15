@@ -78,9 +78,11 @@ libmpv call ran. Retain the newest successful direct `ao` setter intent separate
 bridge state, including `mpv.command("set", ["ao", value])` and a custom key binding using
 `set ao VALUE` with mpv command prefixes such as `no-osd`; serialize synchronous setters so their
 saved order matches their libmpv writes. The raw-command scanner respects quoted semicolons and
-tracks `set`, `cycle`, and `cycle-values` AO actions with each command's own prefixes. Async raw
-actions update the saved intent only after mpv reports the output change (including after event
-queue recovery); an older completion cannot replace a newer confirmed AO choice.
+tracks `set`, `cycle`, and `cycle-values` AO actions with each command's own prefixes. An async
+raw `set ao` with a literal target updates the saved intent only after mpv reports that value
+(including after event-queue recovery); an older completion cannot replace a newer confirmed
+choice. Async selectors and expanded targets have no identifiable completion value, so Reel does
+not infer a saved output from an unrelated AO change.
 A failed queued restore's synchronous fallback must not replace that user intent. Preserve an
 explicit direct `ao = null` choice through disconnect as well. If a local output change races AirPlay
 engagement or arrives while the bridge is carrying audio, retain that output for disconnect and
