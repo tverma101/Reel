@@ -73,7 +73,10 @@ After overflow recovery drains the event reader, sample `ao` directly on the bac
 before resuming route reconciliation; the overflow may have dropped its property-change event.
 Tag event-fed and direct `ao` changes so a later write wins over a recovery sample that has not
 reached the main thread yet, and defer route engagement while a direct `ao` write is in flight.
-Allow only one synchronous restore per failed command reply.
+Publish a direct setter's cached output only if no newer `ao` generation appeared while its
+libmpv call ran. If a local output change races AirPlay engagement or arrives while the bridge is
+carrying audio, retain that local output for disconnect and queue `ao = null` plus `ao-reload`
+again for the newer generation. Allow only one synchronous restore per failed command reply.
 Unexpected MPV shutdown must pause and remove the hidden AVPlayer item, invalidate its loader and
 timers, and detach its playhead feeder without calling back into the destroyed MPV core.
 Keep the cached local output separate from the bridge's engaged state: a fast route reconnect can

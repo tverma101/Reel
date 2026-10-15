@@ -570,6 +570,8 @@ final class AirPlayAudioBridge: NSObject {
   private var bridgeEngaged = false
   /// The last known local mpv output. Retain it across route transitions while `ao` is `null`.
   private var savedAudioOutput: String?
+  /// Snapshot generation for which Reel most recently queued `ao = null` while connected.
+  private var lastAirPlayAudioOutputDisableGeneration: UInt64?
   private var latencyCompensation = 0.0
 
   private var speedWrites = InternalWrites()
@@ -795,6 +797,7 @@ final class AirPlayAudioBridge: NSObject {
       return false
     }
     bridgeEngaged = true
+    lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
     latencyCompensation = UserDefaults.standard.double(forKey: Self.latencyKey)
     enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
     enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
@@ -824,6 +827,7 @@ final class AirPlayAudioBridge: NSObject {
     mpvSnapshotTimer?.invalidate()
     mpvSnapshotTimer = nil
     bridgeEngaged = false
+    lastAirPlayAudioOutputDisableGeneration = nil
     guard player?.mpv != nil, let saved = savedAudioOutput else { return }
     let output = saved.isEmpty ? (Preference.bool(for: .audioDriverEnableAVFoundation) ? "avfoundation" : "coreaudio") : saved
     nextAudioOutputRestoreToken &+= 1
@@ -1411,6 +1415,7 @@ final class AirPlayAudioBridge: NSObject {
     audioDelayCorrection = 0
     holdSpeedApplied = false
     bridgeEngaged = false
+    lastAirPlayAudioOutputDisableGeneration = nil
     savedAudioOutput = nil
     activeMPVCommand = nil
     synchronousAudioOutputRestoreReplyUserdata = nil
@@ -1625,8 +1630,24 @@ final class AirPlayAudioBridge: NSObject {
   func playbackSnapshotChanged() {
     guard player?.mpv?.airPlayPlaybackSnapshot.audioOutputChangesInFlight == 0 else { return }
     refreshSavedAudioOutputFromSnapshot()
-    guard routeActive, itemSelection == nil else { return }
-    reconcile()
+    guard routeActive else { return }
+    if bridgeEngaged { keepMPVAudioOutputDisabled() }
+    if itemSelection == nil { reconcile() }
+  }
+
+  /// A synchronous preference or plugin write can race the queued engage command after its
+  /// snapshot check. Save that newly selected local output, then reassert bridge ownership.
+  private func keepMPVAudioOutputDisabled() {
+    guard bridgeEngaged, let mpv = player?.mpv else { return }
+    let snapshot = mpv.airPlayPlaybackSnapshot
+    guard snapshot.audioOutputChangesInFlight == 0,
+          let audioOutput = snapshot.audioOutput, audioOutput != "null",
+          lastAirPlayAudioOutputDisableGeneration != snapshot.audioOutputGeneration else { return }
+    savedAudioOutput = audioOutput
+    lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
+    enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
+    enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
+    log("reasserting AirPlay output after local audio-output change", level: .verbose)
   }
 
   /// Refresh the local-output cache only after all route restores have settled. An `ao = null`

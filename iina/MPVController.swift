@@ -1169,16 +1169,25 @@ class MPVController: NSObject {
   func setString(_ name: String, _ value: String, level: Logger.Level = .debug) -> Int32 {
     log("Set property: \(name)=\(value)", level: level)
     let isAudioOutput = name == MPVOption.Audio.ao
+    let audioOutputGenerationBeforeSet: UInt64?
     if isAudioOutput {
-      $airPlaySnapshot.withLock { snapshot in
+      audioOutputGenerationBeforeSet = $airPlaySnapshot.withLock { snapshot in
         snapshot.audioOutputChangesInFlight += 1
         snapshot.audioOutputGeneration &+= 1
+        return snapshot.audioOutputGeneration
       }
+    } else {
+      audioOutputGenerationBeforeSet = nil
     }
     let result = mpv_set_property_string(mpv, name, value)
     if isAudioOutput {
       $airPlaySnapshot.withLock { snapshot in
-        if result >= 0 { snapshot.audioOutput = value }
+        // A newer direct write or observed property event may have completed while this caller
+        // was inside libmpv. Do not let this older return path overwrite that newer snapshot.
+        if let generationBeforeSet = audioOutputGenerationBeforeSet,
+           result >= 0, snapshot.audioOutputGeneration == generationBeforeSet {
+          snapshot.audioOutput = value
+        }
         snapshot.audioOutputChangesInFlight = max(0, snapshot.audioOutputChangesInFlight - 1)
         snapshot.audioOutputGeneration &+= 1
       }
