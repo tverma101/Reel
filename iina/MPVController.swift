@@ -90,8 +90,10 @@ struct MPVAirPlaySnapshot {
   var audioOutput: String?
   /// Raw async AO requests remain pending until mpv reports a matching output value.
   var pendingRawAudioOutputIntents: [MPVAirPlayPendingAudioOutputIntent] = []
-  /// The newest confirmed direct AO intent, retained even if an older bridge restore runs later.
+  /// The newest confirmed direct AO intent, cleared if a newer raw async selector has no known
+  /// target. Retained across older bridge restores while it remains valid.
   var directAudioOutput: String?
+  /// Increments when the direct AO intent changes or is invalidated.
   var directAudioOutputGeneration: UInt64 = 0
   /// Orders direct AO actions by invocation, independent of property event delivery order.
   var nextDirectAudioOutputIntentSequence: UInt64 = 0
@@ -1041,9 +1043,14 @@ class MPVController: NSObject {
                                           lastSynchronousAudioOutputCommand != nil)
     }
     if let audioOutputWrite {
-      for command in audioOutputCommands where command.isAsynchronous {
+      for command in audioOutputCommands where command.isAsynchronous && result >= 0 {
         if let output = command.output {
           recordAcceptedRawAsyncAudioOutputIntent(output, intentSequence: command.intentSequence)
+        } else {
+          // A selector or expanded target can change AO without exposing a reliable target here.
+          // Retire older direct intent so AirPlay follows mpv's actual reported output instead
+          // of restoring a device selected before this accepted command.
+          invalidateDirectAudioOutputIntent(intentSequence: command.intentSequence)
         }
       }
     }
@@ -1240,6 +1247,23 @@ class MPVController: NSObject {
     snapshot.directAudioOutputIntentSequence = intentSequence
     snapshot.directAudioOutputGeneration &+= 1
     snapshot.pendingRawAudioOutputIntents.removeAll { $0.intentSequence <= intentSequence }
+  }
+
+  private func invalidateDirectAudioOutputIntent(intentSequence: UInt64) {
+    $airPlaySnapshot.withLock { snapshot in
+      guard intentSequence > snapshot.directAudioOutputIntentSequence else { return }
+      snapshot.directAudioOutput = nil
+      snapshot.directAudioOutputIntentSequence = intentSequence
+      snapshot.directAudioOutputGeneration &+= 1
+      snapshot.pendingRawAudioOutputIntents.removeAll { $0.intentSequence <= intentSequence }
+    }
+  }
+
+  /// Drops only an intent that could be falsely confirmed by a bridge-owned AO write.
+  func discardPendingRawAudioOutputIntent(matching output: String) {
+    $airPlaySnapshot.withLock { snapshot in
+      snapshot.pendingRawAudioOutputIntents.removeAll { $0.output == output }
+    }
   }
 
   /// Applies an observed AO value and consumes only the newest matching raw async request.

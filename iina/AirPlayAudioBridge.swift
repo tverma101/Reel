@@ -792,8 +792,7 @@ final class AirPlayAudioBridge: NSObject {
     // A fast route reconnect can observe the old event-fed `ao = null` before a queued restore
     // reaches mpv. Keep the last real output as the source for this and later disengages.
     _ = rememberLatestDirectAudioOutput(from: snapshot)
-    if let directAudioOutput = snapshot.directAudioOutput,
-       snapshot.directAudioOutputGeneration > 0 {
+    if let directAudioOutput = snapshot.directAudioOutput {
       savedAudioOutput = directAudioOutput
     } else if let audioOutput = snapshot.audioOutput, audioOutput != "null" {
       savedAudioOutput = audioOutput
@@ -805,6 +804,7 @@ final class AirPlayAudioBridge: NSObject {
     bridgeEngaged = true
     lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
     latencyCompensation = UserDefaults.standard.double(forKey: Self.latencyKey)
+    mpv.discardPendingRawAudioOutputIntent(matching: "null")
     enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
     enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
     makePlayerIfNeeded()
@@ -1642,13 +1642,13 @@ final class AirPlayAudioBridge: NSObject {
     if let directAudioOutput, directAudioOutput != "null" {
       if routeActive && bridgeEngaged {
         lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
+        mpv.discardPendingRawAudioOutputIntent(matching: "null")
         enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
         enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
         log("reasserting AirPlay output after local audio-output change", level: .verbose)
       }
     }
-    if !routeActive, let directAudioOutput = snapshot.directAudioOutput,
-       snapshot.directAudioOutputGeneration > 0 {
+    if !routeActive, let directAudioOutput = snapshot.directAudioOutput {
       restoreLatestDirectAudioOutputIfNeeded(directAudioOutput, snapshot: snapshot)
     }
     guard routeActive else { return }
@@ -1689,6 +1689,9 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   private func enqueueAudioOutputRestore(_ output: String) {
+    if output == "null" {
+      player?.mpv?.discardPendingRawAudioOutputIntent(matching: output)
+    }
     nextAudioOutputRestoreToken &+= 1
     let restoreToken = nextAudioOutputRestoreToken
     enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, output], requiredForOutput: true,
@@ -1707,10 +1710,14 @@ final class AirPlayAudioBridge: NSObject {
           !(snapshot.directAudioOutput == audioOutput &&
             snapshot.directAudioOutputGeneration <= lastProcessedDirectAudioOutputGeneration),
           lastAirPlayAudioOutputDisableGeneration != snapshot.audioOutputGeneration else { return }
-    // Only adopt event-fed output directly before Reel has a confirmed user intent. Otherwise a
-    // delayed bridge restore event can overwrite the newer saved selection during fast reconnect.
-    if snapshot.directAudioOutputGeneration == 0 { savedAudioOutput = audioOutput }
+    // An accepted async selector invalidates the previous explicit target. While a route restore
+    // is still pending, do not mistake that bridge-owned value for the newly selected output.
+    if snapshot.directAudioOutput == nil,
+       !pendingAudioOutputRestoreValues().contains(audioOutput) {
+      savedAudioOutput = audioOutput
+    }
     lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
+    mpv.discardPendingRawAudioOutputIntent(matching: "null")
     enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
     enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
     log("reasserting AirPlay output after local audio-output change", level: .verbose)
@@ -1724,12 +1731,10 @@ final class AirPlayAudioBridge: NSObject {
           !mpvCommandQueue.contains(where: { $0.restoreAudioOutputToken != nil }),
           let snapshot = player?.mpv?.airPlayPlaybackSnapshot,
           let audioOutput = snapshot.audioOutput else { return }
-    if snapshot.directAudioOutputGeneration > 0 {
-      guard snapshot.directAudioOutput == audioOutput else { return }
+    if let directAudioOutput = snapshot.directAudioOutput {
+      guard directAudioOutput == audioOutput else { return }
       savedAudioOutput = audioOutput
     } else if audioOutput != "null" {
-      savedAudioOutput = audioOutput
-    } else if snapshot.directAudioOutput == "null" {
       savedAudioOutput = audioOutput
     }
   }
