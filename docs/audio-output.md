@@ -49,8 +49,12 @@ timeline is checked by `python3 other/test_pcm_stream_reader.py`. Audible routin
 output and speaker disconnects need a real receiver.
 
 Maintenance note: bridge timers must read the event-fed mpv snapshot rather than call synchronous
-libmpv getters. Audio-output changes and routine speed/delay adjustments use the bridge's serialized
-async command queue; speed and delay updates are coalesced while a prior mpv command is pending.
+libmpv getters. Snapshot requests run on a dedicated serial queue because libmpv serializes its
+client API through a shared core lock. The AVPlayer time observer feeds the WAV loader on its own
+serial queue, independent of AppKit and mpv snapshot latency. Audio-output changes and routine
+speed/delay adjustments use the bridge's serialized async command queue; speed and delay updates
+are coalesced while a prior mpv command is pending. Snapshot requests are disabled and drained
+before the mpv handle is destroyed; preserve that order during shutdown changes.
 Keep the queue order intact. File teardown queues its final speed/delay restore behind pending
 bridge writes and also writes synchronously so stop/quit can persist watch-later state. `withUserTiming`
 remains synchronous because its caller immediately writes a watch-later file between temporary timing

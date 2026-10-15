@@ -137,7 +137,7 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
   /// A new range is always served this far, so a seek never waits for the playhead to be updated.
   private static let burstFrames = Int64(sampleRate * 10)
 
-  /// Thread-safe state shared with the main thread.
+  /// Thread-safe state shared with the bridge and AVPlayer observer queues.
   private final class SharedState: @unchecked Sendable {
     private let lock = NSLock()
     private var invalidated = false
@@ -205,7 +205,7 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
 
   private var contentLength: Int64 { Self.headerLength + frameCount * Self.bytesPerFrame }
 
-  /// Called from the main thread with the time the speaker is playing.
+  /// Called from the bridge or AVPlayer observer queue with the current speaker playhead.
   func setPlayhead(seconds: Double) {
     guard seconds.isFinite else { return }
     shared.playhead = Int64(max(0, seconds) * Self.sampleRate)
@@ -421,6 +421,26 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
   }
 }
 
+/// Feeds the resource loader from AVPlayer's clock without reading bridge state on its callback queue.
+private final class AirPlayPlayheadFeeder: @unchecked Sendable {
+  private let lock = NSLock()
+  private weak var loader: AirPlayPCMResourceLoader?
+
+  func attach(_ loader: AirPlayPCMResourceLoader?) {
+    lock.lock(); defer { lock.unlock() }
+    self.loader = loader
+  }
+
+  func update(_ time: CMTime) {
+    let seconds = time.seconds
+    guard seconds.isFinite else { return }
+    lock.lock()
+    let loader = self.loader
+    lock.unlock()
+    loader?.setPlayhead(seconds: seconds)
+  }
+}
+
 // MARK: - Bridge
 
 /// Values the bridge wrote to an mpv property, so their change events are not taken for the user's.
@@ -513,6 +533,10 @@ final class AirPlayAudioBridge: NSObject {
   private var timeControlObservation: NSKeyValueObservation?
   private var itemStatusObservation: NSKeyValueObservation?
   private var loader: AirPlayPCMResourceLoader?
+  private let playheadFeeder = AirPlayPlayheadFeeder()
+  private let playheadQueue = DispatchQueue(label: "com.colliderli.iina.airplay-playhead",
+                                             qos: .userInitiated)
+  private var playheadObserver: Any?
   private var itemSelection: Selection?
   private var itemGeneration = 0
   private var syncTimer: Timer?
@@ -586,6 +610,7 @@ final class AirPlayAudioBridge: NSObject {
     syncTimer?.invalidate()
     mpvSnapshotTimer?.invalidate()
     holdTimer?.invalidate()
+    if let playheadObserver, let avPlayer { avPlayer.removeTimeObserver(playheadObserver) }
     routeObservers.forEach { NotificationCenter.default.removeObserver($0) }
   }
 
@@ -614,6 +639,12 @@ final class AirPlayAudioBridge: NSObject {
     avPlayer.allowsExternalPlayback = false
     timeControlObservation = avPlayer.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
       DispatchQueue.main.async { self?.timeControlStatusChanged() }
+    }
+    let feeder = playheadFeeder
+    playheadObserver = avPlayer.addPeriodicTimeObserver(
+      forInterval: CMTime(value: 1, timescale: 4), queue: playheadQueue
+    ) { [weak feeder] time in
+      feeder?.update(time)
     }
     self.avPlayer = avPlayer
     return avPlayer
@@ -741,7 +772,8 @@ final class AirPlayAudioBridge: NSObject {
     enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
     makePlayerIfNeeded()
     mpv.requestAirPlayPlaybackSnapshot()
-    let snapshotTimer = Timer(timeInterval: 0.05, repeats: true) { [weak mpv] _ in
+    // A four-Hz sample is enough for sync correction. Keep libmpv's shared core lock off the UI thread.
+    let snapshotTimer = Timer(timeInterval: 0.25, repeats: true) { [weak mpv] _ in
       mpv?.requestAirPlayPlaybackSnapshot()
     }
     RunLoop.main.add(snapshotTimer, forMode: .common)
@@ -813,6 +845,7 @@ final class AirPlayAudioBridge: NSObject {
     lastMPVAudioTime = nil
     resetAudioClockMotionTracking()
     setCorrection(0)
+    playheadFeeder.attach(nil)
     loader?.invalidate()
     loader = nil
     itemStatusObservation = nil
@@ -839,6 +872,7 @@ final class AirPlayAudioBridge: NSObject {
       self.failForFile("the audio could not be decoded")
     }
     self.loader = loader
+    playheadFeeder.attach(loader)
     // Do not hold or start the speaker yet: the next tick waits until mpv's own audio output is
     // running, so this file's start cannot be postponed by a hold (see `waitingForMPVAudio`).
     waitingForMPVAudio = true
@@ -1046,7 +1080,6 @@ final class AirPlayAudioBridge: NSObject {
     guard isCarrying, let player, player.info.state.loaded, let mpv = player.mpv, let avPlayer else { return }
     let snapshot = mpv.airPlayPlaybackSnapshot
     let clockPosition = Self.seconds(avPlayer.currentTime())
-    if let heard = clockPosition { loader?.setPlayhead(seconds: heard) }
     guard !holding, snapshot.isPaused == false else {
       if waitingForMPVAudio { audioStartupClock.markBlocked() }
       driftSamples.removeAll()

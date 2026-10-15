@@ -115,6 +115,7 @@ struct MPVAirPlaySnapshot {
 private struct MPVAirPlaySnapshotRequestState {
   var generation: UInt64 = 0
   var pendingTokens = Set<UInt64>()
+  var isDisabled = false
 }
 
 class MPVController: NSObject {
@@ -143,6 +144,9 @@ class MPVController: NSObject {
   ///     never performed while running on this queue's thread and instead is queued for processing by the main thread .
   private lazy var queue = DispatchQueue(label: "com.colliderli.iina.controller",
                                          qos: .userInitiated)
+  /// Snapshot queries share libmpv's core lock and must not delay the AppKit event thread.
+  private let airPlaySnapshotQueue = DispatchQueue(label: "com.colliderli.iina.airplay-snapshot",
+                                                    qos: .userInitiated)
   /// Accessed only by the serial mpv event queue; pairs START_FILE with FILE_LOADED or END_FILE.
   private var activePlaylistLoadTransition: UInt64?
   @Atomic private var pendingPlaylistLoadTransitions: [UInt64] = []
@@ -787,6 +791,7 @@ class MPVController: NSObject {
   }
 
   func mpvUninitRendering() {
+    stopAirPlaySnapshotRequests()
     guard let mpvRenderContext else { return }
     mpv_render_context_set_update_callback(mpvRenderContext, nil, nil)
     mpv_render_context_free(mpvRenderContext)
@@ -944,7 +949,6 @@ class MPVController: NSObject {
   /// Request a compact playback clock sample without blocking the caller. The replies are handled
   /// on mpv's event queue and never forwarded to the main queue as plugin events.
   func requestAirPlayPlaybackSnapshot() {
-    guard let mpv, !hasReceivedShutdownEvent else { return }
     let properties: [(String, mpv_format)] = [
       (MPVProperty.timePos, MPV_FORMAT_DOUBLE),
       (MPVProperty.audioPts, MPV_FORMAT_DOUBLE),
@@ -952,22 +956,39 @@ class MPVController: NSObject {
       (MPVProperty.estimatedVfFps, MPV_FORMAT_DOUBLE),
       (MPVProperty.containerFps, MPV_FORMAT_DOUBLE)
     ]
-    let generation = $airPlaySnapshotRequests.withLock { state -> UInt64? in
-      guard state.pendingTokens.isEmpty else { return nil }
+    $airPlaySnapshotRequests.withLock { state in
+      guard !state.isDisabled, !hasReceivedShutdownEvent, state.pendingTokens.isEmpty else { return }
       state.generation &+= 1
       for index in properties.indices {
         state.pendingTokens.insert(Self.airPlaySnapshotToken(state.generation, propertyIndex: index))
       }
-      return state.generation
-    }
-    guard let generation else { return }
-    for (index, property) in properties.enumerated() {
-      let token = Self.airPlaySnapshotToken(generation, propertyIndex: index)
-      let result = mpv_get_property_async(mpv, token, property.0, property.1)
-      if result < 0 {
-        _ = $airPlaySnapshotRequests.withLock { $0.pendingTokens.remove(token) }
+      let generation = state.generation
+      airPlaySnapshotQueue.async { [weak self] in
+        guard let self else { return }
+        self.$airPlaySnapshotRequests.withLock { state in
+          guard !state.isDisabled, !self.hasReceivedShutdownEvent, let mpv = self.mpv else {
+            if state.generation == generation { state.pendingTokens.removeAll() }
+            return
+          }
+          for (index, property) in properties.enumerated() {
+            let token = Self.airPlaySnapshotToken(generation, propertyIndex: index)
+            if mpv_get_property_async(mpv, token, property.0, property.1) < 0 {
+              state.pendingTokens.remove(token)
+            }
+          }
+        }
       }
     }
+  }
+
+  /// Stop new snapshots and let an in-flight client call finish before destroying its mpv handle.
+  private func stopAirPlaySnapshotRequests(markShutdown: Bool = false) {
+    $airPlaySnapshotRequests.withLock { state in
+      if markShutdown { hasReceivedShutdownEvent = true }
+      state.isDisabled = true
+      state.pendingTokens.removeAll()
+    }
+    airPlaySnapshotQueue.sync {}
   }
 
   // Set property
@@ -1264,9 +1285,9 @@ class MPVController: NSObject {
           break
         }
         if eventId == MPV_EVENT_SHUTDOWN {
-          // Set this before notifying the main thread. It may destroy the handle immediately, while
-          // other wakeup callbacks have already queued work on this serial queue.
-          self.hasReceivedShutdownEvent = true
+          // Snapshot calls use a separate queue. Close that path and drain it before notifying the
+          // main thread, which may destroy the mpv handle as soon as it handles this event.
+          self.stopAirPlaySnapshotRequests(markShutdown: true)
         }
         self.handleEvent(event)
         // Must stop reading events once the mpv core is shutdown.
