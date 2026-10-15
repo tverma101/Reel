@@ -512,6 +512,18 @@ final class AirPlayAudioBridge: NSObject {
         case .stringProperty(let name, _), .doubleProperty(let name, _): name
         }
       }
+
+      var isAudioOutputSetter: Bool {
+        switch self {
+        case .command(let command, let arguments):
+          return command.rawValue == MPVCommand.set.rawValue &&
+            arguments.first == MPVOption.Audio.ao
+        case .stringProperty(let name, _):
+          return name == MPVOption.Audio.ao
+        case .doubleProperty:
+          return false
+        }
+      }
     }
 
     let operation: Operation
@@ -1689,8 +1701,15 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   private func pendingAudioOutputRestoreValues() -> [String] {
-    var outputs = activeMPVCommand?.restoreAudioOutput.map { [$0] } ?? []
-    outputs.append(contentsOf: mpvCommandQueue.compactMap(\.restoreAudioOutput))
+    var outputs: [String] = []
+    if let activeMPVCommand, activeMPVCommand.operation.isAudioOutputSetter,
+       let output = activeMPVCommand.restoreAudioOutput {
+      outputs.append(output)
+    }
+    outputs.append(contentsOf: mpvCommandQueue.compactMap { request in
+      guard request.operation.isAudioOutputSetter else { return nil }
+      return request.restoreAudioOutput
+    })
     return outputs
   }
 
