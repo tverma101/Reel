@@ -1707,7 +1707,9 @@ final class AirPlayAudioBridge: NSObject {
           !(snapshot.directAudioOutput == audioOutput &&
             snapshot.directAudioOutputGeneration <= lastProcessedDirectAudioOutputGeneration),
           lastAirPlayAudioOutputDisableGeneration != snapshot.audioOutputGeneration else { return }
-    if snapshot.directAudioOutput != audioOutput { savedAudioOutput = audioOutput }
+    // Only adopt event-fed output directly before Reel has a confirmed user intent. Otherwise a
+    // delayed bridge restore event can overwrite the newer saved selection during fast reconnect.
+    if snapshot.directAudioOutputGeneration == 0 { savedAudioOutput = audioOutput }
     lastAirPlayAudioOutputDisableGeneration = snapshot.audioOutputGeneration
     enqueueMPVCommand(.set, arguments: [MPVOption.Audio.ao, "null"], requiredForOutput: true)
     enqueueMPVCommand(MPVCommand("ao-reload"), arguments: [], requiredForOutput: true)
@@ -1722,7 +1724,10 @@ final class AirPlayAudioBridge: NSObject {
           !mpvCommandQueue.contains(where: { $0.restoreAudioOutputToken != nil }),
           let snapshot = player?.mpv?.airPlayPlaybackSnapshot,
           let audioOutput = snapshot.audioOutput else { return }
-    if audioOutput != "null" {
+    if snapshot.directAudioOutputGeneration > 0 {
+      guard snapshot.directAudioOutput == audioOutput else { return }
+      savedAudioOutput = audioOutput
+    } else if audioOutput != "null" {
       savedAudioOutput = audioOutput
     } else if snapshot.directAudioOutput == "null" {
       savedAudioOutput = audioOutput
