@@ -148,16 +148,15 @@ writes. `ao-reload` completes separately and is not treated as a pending output 
 Keep the snapshot
 request-state lock out of libmpv calls so the main-thread timer cannot inherit core-lock waits.
 AVPlayer clock monitoring starts even when its first reported time is invalid, allowing the startup
-timeout to trigger the normal fallback. Player stop and quit
-must also wait asynchronously for the bridge command queue to finish its final timing restores
-before sending mpv's stop or quit command. The event reader stays free to service unload hooks while
-stop runs, and quit remains queued behind snapshot submissions. This preserves the user's speed and
-audio delay for watch-later files; the bridge-drain wait is asynchronous, while the final watch-later
-state save still runs synchronously.
-Keep the queue order intact. File teardown queues its final speed/delay restore behind pending
-bridge writes and also writes synchronously so stop/quit can persist watch-later state. `withUserTiming`
-remains synchronous because its caller immediately writes a watch-later file between temporary timing
-changes.
+timeout to trigger the normal fallback. Player stop and quit wait asynchronously for the bridge
+command queue to finish before sending mpv's stop or quit command. File teardown queues its final
+speed/delay restore behind pending bridge writes and also writes those values synchronously so
+watch-later sees the user's timing. If a final async restore is rejected, the bridge waits off
+AppKit and applies that timing value synchronously before releasing the drain. The event reader
+stays free to service unload hooks while Stop runs.
+
+Keep the queue order intact. `withUserTiming` remains synchronous because its caller immediately
+writes a watch-later file between temporary timing changes.
 
 ## mpv audio devices
 

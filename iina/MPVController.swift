@@ -1925,12 +1925,21 @@ class MPVController: NSObject {
         self.airPlaySnapshotCallLock.unlock()
         return
       }
+      if expectedIntentGeneration != nil {
+        // Acquire the possibly contended lock before taking the route lock. Direct plugin AO
+        // setters hold this across synchronous libmpv calls; route callbacks must not wait behind
+        // them while a bridge submission is queued.
+        self.airPlayAudioOutputWriteLock.lock()
+      }
       if let expectedRouteOwnershipGeneration {
         // Serialize route changes only with libmpv's async enqueue call. Unlike the synchronous
         // overflow fallback, this call does not wait for command completion or core reconfigure.
         self.airPlayRouteOwnershipLock.lock()
         guard self.airPlayRouteOwnershipGeneration == expectedRouteOwnershipGeneration else {
           self.airPlayRouteOwnershipLock.unlock()
+          if expectedIntentGeneration != nil {
+            self.airPlayAudioOutputWriteLock.unlock()
+          }
           self.airPlaySnapshotCallLock.unlock()
           DispatchQueue.main.async { [weak self] in
             guard let self, !self.hasReceivedShutdownEvent else { return }
@@ -1943,15 +1952,14 @@ class MPVController: NSObject {
         // Serialize the last generation check with direct AO intent registration and its libmpv
         // submission. A bridge-owned AO write that passed main-thread preflight can otherwise be
         // enqueued here after a newer direct user choice.
-        self.airPlayAudioOutputWriteLock.lock()
         let currentIntentGeneration = self.$airPlaySnapshot.withLock {
           $0.audioOutputIntentGeneration
         }
         guard currentIntentGeneration == expectedIntentGeneration else {
-          self.airPlayAudioOutputWriteLock.unlock()
           if expectedRouteOwnershipGeneration != nil {
             self.airPlayRouteOwnershipLock.unlock()
           }
+          self.airPlayAudioOutputWriteLock.unlock()
           self.airPlaySnapshotCallLock.unlock()
           DispatchQueue.main.async { [weak self] in
             guard let self, !self.hasReceivedShutdownEvent else { return }
@@ -1961,11 +1969,11 @@ class MPVController: NSObject {
         }
       }
       let result = submission()
-      if expectedIntentGeneration != nil {
-        self.airPlayAudioOutputWriteLock.unlock()
-      }
       if expectedRouteOwnershipGeneration != nil {
         self.airPlayRouteOwnershipLock.unlock()
+      }
+      if expectedIntentGeneration != nil {
+        self.airPlayAudioOutputWriteLock.unlock()
       }
       self.airPlaySnapshotCallLock.unlock()
       guard !self.hasReceivedShutdownEvent else { return }
@@ -2042,6 +2050,39 @@ class MPVController: NSObject {
         guard let self, !self.hasReceivedShutdownEvent else { return }
         completion(result, wasSuperseded)
       }
+    }
+  }
+
+  /// Restore the bridge's final speed or delay after its async write was rejected. Run off AppKit,
+  /// after prior async requests settle, and under the client-call gate used by shutdown.
+  func restoreAirPlayTimingValue(_ property: String, value: Double,
+                                 completion: @escaping (Int32) -> Void) {
+    guard property == MPVOption.PlaybackControl.speed ||
+            property == MPVOption.Audio.audioDelay else {
+      DispatchQueue.main.async { completion(MPV_ERROR_OPTION_NOT_FOUND.rawValue) }
+      return
+    }
+    airPlaySnapshotQueue.async { [self] in
+      if !hasReceivedShutdownEvent, let mpv {
+        // Let accepted async writes finish before synchronously restoring the terminal value.
+        mpv_wait_async_requests(mpv)
+      }
+
+      airPlaySnapshotCallLock.lock()
+      let result: Int32
+      if hasReceivedShutdownEvent || mpv == nil {
+        result = MPV_ERROR_UNINITIALIZED.rawValue
+      } else if let mpv {
+        log("Restoring AirPlay timing property synchronously: \(property)=\(value)",
+            level: .warning)
+        var mutableValue = value
+        result = mpv_set_property(mpv, property, MPV_FORMAT_DOUBLE, &mutableValue)
+      } else {
+        result = MPV_ERROR_UNINITIALIZED.rawValue
+      }
+      airPlaySnapshotCallLock.unlock()
+
+      DispatchQueue.main.async { completion(result) }
     }
   }
 

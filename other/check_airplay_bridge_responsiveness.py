@@ -38,4 +38,50 @@ for high_frequency_property in ("MPVProperty.timePos", "MPVProperty.audioPts",
         f"{high_frequency_property} must use throttled async requests, not event observers")
 assert "$airPlaySnapshot.withLock" in controller_source
 
+submission_start = controller_source.index("func submitAirPlayCommand(")
+submission_end = controller_source.index("func restoreAirPlayAudioOutput(", submission_start)
+submission = controller_source[submission_start:submission_end]
+
+
+def route_lock_follows_ao_lock(body: str) -> bool:
+    return body.index("self.airPlayAudioOutputWriteLock.lock()") < body.index(
+        "self.airPlayRouteOwnershipLock.lock()"
+    )
+
+
+assert route_lock_follows_ao_lock(submission), (
+    "a bridge submission must not hold the route lock while waiting for a direct AO write"
+)
+submitted = submission.split("let result = submission()", 1)[1]
+assert submitted.index("self.airPlayRouteOwnershipLock.unlock()") < submitted.index(
+    "self.airPlayAudioOutputWriteLock.unlock()"
+), "release submission locks in reverse acquisition order"
+
+route_mismatch = submission.split(
+    "guard self.airPlayRouteOwnershipGeneration == expectedRouteOwnershipGeneration else {", 1
+)[1].split("\n      }", 1)[0]
+assert route_mismatch.index("self.airPlayRouteOwnershipLock.unlock()") < route_mismatch.index(
+    "self.airPlayAudioOutputWriteLock.unlock()"
+) < route_mismatch.index("self.airPlaySnapshotCallLock.unlock()"), (
+    "route-mismatch exit must release every acquired lock in reverse order"
+)
+
+intent_mismatch = submission.split(
+    "guard currentIntentGeneration == expectedIntentGeneration else {", 1
+)[1].split("\n      }", 1)[0]
+assert intent_mismatch.index("self.airPlayRouteOwnershipLock.unlock()") < intent_mismatch.index(
+    "self.airPlayAudioOutputWriteLock.unlock()"
+) < intent_mismatch.index("self.airPlaySnapshotCallLock.unlock()"), (
+    "intent-mismatch exit must release every acquired lock in reverse order"
+)
+
+mutated_submission = submission.replace(
+    "self.airPlayAudioOutputWriteLock.lock()", "__AO_LOCK__", 1
+).replace(
+    "self.airPlayRouteOwnershipLock.lock()", "self.airPlayAudioOutputWriteLock.lock()", 1
+).replace("__AO_LOCK__", "self.airPlayRouteOwnershipLock.lock()", 1)
+assert not route_lock_follows_ao_lock(mutated_submission), (
+    "negative control must catch route-lock-first acquisition"
+)
+
 print("AirPlay bridge responsiveness checks passed")
