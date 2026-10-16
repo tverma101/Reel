@@ -3271,6 +3271,7 @@ class MPVController: NSObject {
     case MPV_EVENT_SEEK:
       DispatchQueue.main.async { [self] in
         player.info.isSeeking = true
+        player.airPlayAudio.playbackSeekStarted()
         // When playback is paused the display link may be shutdown in order to not waste energy.
         // It must be running when seeking to avoid slowdowns caused by mpv waiting for IINA to call
         // mpv_render_report_swap.
@@ -3286,6 +3287,17 @@ class MPVController: NSObject {
       }
 
     case MPV_EVENT_PLAYBACK_RESTART:
+      // Pending replies may describe the picture from before this seek. Fence that batch before
+      // letting the bridge align the speaker with the restarted picture.
+      $airPlaySnapshotRequests.withLock { state in
+        state.generation &+= 1
+        state.pendingTokens.removeAll()
+      }
+      $airPlaySnapshot.withLock { snapshot in
+        snapshot.timePosition = nil
+        snapshot.audioPTS = nil
+      }
+      requestAirPlayPlaybackSnapshot()
       DispatchQueue.main.async { [self] in
         player.info.isSeeking = false
         // When playback is paused the display link may be shutdown in order to not waste energy.

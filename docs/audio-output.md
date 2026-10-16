@@ -60,6 +60,8 @@ state for diagnostics; re-reading the player's context while closing the picker 
 Clock reads also use the time observer's cached position, including during disconnect cleanup:
 `AVPlayerItem.currentTime()` can block on AVFoundation's route teardown. The observer samples at
 10 ms intervals while decoder playhead updates remain throttled to a quarter second.
+Seeks pause the speaker until a fresh mpv position arrives after playback restarts. Earlier snapshot
+replies and AVPlayer time-observer samples from before that seek are discarded before realignment.
 Bridge timers must read the event-fed mpv snapshot rather than call synchronous
 libmpv getters. Snapshot requests and AirPlay command submissions run on a dedicated serial queue
 because libmpv serializes its client API through a shared core lock; AppKit does not wait for those

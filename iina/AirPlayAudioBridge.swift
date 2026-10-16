@@ -428,6 +428,7 @@ private final class AirPlayPlayheadFeeder: @unchecked Sendable {
   private weak var loader: AirPlayPCMResourceLoader?
   private var observedPosition: Double?
   private var lastFedPosition: Double?
+  private var pendingSeekPosition: Double?
 
   /// Read the observer's last sample without entering AVFoundation during a route transition.
   var position: Double? {
@@ -440,6 +441,14 @@ private final class AirPlayPlayheadFeeder: @unchecked Sendable {
     self.loader = loader
     observedPosition = nil
     lastFedPosition = nil
+    pendingSeekPosition = nil
+  }
+
+  func prepareForSeek(to position: Double) {
+    lock.lock(); defer { lock.unlock() }
+    observedPosition = nil
+    lastFedPosition = nil
+    pendingSeekPosition = position
   }
 
   func update(_ time: CMTime) {
@@ -451,6 +460,13 @@ private final class AirPlayPlayheadFeeder: @unchecked Sendable {
       lock.unlock()
       return
     }
+    // Time-observer callbacks already in flight can still carry the pre-seek clock. Accept the
+    // seek's time-jump callback before monitoring motion or feeding its new decoding window.
+    if let pendingSeekPosition, abs(seconds - pendingSeekPosition) > 0.25 {
+      lock.unlock()
+      return
+    }
+    pendingSeekPosition = nil
     observedPosition = seconds
     // The sync clock needs fine samples, but the decoder only needs a quarter-second feeder.
     let shouldFeed = lastFedPosition.map { abs(seconds - $0) >= 0.25 } ?? true
@@ -899,6 +915,8 @@ final class AirPlayAudioBridge: NSObject {
   private var lastMPVAudioClockPosition: Double?
   private var audioClockMovedAt: Date?
   private var waitingForMPVAudioClock = false
+  private var waitingForSeekSnapshot = false
+  private var seekSnapshotStartedAt: Date?
   private var speakerClock = AirPlaySpeakerClock()
 
   /// mpv's own audio output is off; the hidden AVPlayer is what can be heard.
@@ -1430,6 +1448,7 @@ final class AirPlayAudioBridge: NSObject {
       return
     }
     avPlayer.pause()
+    playheadFeeder.prepareForSeek(to: target)
     avPlayer.seek(to: CMTime(seconds: target, preferredTimescale: 48_000),
                   toleranceBefore: .zero, toleranceAfter: .zero) { finished in
       // A seek that did not finish was replaced by a newer hold.
@@ -1482,6 +1501,8 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   private func cancelHold() {
+    waitingForSeekSnapshot = false
+    seekSnapshotStartedAt = nil
     holdGeneration += 1
     holding = false
     stopHoldTimer()
@@ -1541,6 +1562,19 @@ final class AirPlayAudioBridge: NSObject {
     guard isCarrying, let player, player.info.state.loaded, let mpv = player.mpv, let avPlayer else { return }
     let snapshot = mpv.airPlayPlaybackSnapshot
     let clockPosition = playheadFeeder.position
+    if player.info.isSeeking { return }
+    if waitingForSeekSnapshot {
+      guard snapshot.timePosition != nil, snapshot.audioPTS != nil else {
+        if let seekSnapshotStartedAt, Date().timeIntervalSince(seekSnapshotStartedAt) > Self.holdTimeout {
+          failForFile("mpv did not supply a fresh playback clock after seeking")
+        }
+        return
+      }
+      waitingForSeekSnapshot = false
+      seekSnapshotStartedAt = nil
+      requestHold("seek", realign: true)
+      return
+    }
     guard !holding, snapshot.isPaused == false else {
       if waitingForMPVAudio { audioStartupClock.markBlocked() }
       driftSamples.removeAll()
@@ -1726,8 +1760,21 @@ final class AirPlayAudioBridge: NSObject {
     }
   }
 
+  func playbackSeekStarted() {
+    guard isCarrying else { return }
+    cancelHold()
+    waitingForSeekSnapshot = true
+    seekSnapshotStartedAt = Date()
+    avPlayer?.pause()
+  }
+
   func playbackRestarted() {
-    requestHold("seek", realign: true)
+    guard isCarrying else { return }
+    cancelHold()
+    waitingForSeekSnapshot = true
+    seekSnapshotStartedAt = Date()
+    avPlayer?.pause()
+    player?.mpv?.requestAirPlayPlaybackSnapshot()
   }
 
   /// mpv changed speed on the user's behalf; the hold speed, if any, was replaced.
