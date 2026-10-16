@@ -115,10 +115,16 @@ key_handler = key_source.split("private func handleAirPlayTimingKeyBinding", 1)[
 )[0]
 for prefix in ("no-osd", "osd-bar", "osd-msg", "osd-auto", "async", "sync"):
     assert f'"{prefix}"' in key_handler, f"prefixed binding {prefix} must be recognized"
-assert "commandPrefixes.contains(action[commandIndex])" in key_handler
-assert "self.player.airPlayAudio.adjustUserSpeed(by: value, osdMode: osdMode)" in key_handler
-assert "self.player.airPlayAudio.multiplyUserSpeed(by: value, osdMode: osdMode)" in key_handler
-assert "self.player.airPlayAudio.multiplyUserAudioDelay(by: value, osdMode: osdMode)" in key_handler
+assert "commandPrefixes.contains(prefix)" in key_handler
+assert "MPVController.rawCommandSegments(rawAction)" in key_handler
+assert "MPVController.rawCommandTokens(segment)" in key_handler
+assert "MPVController.rawCommandArgumentToken(header.tokens[header.commandIndex + 2])" in key_handler
+assert "whenMPVCommandsDrained" in key_handler, (
+    "compound commands must wait for synchronous bridge timing writes before the next segment"
+)
+assert "player.airPlayAudio.adjustUserSpeed(by: binding.value" in key_handler
+assert "player.airPlayAudio.multiplyUserSpeed(by: binding.value" in key_handler
+assert "player.airPlayAudio.multiplyUserAudioDelay(by: binding.value" in key_handler
 assert "self.player.mpv.isAirPlayPlaybackFileCurrent(" in key_handler
 assert "Ignoring unsupported AirPlay timing key binding" in key_handler
 

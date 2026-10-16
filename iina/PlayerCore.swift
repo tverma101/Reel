@@ -1390,8 +1390,10 @@ class PlayerCore: NSObject {
     guard info.state != .idle else { return }
     airPlayAudio.whenMPVCommandsDrained { [weak self] in
       guard let self, self.info.state == .stopping else { return }
-      self.writeStopWatchLaterIfPending()
-      self.mpv.commandIfNotShutdown(.stop, level: .verbose)
+      guard self.mpv.commandIfNotShutdown(.stop, level: .verbose) else {
+        self.clearPendingStopWatchLaterWrite()
+        return
+      }
     }
   }
 
@@ -2541,8 +2543,10 @@ class PlayerCore: NSObject {
     }
   }
 
-  private func writeStopWatchLaterIfPending() {
-    $stopWatchLaterWriteState.withLock { state in
+  /// Save Stop's watch-later state while MPV is synchronously paused in `on_unload`.
+  /// The hook keeps the active file from changing between the identity check and write command.
+  func writeStopWatchLaterIfPendingAtUnload() {
+    let pending = $stopWatchLaterWriteState.withLock { state -> (UInt64, Int64)? in
       guard let generation = state.pendingWriteGeneration,
             generation == state.observedStartFileGeneration,
             generation == state.handledStartFileGeneration,
@@ -2550,30 +2554,32 @@ class PlayerCore: NSObject {
             expectedPlaylistEntryID == state.handledStartFilePlaylistEntryID else {
         state.pendingWriteGeneration = nil
         state.pendingWritePlaylistEntryID = nil
-        return
+        return nil
       }
       state.pendingWriteGeneration = nil
       state.pendingWritePlaylistEntryID = nil
-      // Verify MPV still points at the item whose START_FILE was handled. The event reader can
-      // lag behind playlist auto-advance, so generation equality alone does not identify the
-      // entry whose resume state write-watch-later-config will save.
-      mpv.performIfNotShutdown {
-        if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
-          mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
-        }
-        guard mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) else { return }
-        guard let playingPosition = mpv.getIntIfAvailable(MPVProperty.playlistPlayingPos),
-              playingPosition >= 0,
-              let activePlaylistEntryID = mpv.getIntIfAvailable(
-                MPVProperty.playlistNId(playingPosition)),
-              Int64(activePlaylistEntryID) == expectedPlaylistEntryID else {
-          log("Skipping watch-later write because MPV has advanced to a different playlist entry",
-              level: .verbose)
-          return
-        }
-        mpv.command(.writeWatchLaterConfig, level: .verbose)
-      }
+      return (generation, expectedPlaylistEntryID)
     }
+    guard let (_, expectedPlaylistEntryID) = pending,
+          !mpv.hasObservedShutdownEvent,
+          mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) else { return }
+    guard let playingPosition = mpv.getIntIfAvailable(MPVProperty.playlistPlayingPos),
+          playingPosition >= 0,
+          let activePlaylistEntryID = mpv.getIntIfAvailable(
+            MPVProperty.playlistNId(playingPosition)),
+          Int64(activePlaylistEntryID) == expectedPlaylistEntryID else {
+      log("Skipping watch-later write because MPV has advanced to a different playlist entry",
+          level: .verbose)
+      return
+    }
+    // Do not take performIfNotShutdown here: Stop holds its client-call gate while waiting for
+    // this hook. The core is blocked at on_unload, so this synchronous write precedes any advance.
+    mpv.command(.writeWatchLaterConfig, level: .verbose)
+  }
+
+  /// END_FILE follows `on_unload`; discard a Stop request the hook could not safely save.
+  func stopWatchLaterUnloadCompleted() {
+    clearPendingStopWatchLaterWrite()
   }
 
   /// A [MPV_EVENT_START_FILE](https://mpv.io/manual/stable/#command-interface-mpv-event-start-file)

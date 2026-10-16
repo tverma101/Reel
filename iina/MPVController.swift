@@ -245,6 +245,7 @@ class MPVController: NSObject {
   @Atomic private var hasReceivedShutdownEvent = false
   @Atomic private var airPlaySnapshot = MPVAirPlaySnapshot()
   @Atomic private var airPlaySnapshotRequests = MPVAirPlaySnapshotRequestState()
+  @Atomic private var airPlayPreStartBarrierGeneration: UInt64?
 
   var airPlayPlaybackSnapshot: MPVAirPlaySnapshot { airPlaySnapshot }
   var hasObservedShutdownEvent: Bool { hasReceivedShutdownEvent }
@@ -454,6 +455,20 @@ class MPVController: NSObject {
   func mpvInit() {
     // Create a new mpv instance and an associated client API handle to control the mpv instance.
     mpv = mpv_create()
+    let playerCore = player
+    addHook(MPVHook.onUnLoad, hook: MPVHookValue(withBlock: { [weak playerCore] next in
+      playerCore?.writeStopWatchLaterIfPendingAtUnload()
+      next()
+    }))
+    addHook(MPVHook.onBeforeStartFile, hook: MPVHookValue(withBlock: { [weak self] next in
+      guard let self else { next(); return }
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { next(); return }
+        // END_FILE is delivered before this hook. Let its AirPlay timing restore queue finish
+        // while the next file is held before START_FILE, closing the check/write transition gap.
+        self.player.airPlayAudio.whenMPVCommandsDrained { next() }
+      }
+    }))
 
     // User default settings
 
@@ -1188,7 +1203,7 @@ class MPVController: NSObject {
 
   /// Splits key-binding commands at unquoted semicolons. mpv treats an unquoted `;` as a command
   /// separator even when preceded by a backslash, and quoted arguments may contain semicolons.
-  private static func rawCommandSegments(_ rawString: String) -> [String] {
+  static func rawCommandSegments(_ rawString: String) -> [String] {
     let characters = Array(rawString)
     var segments: [String] = []
     var segment = ""
@@ -1251,7 +1266,7 @@ class MPVController: NSObject {
   }
 
   /// Preserves quoted whitespace while splitting one already-delimited mpv command into tokens.
-  private static func rawCommandTokens(_ command: String) -> [String] {
+  static func rawCommandTokens(_ command: String) -> [String] {
     let characters = Array(command)
     var tokens: [String] = []
     var token = ""
@@ -1319,7 +1334,7 @@ class MPVController: NSObject {
 
   /// Decodes only literal tokens we can restore exactly. Expansion and escape syntax is deferred
   /// to mpv and therefore cannot safely be recorded as the requested AO string.
-  private static func literalRawCommandToken(_ token: String) -> String? {
+  static func literalRawCommandToken(_ token: String) -> String? {
     guard !token.contains("\\"), !token.contains("$") else { return nil }
     if token.count >= 2, let first = token.first, (first == "\"" || first == "'"), token.last == first {
       let value = String(token.dropFirst().dropLast())
@@ -1342,7 +1357,7 @@ class MPVController: NSObject {
 
   /// Decodes one input.conf token for the libmpv array API. The selector path is used only for
   /// accepted async AO writes, so preserve mpv's quoting and property-expansion behavior.
-  private static func rawCommandArgumentToken(_ token: String) -> String? {
+  static func rawCommandArgumentToken(_ token: String) -> String? {
     if token.count >= 2, token.first == "'", token.last == "'" {
       let value = String(token.dropFirst().dropLast())
       return value.contains("'") ? nil : value
@@ -2000,9 +2015,10 @@ class MPVController: NSObject {
             currentValue = nil
           }
           let livePlaylistEntryID = self.activePlaylistEntryIDIfAvailable()
-          let ownsLiveEntry = timingOwnership.allowsNoActivePlaylistEntry
-            ? (livePlaylistEntryID == nil || livePlaylistEntryID == timingOwnership.playlistEntryID)
-            : livePlaylistEntryID == timingOwnership.playlistEntryID
+          let ownsLiveEntry = self.isAirPlayPreStartBarrierActive(
+            for: timingOwnership.fileTransitionGeneration) || (timingOwnership.allowsNoActivePlaylistEntry
+              ? (livePlaylistEntryID == nil || livePlaylistEntryID == timingOwnership.playlistEntryID)
+              : livePlaylistEntryID == timingOwnership.playlistEntryID)
           let liveTimingValue = timingOwnership.expectedValue == nil
             ? nil : self.getDoubleIfAvailable(timingOwnership.property)
           let ownsTimingValue: Bool
@@ -2149,9 +2165,10 @@ class MPVController: NSObject {
           guard snapshot.fileTransitionGeneration == timingOwnership.fileTransitionGeneration,
                 snapshot.currentPlaylistEntryID == timingOwnership.playlistEntryID else { return false }
           let livePlaylistEntryID = activePlaylistEntryIDIfAvailable()
-          let ownsLiveEntry = timingOwnership.allowsNoActivePlaylistEntry
-            ? (livePlaylistEntryID == nil || livePlaylistEntryID == timingOwnership.playlistEntryID)
-            : livePlaylistEntryID == timingOwnership.playlistEntryID
+          let ownsLiveEntry = isAirPlayPreStartBarrierActive(
+            for: timingOwnership.fileTransitionGeneration) || (timingOwnership.allowsNoActivePlaylistEntry
+              ? (livePlaylistEntryID == nil || livePlaylistEntryID == timingOwnership.playlistEntryID)
+              : livePlaylistEntryID == timingOwnership.playlistEntryID)
           guard ownsLiveEntry,
                 let expectedValue = timingOwnership.expectedValue,
                 let currentValue = getDoubleIfAvailable(timingOwnership.property),
@@ -2411,6 +2428,10 @@ class MPVController: NSObject {
           let entryID = getIntIfAvailable(MPVProperty.playlistNId(playingPosition)),
           entryID >= 0 else { return nil }
     return Int64(entryID)
+  }
+
+  private func isAirPlayPreStartBarrierActive(for fileTransitionGeneration: UInt64) -> Bool {
+    $airPlayPreStartBarrierGeneration.withLock { $0 == fileTransitionGeneration }
   }
 
   /// Reject a deferred AirPlay key command if its file changed before the main-queue turn ran.
@@ -2697,14 +2718,25 @@ class MPVController: NSObject {
       let userData = event.pointee.reply_userdata
       let hookEvent = event.pointee.data.bindMemory(to: mpv_event_hook.self, capacity: 1).pointee
       let hookID = hookEvent.id
+      let hookName = String(cString: hookEvent.name)
+      if hookName == MPVHook.onBeforeStartFile.rawValue {
+        let generation = $airPlaySnapshot.withLock { $0.fileTransitionGeneration }
+        $airPlayPreStartBarrierGeneration.withLock { $0 = generation }
+      }
       guard let hook = $hooks.withLock({ $0[userData] }) else {
         // Hook not found, probably because it's from an unloaded plugin.
         // Still need to call hook_continue otherwise it will stuck.
         log("Hook \(hookID) not found", level: .warning)
+        if hookName == MPVHook.onBeforeStartFile.rawValue {
+          $airPlayPreStartBarrierGeneration.withLock { $0 = nil }
+        }
         mpv_hook_continue(self.mpv, hookID)
         break
       }
       hook.call {
+        if hookName == MPVHook.onBeforeStartFile.rawValue {
+          self.$airPlayPreStartBarrierGeneration.withLock { $0 = nil }
+        }
         mpv_hook_continue(self.mpv, hookID)
       }
 
@@ -2806,6 +2838,7 @@ class MPVController: NSObject {
       let endFile = event.pointee.data.bindMemory(to: mpv_event_end_file.self, capacity: 1).pointee
       let reason = endFile.reason
       let dueToStopCommand = reason == MPV_END_FILE_REASON_STOP
+      player.stopWatchLaterUnloadCompleted()
       let endedPlaylistEntryID = endFile.playlist_entry_id >= 0
         ? Int64(endFile.playlist_entry_id) : nil
       let fileTransitionGeneration = $airPlaySnapshot.withLock { $0.fileTransitionGeneration }

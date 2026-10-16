@@ -97,14 +97,30 @@ def check_restore_integration(bridge_text: str, controller_text: str) -> None:
     ) < stop.index("whenMPVCommandsDrained")
     watch_later = section(
         player_core_source,
-        "private func writeStopWatchLaterIfPending()",
+        "func writeStopWatchLaterIfPendingAtUnload()",
         "/// A [MPV_EVENT_START_FILE]",
     )
-    assert watch_later.index("MPVOption.PlaybackControl.pause") < watch_later.index(
-        "MPVProperty.playlistPlayingPos"
-    ) < watch_later.index("MPVProperty.playlistNId") < watch_later.index(
+    assert watch_later.index("MPVProperty.playlistPlayingPos") < watch_later.index(
+        "MPVProperty.playlistNId"
+    ) < watch_later.index(
         ".writeWatchLaterConfig"
-    ), "watch-later must be written only after pausing and verifying the active entry"
+    ), "watch-later must be written only after verifying the active entry"
+    assert "writeStopWatchLaterIfPendingAtUnload()" in controller_text
+    assert "MPVHook.onUnLoad" in controller_text
+    assert "stopWatchLaterUnloadCompleted()" in controller_text
+    assert "mpv.commandIfNotShutdown(.stop" in stop
+    assert "writeStopWatchLaterIfPending()" not in stop
+
+    transition_hook = section(
+        controller_text,
+        "addHook(MPVHook.onBeforeStartFile",
+        "// User default settings",
+    )
+    assert "whenMPVCommandsDrained { next() }" in transition_hook
+    assert "isAirPlayPreStartBarrierActive(" in controller_text
+    assert controller_text.count("isAirPlayPreStartBarrierActive(") >= 3, (
+        "both async submission and synchronous restore must recognize the transition barrier"
+    )
 
     shutdown = section(
         player_core_source,
