@@ -701,8 +701,6 @@ final class AirPlayAudioBridge: NSObject {
   /// The picker sends this player to a speaker other than the Mac's (or the local test is on).
   private var routeActive = false
   private var routeNames: [String] = []
-  /// Publish the connection OSD once a deferred bridge engagement succeeds.
-  private var pendingConnectedRouteOSD = false
   private var routeDescription = ""
   /// This file's audio could not be bridged, so mpv plays it on the Mac until the next file.
   private var bridgeFailedForFile = false
@@ -889,30 +887,25 @@ final class AirPlayAudioBridge: NSObject {
     player?.mpv?.advanceAirPlayRouteOwnershipGeneration()
     let wasActive = routeActive
     routeActive = active
-    pendingConnectedRouteOSD = active
     if active && !wasActive {
       // A new choice deserves a new attempt.
       bridgeFailedForFile = false
     }
     reconcile()
     guard let player, player.info.state.loaded else { return }
-    announceConnectedRouteIfReady()
-    if !active && wasActive {
-      player.sendOSD(.custom(NSLocalizedString("osc_toolbar.airplay_output.disconnected", value: "Reel audio: this Mac",
-                                               comment: "Reel's audio plays on the Mac again")))
+    if active {
+      // This reports the picker selection, not successful audio playback; engage queues async MPV work.
+      let name = routeNames.isEmpty ? NSLocalizedString("osc_toolbar.airplay_output.speaker", value: "the AirPlay speaker",
+                                                        comment: "Unnamed AirPlay speaker")
+                                    : ListFormatter.localizedString(byJoining: routeNames)
+      player.sendOSD(.custom(String(format: NSLocalizedString("osc_toolbar.airplay_output.selected",
+                                                              value: "AirPlay speaker selected: %@",
+                                                              comment: "The AirPlay speaker selected in the picker"), name)))
+    } else if wasActive {
+      player.sendOSD(.custom(NSLocalizedString("osc_toolbar.airplay_output.disconnected",
+                                               value: "AirPlay speaker disconnected",
+                                               comment: "The selected AirPlay speaker disconnected")))
     }
-  }
-
-  private func announceConnectedRouteIfReady() {
-    guard pendingConnectedRouteOSD, routeActive, isEngaged,
-          let player, player.info.state.loaded else { return }
-    pendingConnectedRouteOSD = false
-    let name = routeNames.isEmpty ? NSLocalizedString("osc_toolbar.airplay_output.speaker", value: "the AirPlay speaker",
-                                                      comment: "Unnamed AirPlay speaker")
-                                  : ListFormatter.localizedString(byJoining: routeNames)
-    player.sendOSD(.custom(String(format: NSLocalizedString("osc_toolbar.airplay_output.connected",
-                                                            value: "Reel audio: %@",
-                                                            comment: "Reel's audio now plays on the named speaker"), name)))
   }
 
   // MARK: Engaging
@@ -963,7 +956,6 @@ final class AirPlayAudioBridge: NSObject {
     case .unsupported:
       break
     }
-    announceConnectedRouteIfReady()
   }
 
   @discardableResult

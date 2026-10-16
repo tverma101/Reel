@@ -414,6 +414,7 @@ class PlayerCore: NSObject {
   }
 
   private var backgroundTaskInUse = false
+  private var shouldWriteWatchLaterAfterStopDrain = false
 
   var initialWindow: InitialWindowController!
 
@@ -1001,6 +1002,7 @@ class PlayerCore: NSObject {
   ///     task is still running this method only changes the player state. When the background task ends it will notice that shutting
   ///     down was in progress and will call this method again to continue the process of shutting down..
   func shutdown() {
+    shouldWriteWatchLaterAfterStopDrain = false
     // mpv writes its watch-later file on quit, so give it the user's own speed and audio delay.
     airPlayAudio.stopPlayback()
     if !isPluginRuntimeUnavailable {
@@ -1037,6 +1039,7 @@ class PlayerCore: NSObject {
   ///     windows of vulnerability that can not be fully closed. IINA has no choice but to support a mpv initiated shutdown as best it
   ///     can.
   func mpvHasShutdown() {
+    shouldWriteWatchLaterAfterStopDrain = false
     guard info.state != .shutDown else { return }
     let isMPVInitiated = info.state != .shuttingDown
     let suffix = isMPVInitiated ? " (initiated by mpv)" : ""
@@ -1303,7 +1306,11 @@ class PlayerCore: NSObject {
   func stop() {
     guard info.state != .shuttingDown, info.state != .shutDown,
           !mpv.hasObservedShutdownEvent else { return }
-    savePlaybackPosition()
+    if info.state.active {
+      shouldWriteWatchLaterAfterStopDrain =
+        mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit)
+    }
+    savePlaybackPosition(writeWatchLater: false)
     airPlayAudio.stopPlayback()
     if mainWindow.loaded { mainWindow.liveCaptions.stop() }
 
@@ -1317,8 +1324,7 @@ class PlayerCore: NSObject {
 
     // The player may already be stopped in which case the state must not be set to stopping.
     if info.state != .idle {
-      // Setting of state must come after saving playback position or that method will not save the
-      // watch later configuration.
+      // The watch-later file is written after AirPlay commands drain below.
       info.state = .stopping
 
       // Make sure playback is paused to free up machine resources when quitting.
@@ -1347,6 +1353,12 @@ class PlayerCore: NSObject {
     guard info.state != .idle else { return }
     airPlayAudio.whenMPVCommandsDrained { [weak self] in
       guard let self, self.info.state == .stopping else { return }
+      if self.shouldWriteWatchLaterAfterStopDrain {
+        self.shouldWriteWatchLaterAfterStopDrain = false
+        if self.mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) {
+          self.mpv.commandIfNotShutdown(.writeWatchLaterConfig, level: .verbose)
+        }
+      }
       self.mpv.commandIfNotShutdown(.stop, level: .verbose)
     }
   }
@@ -2386,11 +2398,11 @@ class PlayerCore: NSObject {
     postNotification(.iinaSubStyleChanged)
   }
 
-  func savePlaybackPosition() {
+  func savePlaybackPosition(writeWatchLater: Bool = true) {
     guard mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) else { return }
 
     // The player must be active to be able to save the watch later configuration.
-    if info.state.active {
+    if writeWatchLater && info.state.active {
       log("Write watch later config")
       // The AirPlay bridge briefly owns mpv's speed and audio delay; save the user's values instead.
       airPlayAudio.withUserTiming {
@@ -2471,6 +2483,7 @@ class PlayerCore: NSObject {
   /// - Important: The event may be received after IINA has started to stop and shutdown the core. The event must be ignored if
   ///         the player is no longer active.
   func fileStarted(path: String) {
+    shouldWriteWatchLaterAfterStopDrain = false
     guard info.state.active else { return }
     log("File started")
     airPlayAudio.fileStarted()

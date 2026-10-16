@@ -1082,9 +1082,9 @@
 "osd.apple_live_captions_on" = "Apple Live Captions: On";
 "osd.apple_live_captions_off" = "Apple Live Captions: Off";
 "osc_toolbar.airplay" = "AirPlay Audio";
-"osc_toolbar.airplay_output.connected" = "Reel audio: %@";
+"osc_toolbar.airplay_output.selected" = "AirPlay speaker selected: %@";
 "osc_toolbar.airplay_output.speaker" = "the AirPlay speaker";
-"osc_toolbar.airplay_output.disconnected" = "Reel audio: this Mac";
+"osc_toolbar.airplay_output.disconnected" = "AirPlay speaker disconnected";
 "osc_toolbar.airplay_output.unsupported" = "This file's audio can't be sent over AirPlay, so it plays on this Mac.";
 "osc_toolbar.airplay_output.failed" = "AirPlay stopped playing this file's audio, so it plays on this Mac.";
 "osc_toolbar.airplay_output.restore_failed" = "AirPlay stopped, but Reel could not restore audio output on this Mac.";
