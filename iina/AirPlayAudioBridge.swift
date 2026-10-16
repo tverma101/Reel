@@ -1899,7 +1899,7 @@ final class AirPlayAudioBridge: NSObject {
     let transitionPlaylistEntryID = playlistEntryID ?? snapshot?.currentPlaylistEntryID
     let pendingSpeedRequest = pendingMPVPropertyRequest(MPVOption.PlaybackControl.speed)
     let pendingAudioDelayRequest = pendingMPVPropertyRequest(MPVOption.Audio.audioDelay)
-    let needsUserSpeedRestore = holdSpeedApplied ||
+    let needsUserSpeedRestore = !pendingUserSpeedTargets.isEmpty || holdSpeedApplied ||
       pendingTimingRestoreFileIdentities[MPVOption.PlaybackControl.speed].map {
         !$0.matches(fileTransitionGeneration: transitionGeneration,
                     playlistEntryID: transitionPlaylistEntryID)
@@ -1909,7 +1909,8 @@ final class AirPlayAudioBridge: NSObject {
           !request.targetsFile(fileTransitionGeneration: transitionGeneration,
                               playlistEntryID: transitionPlaylistEntryID)
       } == true
-    let needsUserAudioDelayRestore = audioDelayCorrection != 0 ||
+    let needsUserAudioDelayRestore = !pendingUserAudioDelayTargets.values.isEmpty ||
+      audioDelayCorrection != 0 ||
       pendingTimingRestoreFileIdentities[MPVOption.Audio.audioDelay].map {
         !$0.matches(fileTransitionGeneration: transitionGeneration,
                     playlistEntryID: transitionPlaylistEntryID)
@@ -1924,7 +1925,6 @@ final class AirPlayAudioBridge: NSObject {
     currentPlaylistEntryID = transitionPlaylistEntryID
     currentFileTimingReleaseStarted = false
     pendingTimingRestoreFileIdentities.removeAll(keepingCapacity: true)
-    clearUserTimingTargets()
     stoppingOrQuitting = false
     bridgeFailedForFile = false
     lifecycleSafetyNoticeShown = false

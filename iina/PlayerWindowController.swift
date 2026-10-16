@@ -355,6 +355,7 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
     let propertyIndex: Int
     let command: String
     let property: String
+    let propertyMayExpandToTiming: Bool
     let osdMode: AirPlayTimingOSDMode
     let expandsProperties: Bool
     let cycleValuesReversed: Bool
@@ -480,19 +481,29 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
       cycleValuesReversed = true
       propertyIndex += 1
     }
-    guard propertyIndex < action.count,
-          let property = MPVController.literalRawCommandToken(action[propertyIndex]),
-          property == MPVOption.PlaybackControl.speed ||
-            property == MPVOption.Audio.audioDelay else { return nil }
+    guard propertyIndex < action.count else { return nil }
+    let propertyToken = action[propertyIndex]
+    let literalProperty = MPVController.literalRawCommandToken(propertyToken)
+    let propertyMayExpandToTiming = literalProperty == nil && expandsProperties &&
+      propertyToken.contains("$")
+    guard propertyMayExpandToTiming || literalProperty == MPVOption.PlaybackControl.speed ||
+            literalProperty == MPVOption.Audio.audioDelay else { return nil }
+    let property = literalProperty ?? propertyToken
     return AirPlayTimingBindingHeader(tokens: action, commandIndex: commandIndex,
                                       propertyIndex: propertyIndex,
-                                      command: command, property: property, osdMode: osdMode,
+                                      command: command, property: property,
+                                      propertyMayExpandToTiming: propertyMayExpandToTiming,
+                                      osdMode: osdMode,
                                       expandsProperties: expandsProperties,
                                       cycleValuesReversed: cycleValuesReversed)
   }
 
   private func parseAirPlayTimingBindingCommand(_ segment: String) -> AirPlayTimingBindingParse {
     guard let header = airPlayTimingBindingHeader(segment) else { return .unrelated }
+
+    // MPV expands input properties even inside quoted command arguments. A dynamic property name
+    // may resolve to speed or audio-delay, so keep it out of the raw path while timing is serialized.
+    if header.propertyMayExpandToTiming { return .unsupported(segment) }
 
     // Do not let an unsupported expression or timing command mutate the bridge's hold/correction
     // value through MPV's raw command path. These forms can be added to the logical-value adapter

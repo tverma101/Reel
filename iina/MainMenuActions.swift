@@ -124,7 +124,7 @@ extension MainMenuActionHandler {
       return
     }
     if let multiplier = sender.representedObject as? Double {
-      if player.airPlayAudio.isCarrying {
+      if player.airPlayAudio.shouldSerializeTimingChanges {
         player.airPlayAudio.multiplyUserSpeed(by: multiplier)
       } else {
         player.setSpeed(player.info.playSpeed * multiplier)
@@ -323,7 +323,7 @@ extension MainMenuActionHandler {
 
   @objc func menuChangeAudioDelay(_ sender: NSMenuItem) {
     if let delayDelta = sender.representedObject as? Double {
-      if player.airPlayAudio.isCarrying {
+      if player.airPlayAudio.shouldSerializeTimingChanges {
         player.airPlayAudio.adjustUserAudioDelay(by: delayDelta)
       } else {
         let newDelay = player.info.audioDelay + delayDelta

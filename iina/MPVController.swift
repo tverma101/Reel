@@ -146,7 +146,9 @@ struct MPVAirPlaySnapshot {
   var estimatedVideoFPS: Double?
   var containerFPS: Double?
   var speed: Double?
+  var speedObservationGeneration: UInt64 = 0
   var audioDelay: Double?
+  var audioDelayObservationGeneration: UInt64 = 0
 
   mutating func resetMediaValues() {
     pausedForCache = nil
@@ -3222,7 +3224,26 @@ class MPVController: NSObject {
       }
 
     case MPV_EVENT_FILE_LOADED:
-      let fileTransitionGeneration = activeFileTransitionGeneration
+      var fileTransitionGeneration = activeFileTransitionGeneration
+      var recoveredStart: (path: String, playlistEntryID: Int64, generation: UInt64,
+                           mainGeneration: UInt64)?
+      if fileTransitionGeneration == nil,
+         let playlistEntryID = activePlaylistEntryIDIfAvailable(),
+         let path = getString(MPVProperty.path) {
+        // START_FILE may have been the event lost during primary-queue overflow. Rebuild the
+        // file identity before FILE_LOADED reaches PlayerCore so route selection cannot reuse the
+        // previous item's URL or timing generation.
+        let recoveredGeneration = $airPlaySnapshot.withLock { snapshot in
+          snapshot.fileTransitionGeneration &+= 1
+          snapshot.currentPlaylistEntryID = playlistEntryID
+          snapshot.resetMediaValues()
+          return snapshot.fileTransitionGeneration
+        }
+        fileTransitionGeneration = recoveredGeneration
+        let mainGeneration = player.fileStartEventObserved(playlistEntryID: playlistEntryID)
+        recoveredStart = (path, playlistEntryID, recoveredGeneration, mainGeneration)
+        log("Recovered missing START_FILE after MPV event-queue overflow", level: .warning)
+      }
       activeFileTransitionGeneration = nil
       if consumeLifecycleHookRecoveryBoundary(for: fileTransitionGeneration) {
         $lifecycleHookHasEverBeenAvailable.withLock { $0 = true }
@@ -3230,8 +3251,20 @@ class MPVController: NSObject {
       }
       let transition = activePlaylistLoadTransition
       activePlaylistLoadTransition = nil
+      let loadedTransitionGeneration = fileTransitionGeneration
+      let recoveredStartFile = recoveredStart
       DispatchQueue.main.async {
-        self.player.fileLoaded(fileTransitionGeneration: fileTransitionGeneration)
+        if let recoveredStartFile {
+          self.player.fileStartEventReachedMain(recoveredStartFile.mainGeneration,
+                                                playlistEntryID: recoveredStartFile.playlistEntryID)
+          if self.player.info.state.active, self.player.info.state != .stopping {
+            self.player.info.state = .starting
+            self.player.fileStarted(path: recoveredStartFile.path,
+                                    fileTransitionGeneration: recoveredStartFile.generation,
+                                    playlistEntryID: recoveredStartFile.playlistEntryID)
+          }
+        }
+        self.player.fileLoaded(fileTransitionGeneration: loadedTransitionGeneration)
         self.player.playlistLoadDidFinish(transition)
       }
 
@@ -3428,19 +3461,29 @@ class MPVController: NSObject {
               self.airPlaySnapshotCallLock.lock()
               let sampleState = self.$airPlaySnapshot.withLock { snapshot in
                 (generation: snapshot.audioOutputGeneration,
-                 canPublish: snapshot.audioOutputChangesInFlight == 0)
+                 canPublish: snapshot.audioOutputChangesInFlight == 0,
+                 speedGeneration: snapshot.speedObservationGeneration,
+                 audioDelayGeneration: snapshot.audioDelayObservationGeneration)
               }
               let audioOutput: String?
+              let speed: Double?
+              let audioDelay: Double?
               if !self.hasReceivedShutdownEvent, self.mpv != nil {
                 audioOutput = self.getString(MPVOption.Audio.ao)
+                speed = self.getDoubleIfAvailable(MPVOption.PlaybackControl.speed)
+                audioDelay = self.getDoubleIfAvailable(MPVOption.Audio.audioDelay)
               } else {
                 audioOutput = nil
+                speed = nil
+                audioDelay = nil
               }
               self.airPlaySnapshotCallLock.unlock()
 
               DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 var recoveredAudioOutputObservation: (value: String, generation: UInt64)?
+                var recoveredSpeed: Double?
+                var recoveredAudioDelay: Double?
                 if !self.hasReceivedShutdownEvent {
                   self.$airPlaySnapshot.withLock { snapshot in
                     // An observed ao event after this sample is newer than the queried value.
@@ -3462,11 +3505,28 @@ class MPVController: NSObject {
                           (audioOutput, snapshot.audioOutputObservedGeneration)
                       }
                     }
+                    // Property-change notifications can be dropped by the same overflow. These
+                    // post-barrier readbacks restore timing values used to validate bridge
+                    // releases, unless a newer observed event has already arrived.
+                    if snapshot.speedObservationGeneration == sampleState.speedGeneration,
+                       let speed {
+                      snapshot.speed = speed
+                      recoveredSpeed = speed
+                    }
+                    if snapshot.audioDelayObservationGeneration == sampleState.audioDelayGeneration,
+                       let audioDelay {
+                      snapshot.audioDelay = audioDelay
+                      recoveredAudioDelay = audioDelay
+                    }
                   }
                 }
                 self.$airPlaySnapshotRequests.withLock { $0.isRecoveringFromQueueOverflow = false }
                 // The shutdown path clears the bridge command queue after draining this reader.
                 guard !self.hasReceivedShutdownEvent else { return }
+                if let recoveredSpeed { self.handleSpeedPropertyValue(recoveredSpeed) }
+                if let recoveredAudioDelay {
+                  self.handleAudioDelayPropertyValue(recoveredAudioDelay)
+                }
                 self.player.airPlayAudio.finishMPVEventQueueOverflowRecovery(
                   for: activeReplyToken
                 )
@@ -3500,6 +3560,41 @@ class MPVController: NSObject {
 
   // MARK: - Property listeners
 
+  /// Applies an event-fed or overflow-recovered speed value on the main thread.
+  private func handleSpeedPropertyValue(_ speed: Double) {
+    let isInternalWrite = player.airPlayAudio.consumeInternalSpeed(speed)
+    if player.airPlayAudio.hasPendingUserSpeedTarget(speed) {
+      let osdMode = player.airPlayAudio.userSpeedOSDMode(for: speed)
+      player.speedChanged(speed, osdMode: osdMode)
+      player.airPlayAudio.userSpeedChanged(speed)
+      return
+    }
+    guard !isInternalWrite else { return }
+    let osdMode = player.airPlayAudio.userSpeedOSDMode(for: speed)
+    player.speedChanged(speed, osdMode: osdMode)
+    player.airPlayAudio.userSpeedChanged(speed)
+  }
+
+  /// Applies an event-fed or overflow-recovered audio-delay value on the main thread.
+  private func handleAudioDelayPropertyValue(_ value: Double) {
+    guard let delay = player.airPlayAudio.userAudioDelay(fromMPV: value) else { return }
+    let osdMode = player.airPlayAudio.userAudioDelayChanged(delay)
+    player.info.audioDelay = delay
+    switch osdMode {
+    case .none:
+      break
+    case .bar:
+      player.sendOSD(.audioDelayBarOnly(delay))
+    case .message:
+      player.sendOSD(.audioDelayMessage(delay))
+    case .automatic:
+      player.sendOSD(.audioDelay(delay))
+    case .messageAndBar:
+      player.sendOSD(.audioDelay(delay))
+    }
+    player.postNotification(.iinaAudioDelayChanged)
+  }
+
   private func handlePropertyChange(_ name: String, _ property: mpv_event_property) {
     var observedAudioOutput: (value: String?, generation: UInt64)?
     $airPlaySnapshot.withLock { snapshot in
@@ -3529,8 +3624,10 @@ class MPVController: NSObject {
         snapshot.containerFPS = doubleValue(from: property)
       case MPVOption.PlaybackControl.speed:
         snapshot.speed = doubleValue(from: property)
+        snapshot.speedObservationGeneration &+= 1
       case MPVOption.Audio.audioDelay:
         snapshot.audioDelay = doubleValue(from: property)
+        snapshot.audioDelayObservationGeneration &+= 1
       default:
         break
       }
@@ -3604,20 +3701,7 @@ class MPVController: NSObject {
         logPropertyValueError(MPVOption.PlaybackControl.speed, property.format)
         break
       }
-      DispatchQueue.main.async {
-        // The AirPlay bridge holds the picture with a near-zero speed while the speaker starts.
-        let isInternalWrite = self.player.airPlayAudio.consumeInternalSpeed(speed)
-        if self.player.airPlayAudio.hasPendingUserSpeedTarget(speed) {
-          let osdMode = self.player.airPlayAudio.userSpeedOSDMode(for: speed)
-          self.player.speedChanged(speed, osdMode: osdMode)
-          self.player.airPlayAudio.userSpeedChanged(speed)
-          return
-        }
-        guard !isInternalWrite else { return }
-        let osdMode = self.player.airPlayAudio.userSpeedOSDMode(for: speed)
-        self.player.speedChanged(speed, osdMode: osdMode)
-        self.player.airPlayAudio.userSpeedChanged(speed)
-      }
+      DispatchQueue.main.async { self.handleSpeedPropertyValue(speed) }
 
     case MPVOption.PlaybackControl.loopPlaylist, MPVOption.PlaybackControl.loopFile:
       DispatchQueue.main.async { [self] in
@@ -3698,25 +3782,7 @@ class MPVController: NSObject {
         logPropertyValueError(MPVOption.Audio.audioDelay, property.format)
         break
       }
-      DispatchQueue.main.async { [self] in
-        // While the AirPlay bridge carries the audio, part of mpv's delay is its sync correction.
-        guard let delay = player.airPlayAudio.userAudioDelay(fromMPV: data) else { return }
-        let osdMode = player.airPlayAudio.userAudioDelayChanged(delay)
-        player.info.audioDelay = delay
-        switch osdMode {
-        case .none:
-          break
-        case .bar:
-          player.sendOSD(.audioDelayBarOnly(delay))
-        case .message:
-          player.sendOSD(.audioDelayMessage(delay))
-        case .automatic:
-          player.sendOSD(.audioDelay(delay))
-        case .messageAndBar:
-          player.sendOSD(.audioDelay(delay))
-        }
-        player.postNotification(.iinaAudioDelayChanged)
-      }
+      DispatchQueue.main.async { self.handleAudioDelayPropertyValue(data) }
 
     case MPVOption.Subtitles.subVisibility:
       if let visible = flagValue(from: property) {
