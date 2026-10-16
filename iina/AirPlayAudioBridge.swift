@@ -656,6 +656,8 @@ final class AirPlayAudioBridge: NSObject {
     var expectedCurrentTimingValue: Double? = nil
     /// The final async submission must still belong to the file whose timing was captured.
     var expectedFileTransitionGeneration: UInt64? = nil
+    /// Playlist identity for the file whose timing was captured.
+    var expectedPlaylistEntryID: Int64? = nil
     var replyUserdata: UInt64? = nil
     /// Used to publish the confirmed AO value if the cached output is still the pre-submit value
     /// and no newer direct intent superseded it.
@@ -668,7 +670,8 @@ final class AirPlayAudioBridge: NSObject {
     func matches(_ other: MPVCommandRequest) -> Bool {
       operation.matches(other.operation) &&
         expectedCurrentTimingValue == other.expectedCurrentTimingValue &&
-        expectedFileTransitionGeneration == other.expectedFileTransitionGeneration
+        expectedFileTransitionGeneration == other.expectedFileTransitionGeneration &&
+        expectedPlaylistEntryID == other.expectedPlaylistEntryID
     }
   }
 
@@ -722,6 +725,11 @@ final class AirPlayAudioBridge: NSObject {
   private var pendingOutputRestoreFailureNotice = false
   /// Snapshot epoch for the item whose timing this bridge currently owns.
   private var currentFileTransitionGeneration: UInt64?
+  private var currentPlaylistEntryID: Int64?
+  private var userSpeedOverride: Double?
+  private var userAudioDelayOverride: Double?
+  private var pendingUserSpeedTargets: [Double] = []
+  private var pendingUserAudioDelayTargets: [Double] = []
   private var routeDescription = ""
   /// This file's audio could not be bridged, so mpv plays it on the Mac until the next file.
   private var bridgeFailedForFile = false
@@ -793,8 +801,8 @@ final class AirPlayAudioBridge: NSObject {
     return max(0, seconds - latencyCompensation)
   }
 
-  private var userSpeed: Double { player?.info.playSpeed ?? 1 }
-  private var userAudioDelay: Double { player?.info.audioDelay ?? 0 }
+  private var userSpeed: Double { userSpeedOverride ?? player?.info.playSpeed ?? 1 }
+  private var userAudioDelay: Double { userAudioDelayOverride ?? player?.info.audioDelay ?? 0 }
 
   init(player: PlayerCore) {
     self.player = player
@@ -1565,7 +1573,16 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   /// mpv changed speed on the user's behalf; the hold speed, if any, was replaced.
-  func userSpeedChanged() {
+  func userSpeedChanged(_ speed: Double) {
+    if let matchedTarget = pendingUserSpeedTargets.firstIndex(where: {
+      Self.sameTimingValue($0, speed)
+    }) {
+      pendingUserSpeedTargets.removeFirst(matchedTarget + 1)
+      if pendingUserSpeedTargets.isEmpty { userSpeedOverride = nil }
+    } else {
+      pendingUserSpeedTargets.removeAll()
+      userSpeedOverride = nil
+    }
     guard isCarrying else { return }
     holdSpeedApplied = false
     requestHold("speed change", realign: true)
@@ -1584,6 +1601,55 @@ final class AirPlayAudioBridge: NSObject {
   /// The user's audio delay for a value mpv reported, or nil when the bridge wrote that value.
   func userAudioDelay(fromMPV delay: Double) -> Double? {
     delayWrites.consume(delay) ? nil : delay - audioDelayCorrection
+  }
+
+  func noteUserSpeedRequest(_ speed: Double) {
+    guard isCarrying, speed.isFinite else { return }
+    userSpeedOverride = speed
+    pendingUserSpeedTargets.append(speed)
+  }
+
+  func noteUserAudioDelayRequest(_ delay: Double) {
+    guard isCarrying, delay.isFinite else { return }
+    userAudioDelayOverride = delay
+    pendingUserAudioDelayTargets.append(delay)
+  }
+
+  func multiplyUserSpeed(by factor: Double) {
+    guard isCarrying, factor.isFinite, factor > 0 else { return }
+    let speed = userSpeed * factor
+    guard speed.isFinite else { return }
+    player?.setSpeed(speed)
+  }
+
+  func adjustUserAudioDelay(by delta: Double) {
+    guard isCarrying, delta.isFinite else { return }
+    let delay = userAudioDelay + delta
+    guard delay.isFinite else { return }
+    player?.setAudioDelay(delay)
+  }
+
+  func userAudioDelayChanged(_ delay: Double) {
+    if let matchedTarget = pendingUserAudioDelayTargets.firstIndex(where: {
+      Self.sameTimingValue($0, delay)
+    }) {
+      pendingUserAudioDelayTargets.removeFirst(matchedTarget + 1)
+      if pendingUserAudioDelayTargets.isEmpty { userAudioDelayOverride = nil }
+    } else {
+      pendingUserAudioDelayTargets.removeAll()
+      userAudioDelayOverride = nil
+    }
+  }
+
+  private static func sameTimingValue(_ lhs: Double, _ rhs: Double) -> Bool {
+    lhs.isFinite && rhs.isFinite && abs(lhs - rhs) < 1e-9
+  }
+
+  private func clearUserTimingTargets() {
+    userSpeedOverride = nil
+    userAudioDelayOverride = nil
+    pendingUserSpeedTargets.removeAll()
+    pendingUserAudioDelayTargets.removeAll()
   }
 
   /// Runs `body` with the user's own speed and audio delay in mpv, for writing watch-later files.
@@ -1606,25 +1672,31 @@ final class AirPlayAudioBridge: NSObject {
     if held { speedWrites.record(Self.holdSpeed); mpv.setDouble(MPVOption.PlaybackControl.speed, Self.holdSpeed, level: .verbose) }
   }
 
-  func fileStarted(fileTransitionGeneration: UInt64? = nil) {
-    releaseFile(deferMPVWrites: true, restoreTimingOnlyWhileStillOwned: true)
+  func fileStarted(fileTransitionGeneration: UInt64? = nil, playlistEntryID: Int64? = nil) {
+    releaseFile(restoreTimingOnlyWhileStillOwned: true)
     currentFileTransitionGeneration = fileTransitionGeneration ??
       player?.mpv?.airPlayPlaybackSnapshot.fileTransitionGeneration
+    currentPlaylistEntryID = playlistEntryID ??
+      player?.mpv?.airPlayPlaybackSnapshot.currentPlaylistEntryID
+    clearUserTimingTargets()
     stoppingOrQuitting = false
     bridgeFailedForFile = false
     _ = routeAudioOwnershipNow()
   }
 
   func fileEnded() {
-    releaseFile(deferMPVWrites: true, restoreTimingOnlyWhileStillOwned: true)
+    releaseFile(restoreTimingOnlyWhileStillOwned: true)
     currentFileTransitionGeneration = nil
+    currentPlaylistEntryID = nil
+    clearUserTimingTargets()
   }
 
   /// The player is stopping or quitting; mpv may write a watch-later file with its timing.
-  func stopPlayback(deferMPVWrites: Bool = false) {
+  func stopPlayback() {
     stoppingOrQuitting = true
     _ = routeAudioOwnershipNow()
-    releaseFile(deferMPVWrites: deferMPVWrites)
+    releaseFile(restoreTimingOnlyWhileStillOwned: true)
+    clearUserTimingTargets()
     if bridgeEngaged { disengage() }
   }
 
@@ -1732,12 +1804,9 @@ final class AirPlayAudioBridge: NSObject {
     notifyMPVCommandQueueDrained()
   }
 
-  /// Hands mpv's speed and delay back to the user and drops the item. On START_FILE, mpv may
-  /// already have applied the next file's saved values, so defer the restore and submit it only if
-  /// the event-fed snapshot still matches the bridge value. Stop/quit keep direct writes so
-  /// watch-later captures the user's timing before mpv unloads the current file.
-  private func releaseFile(deferMPVWrites: Bool = false,
-                           restoreTimingOnlyWhileStillOwned: Bool = false) {
+  /// Hands mpv's speed and delay back to the user and drops the item. Defer writes for every
+  /// transition so the final MPV submission can recheck file identity and bridge ownership.
+  private func releaseFile(restoreTimingOnlyWhileStillOwned: Bool) {
     holdGeneration += 1
     holding = false
     stopHoldTimer()
@@ -1755,19 +1824,21 @@ final class AirPlayAudioBridge: NSObject {
       : nil
     let expectedFileTransitionGeneration = restoreTimingOnlyWhileStillOwned
       ? currentFileTransitionGeneration : nil
+    let expectedPlaylistEntryID = restoreTimingOnlyWhileStillOwned ? currentPlaylistEntryID : nil
     if let mpv = player?.mpv, player?.info.state != .shutDown {
       // The bridge owns these values while the corresponding flag/correction is active.
       // A flag can clear before its async write receives a reply, so also restore any property
-      // with a queued or in-flight bridge write. Stop/quit normally keeps the direct writes so
-      // watch-later sees the user's timing values; while a pre-start hook is waiting on main, skip
-      // those synchronous calls and let the queued writes drain after the hook continues.
+      // with a queued or in-flight bridge write. Every transition uses the serialized queue so
+      // its final submission can recheck the captured file identity and timing value. Stop/quit
+      // pause first and wait for these writes to drain before MPV writes watch-later state.
       if restoreSpeed {
         holdSpeedApplied = false
         enqueueMPVProperty(.doubleProperty(MPVOption.PlaybackControl.speed, userSpeed),
                            coalescingKey: "airplay-speed",
                            expectedCurrentTimingValue: restoreTimingOnlyWhileStillOwned
                              ? expectedSpeed : nil,
-                           expectedFileTransitionGeneration: expectedFileTransitionGeneration)
+                           expectedFileTransitionGeneration: expectedFileTransitionGeneration,
+                           expectedPlaylistEntryID: expectedPlaylistEntryID)
       }
       if restoreDelay {
         audioDelayCorrection = 0
@@ -1775,21 +1846,8 @@ final class AirPlayAudioBridge: NSObject {
                            coalescingKey: "airplay-audio-delay",
                            expectedCurrentTimingValue: restoreTimingOnlyWhileStillOwned
                              ? expectedDelay : nil,
-                           expectedFileTransitionGeneration: expectedFileTransitionGeneration)
-      }
-      if !deferMPVWrites {
-        // MPV can publish SHUTDOWN before PlayerCore's main-thread state changes. Gate these
-        // synchronous writes at the client-call boundary instead of trusting that cached state.
-        mpv.performIfNotShutdown {
-          if restoreSpeed {
-            speedWrites.record(userSpeed)
-            mpv.setDouble(MPVOption.PlaybackControl.speed, userSpeed, level: .verbose)
-          }
-          if restoreDelay {
-            delayWrites.record(userAudioDelay)
-            mpv.setDouble(MPVOption.Audio.audioDelay, userAudioDelay, level: .verbose)
-          }
-        }
+                           expectedFileTransitionGeneration: expectedFileTransitionGeneration,
+                           expectedPlaylistEntryID: expectedPlaylistEntryID)
       }
     }
     holdSpeedApplied = false
@@ -1822,12 +1880,14 @@ final class AirPlayAudioBridge: NSObject {
   private func enqueueMPVProperty(_ operation: MPVCommandRequest.Operation, coalescingKey: String) {
     enqueueMPVProperty(operation, coalescingKey: coalescingKey,
                        expectedCurrentTimingValue: nil,
-                       expectedFileTransitionGeneration: nil)
+                       expectedFileTransitionGeneration: nil,
+                       expectedPlaylistEntryID: nil)
   }
 
   private func enqueueMPVProperty(_ operation: MPVCommandRequest.Operation, coalescingKey: String,
                                   expectedCurrentTimingValue: Double?,
-                                  expectedFileTransitionGeneration: UInt64? = nil) {
+                                  expectedFileTransitionGeneration: UInt64? = nil,
+                                  expectedPlaylistEntryID: Int64? = nil) {
     var request = MPVCommandRequest(operation: operation, requiredForOutput: false,
                                     coalescingKey: coalescingKey,
                                     restoreAudioOutput: nil,
@@ -1835,6 +1895,7 @@ final class AirPlayAudioBridge: NSObject {
                                     expectedAudioOutputIntentGeneration: nil)
     request.expectedCurrentTimingValue = expectedCurrentTimingValue
     request.expectedFileTransitionGeneration = expectedFileTransitionGeneration
+    request.expectedPlaylistEntryID = expectedPlaylistEntryID
     enqueueMPVRequest(request)
   }
 
@@ -2023,7 +2084,9 @@ final class AirPlayAudioBridge: NSObject {
       }
       let ownsCurrentFile = request.expectedFileTransitionGeneration.map {
         $0 == snapshot.fileTransitionGeneration
-      } ?? true
+      } == true && request.expectedPlaylistEntryID.map {
+        $0 == snapshot.currentPlaylistEntryID
+      } == true
       guard ownsCurrentFile,
             AirPlayTimingRestorePolicy.stillOwnsValue(
               currentValue, expectedValue: expectedCurrentTimingValue) else {
@@ -2105,15 +2168,7 @@ final class AirPlayAudioBridge: NSObject {
     let submissionIntentGeneration: UInt64? =
       request.restoreAudioOutputToken != nil && !operation.isAudioOutputSetter
         ? nil : request.expectedAudioOutputIntentGeneration
-    let timingOwnership: MPVAirPlayTimingOwnership?
-    if let generation = request.expectedFileTransitionGeneration,
-       let expectedValue = request.expectedCurrentTimingValue {
-      timingOwnership = MPVAirPlayTimingOwnership(fileTransitionGeneration: generation,
-                                                  property: operation.name,
-                                                  expectedValue: expectedValue)
-    } else {
-      timingOwnership = nil
-    }
+    let timingOwnership = timingOwnership(for: request)
     mpv.submitAirPlayCommand(
       ifAudioOutputIntentGeneration: submissionIntentGeneration,
       ifRouteOwnershipGeneration: routeOwnershipGeneration,
@@ -2138,6 +2193,19 @@ final class AirPlayAudioBridge: NSObject {
           self.mpvCommandCompleted(result, replyUserdata: replyUserdata)
         }
       })
+  }
+
+  private func timingOwnership(for request: MPVCommandRequest) -> MPVAirPlayTimingOwnership? {
+    guard let generation = request.expectedFileTransitionGeneration,
+          let playlistEntryID = request.expectedPlaylistEntryID,
+          let expectedValue = request.expectedCurrentTimingValue,
+          case let .doubleProperty(property, _) = request.operation,
+          property == MPVOption.PlaybackControl.speed || property == MPVOption.Audio.audioDelay
+    else { return nil }
+    return MPVAirPlayTimingOwnership(fileTransitionGeneration: generation,
+                                     playlistEntryID: playlistEntryID,
+                                     property: property,
+                                     expectedValue: expectedValue)
   }
 
   /// Retire a bridge write that became stale between main-thread preflight and queue submission.
@@ -2250,14 +2318,24 @@ final class AirPlayAudioBridge: NSObject {
       }
       log("async timing restore failed during stop; applying it synchronously off AppKit",
           level: .warning)
-      guard let mpv = player?.mpv else {
-        finishSynchronousTimingRestore(MPV_ERROR_UNINITIALIZED.rawValue,
+      guard let timingOwnership = timingOwnership(for: request) else {
+        log("skipping terminal timing fallback without file ownership", level: .verbose)
+        cancelInternalTimingWrite(for: request)
+        finishSynchronousTimingRestore(0, wasSuperseded: true,
                                        replyUserdata: replyUserdata)
         return
       }
-      mpv.restoreAirPlayTimingValue(timingRestore.property, value: timingRestore.value) {
-        [weak self] restoreResult in
-        self?.finishSynchronousTimingRestore(restoreResult, replyUserdata: replyUserdata)
+      guard let mpv = player?.mpv else {
+        finishSynchronousTimingRestore(MPV_ERROR_UNINITIALIZED.rawValue,
+                                       wasSuperseded: false,
+                                       replyUserdata: replyUserdata)
+        return
+      }
+      mpv.restoreAirPlayTimingValue(timingRestore.property, value: timingRestore.value,
+                                    ifStillOwned: timingOwnership) {
+        [weak self] restoreResult, wasSuperseded in
+        self?.finishSynchronousTimingRestore(restoreResult, wasSuperseded: wasSuperseded,
+                                             replyUserdata: replyUserdata)
       }
       return
     }
@@ -2301,13 +2379,19 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   /// Keeps Stop/quit pending until a final speed or delay write has been restored off AppKit.
-  private func finishSynchronousTimingRestore(_ result: Int32, replyUserdata: UInt64) {
+  private func finishSynchronousTimingRestore(_ result: Int32, wasSuperseded: Bool,
+                                             replyUserdata: UInt64) {
     guard synchronousTimingRestoreBarrier.finish(replyUserdata: replyUserdata) else { return }
-    guard activeMPVCommand?.replyUserdata == replyUserdata else {
+    guard let request = activeMPVCommand, request.replyUserdata == replyUserdata else {
       runNextMPVCommand()
       return
     }
-    if result < 0, player?.mpv?.hasObservedShutdownEvent != true {
+    if wasSuperseded {
+      cancelInternalTimingWrite(for: request)
+      log("skipped stale terminal timing fallback after file ownership changed", level: .verbose)
+    } else if result >= 0 {
+      completeInternalTimingWrite(for: request)
+    } else if player?.mpv?.hasObservedShutdownEvent != true {
       let error = String(cString: mpv_error_string(result))
       log("could not restore timing property after Stop/quit: \(error)", level: .error)
     }

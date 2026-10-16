@@ -148,14 +148,14 @@ writes. `ao-reload` completes separately and is not treated as a pending output 
 Keep the snapshot
 request-state lock out of libmpv calls so the main-thread timer cannot inherit core-lock waits.
 AVPlayer clock monitoring starts even when its first reported time is invalid, allowing the startup
-timeout to trigger the normal fallback. Player stop and quit wait asynchronously for the bridge
-command queue to finish before sending mpv's stop or quit command. START_FILE and END_FILE teardown
-defer speed/delay restores and fence them to the file transition and timing value they owned, so a
-late callback cannot overwrite the next file's settings. Stop/quit restore the user's timing
-synchronously through the MPV shutdown gate before writing watch-later; the write is skipped if
-MPV's active playlist-entry ID no longer matches the stopped item. If a final async restore is
-rejected during Stop/quit, the bridge waits off AppKit and applies that timing value synchronously
-before releasing the drain. The event reader stays free to service unload hooks while Stop runs.
+timeout to trigger the normal fallback. Player stop and quit pause the current item, then wait
+asynchronously for the bridge command queue to finish before sending mpv's stop or quit command.
+START_FILE, END_FILE, Stop, and Quit defer speed/delay restores and fence them to the captured file
+generation, playlist-entry ID, and timing value immediately before MPV submission. This prevents a
+delayed event or restore from applying an old item's timing to the next item. A rejected final
+restore uses the existing off-AppKit fail-safe before the queue drain is released. Stop writes
+watch-later only while the paused active playlist entry still matches the item recorded when Stop
+began. The event reader stays free to service unload hooks while Stop runs.
 An audio-output restore failure during unload is held until the next file is loaded, when Reel can
 present the warning through its normal OSD path.
 

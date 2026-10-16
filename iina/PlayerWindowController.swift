@@ -338,20 +338,35 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
 
   /// Apply raw MPV timing shortcuts through PlayerCore while the AirPlay bridge carries audio.
   /// Menu accelerators already use these bridge-aware setters; this covers bindings dispatched
-  /// directly to MPV, including alternate built-in keybinding profiles.
+  /// directly to MPV, including alternate built-in keybinding profiles and command prefixes.
   private func handleAirPlayTimingKeyBinding(_ action: [String]) -> Bool {
-    guard player.airPlayAudio.isCarrying, action.count == 3,
-          let value = Self.parseTimingOperand(action[2]) else { return false }
+    guard player.airPlayAudio.isCarrying else { return false }
+    let commandPrefixes: Set<String> = [
+      "no-osd", "osd-auto", "osd-bar", "osd-msg", "osd-msg-bar",
+      "raw", "expand-properties", "repeatable", "nonrepeatable", "nonscalable",
+      "async", "sync",
+    ]
+    var commandIndex = 0
+    if let first = action.first, first.hasPrefix("{"), first.hasSuffix("}") {
+      commandIndex += 1
+    }
+    while commandIndex < action.count && commandPrefixes.contains(action[commandIndex]) {
+      commandIndex += 1
+    }
+    guard action.count - commandIndex == 3,
+          let value = Self.parseTimingOperand(action[commandIndex + 2]) else { return false }
+    let command = action[commandIndex]
+    let property = action[commandIndex + 1]
 
-    switch (action[0], action[1]) {
+    switch (command, property) {
     case (MPVCommand.multiply.rawValue, MPVOption.PlaybackControl.speed):
-      player.setSpeed(player.info.playSpeed * value)
+      player.airPlayAudio.multiplyUserSpeed(by: value)
       return true
     case (MPVCommand.set.rawValue, MPVOption.PlaybackControl.speed):
       player.setSpeed(value)
       return true
     case (MPVCommand.add.rawValue, MPVOption.Audio.audioDelay):
-      player.setAudioDelay(player.info.audioDelay + value)
+      player.airPlayAudio.adjustUserAudioDelay(by: value)
       return true
     case (MPVCommand.set.rawValue, MPVOption.Audio.audioDelay):
       player.setAudioDelay(value)

@@ -56,8 +56,12 @@ timing_submission = submission.split("if let timingOwnership {", 1)[1].split(
     "} else {", 1
 )[0]
 assert "snapshot.fileTransitionGeneration == timingOwnership.fileTransitionGeneration" in timing_submission
+assert "snapshot.currentPlaylistEntryID == timingOwnership.playlistEntryID" in timing_submission
+assert "livePlaylistEntryID == timingOwnership.playlistEntryID" in timing_submission
+assert "liveTimingValue" in timing_submission
+assert "abs(liveTimingValue - timingOwnership.expectedValue) < 1e-9" in timing_submission
 assert "return submission()" in timing_submission, (
-    "timing ownership must remain locked through the async setter enqueue"
+    "timing ownership must remain locked through live identity/timing checks and async enqueue"
 )
 submitted = submission.split("result = submission()", 1)[1]
 assert submitted.index("self.airPlayRouteOwnershipLock.unlock()") < submitted.index(
@@ -90,5 +94,32 @@ mutated_submission = submission.replace(
 assert not route_lock_follows_ao_lock(mutated_submission), (
     "negative control must catch route-lock-first acquisition"
 )
+
+bridge = bridge_source.split("final class AirPlayAudioBridge", 1)[1]
+for snippet in (
+    "func multiplyUserSpeed(by factor: Double)",
+    "func adjustUserAudioDelay(by delta: Double)",
+    "pendingUserSpeedTargets",
+    "pendingUserAudioDelayTargets",
+    "func userSpeedChanged(_ speed: Double)",
+    "func userAudioDelayChanged(_ delay: Double)",
+):
+    assert snippet in bridge, f"rapid AirPlay timing input must retain latest intent: {snippet}"
+
+key_source = (ROOT / "iina/PlayerWindowController.swift").read_text()
+key_handler = key_source.split("private func handleAirPlayTimingKeyBinding", 1)[1].split(
+    "private static func parseTimingOperand", 1
+)[0]
+for prefix in ("no-osd", "osd-bar", "osd-msg", "osd-auto", "async", "sync"):
+    assert f'"{prefix}"' in key_handler, f"prefixed binding {prefix} must be recognized"
+assert "commandPrefixes.contains(action[commandIndex])" in key_handler
+assert "player.airPlayAudio.multiplyUserSpeed(by: value)" in key_handler
+assert "player.airPlayAudio.adjustUserAudioDelay(by: value)" in key_handler
+
+menu_source = (ROOT / "iina/MainMenuActions.swift").read_text()
+assert "player.airPlayAudio.multiplyUserSpeed(by: multiplier)" in menu_source
+assert "player.airPlayAudio.adjustUserAudioDelay(by: delayDelta)" in menu_source
+assert "userSpeedChanged(speed)" in controller_source
+assert "userAudioDelayChanged(delay)" in controller_source
 
 print("AirPlay bridge responsiveness checks passed")

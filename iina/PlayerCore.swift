@@ -1012,7 +1012,15 @@ class PlayerCore: NSObject {
   ///     down was in progress and will call this method again to continue the process of shutting down..
   func shutdown() {
     clearPendingStopWatchLaterWrite()
-    // mpv writes its watch-later file on quit, so give it the user's own speed and audio delay.
+    // Freeze the current item before AirPlay timing is released and drained; mpv writes
+    // watch-later state as part of quit.
+    if info.state.active {
+      mpv.performIfNotShutdown {
+        if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
+          mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
+        }
+      }
+    }
     airPlayAudio.stopPlayback()
     if !isPluginRuntimeUnavailable {
       // Quiesce plugin timers, event listeners, and hooks while the mpv APIs are still valid.
@@ -1336,6 +1344,16 @@ class PlayerCore: NSObject {
         state.pendingWritePlaylistEntryID = playlistEntryID
       }
     }
+    // Freeze the entry before releasing AirPlay timing. Stop waits for the deferred timing queue,
+    // so leaving playback running could advance the playlist during that drain.
+    if info.state.active {
+      mpv.performIfNotShutdown {
+        if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
+          log("Pausing playback before releasing AirPlay timing")
+          mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
+        }
+      }
+    }
     airPlayAudio.stopPlayback()
     if mainWindow.loaded { mainWindow.liveCaptions.stop() }
 
@@ -1351,14 +1369,6 @@ class PlayerCore: NSObject {
     if info.state != .idle {
       // The watch-later file is written after AirPlay commands drain below.
       info.state = .stopping
-
-      // Make sure playback is paused to free up machine resources when quitting.
-      mpv.performIfNotShutdown {
-        if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
-          log("Pausing playback before sending stop command")
-          mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
-        }
-      }
     }
 
     // Must first stop the background task if it is running.
@@ -1721,6 +1731,7 @@ class PlayerCore: NSObject {
 
   func setSpeed(_ speed: Double) {
     let speed = max(AppData.mpvMinPlaybackSpeed, speed)
+    airPlayAudio.noteUserSpeedRequest(speed)
     mpv.setDouble(MPVOption.PlaybackControl.speed, speed)
   }
 
@@ -1897,6 +1908,7 @@ class PlayerCore: NSObject {
 
   func setAudioDelay(_ delay: Double) {
     // While the AirPlay bridge carries the audio, mpv's delay also holds its sync correction.
+    airPlayAudio.noteUserAudioDelayRequest(delay)
     mpv.setDouble(MPVOption.Audio.audioDelay, delay + airPlayAudio.audioDelayCorrection)
   }
 
@@ -2546,6 +2558,9 @@ class PlayerCore: NSObject {
       // lag behind playlist auto-advance, so generation equality alone does not identify the
       // entry whose resume state write-watch-later-config will save.
       mpv.performIfNotShutdown {
+        if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
+          mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
+        }
         guard let playingPosition = mpv.getIntIfAvailable(MPVProperty.playlistPlayingPos),
               playingPosition >= 0,
               let activePlaylistEntryID = mpv.getIntIfAvailable(
@@ -2566,14 +2581,16 @@ class PlayerCore: NSObject {
   /// was received.
   /// - Important: The event may be received after IINA has started to stop and shutdown the core. The event must be ignored if
   ///         the player is no longer active.
-  func fileStarted(path: String, fileTransitionGeneration: UInt64? = nil) {
+  func fileStarted(path: String, fileTransitionGeneration: UInt64? = nil,
+                   playlistEntryID: Int64? = nil) {
     clearPendingStopWatchLaterWrite()
     guard info.state.active else { return }
     if let fileTransitionGeneration {
       currentFileTransitionGeneration = fileTransitionGeneration
     }
     log("File started")
-    airPlayAudio.fileStarted(fileTransitionGeneration: fileTransitionGeneration)
+    airPlayAudio.fileStarted(fileTransitionGeneration: fileTransitionGeneration,
+                             playlistEntryID: playlistEntryID)
 
     // Opening another file in the same window does not necessarily go through `stop()`, so abandon
     // a search that was waiting on the chooser for the previous file — its chooser is stale now.

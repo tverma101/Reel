@@ -10,6 +10,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 bridge_source = (ROOT / "iina/AirPlayAudioBridge.swift").read_text()
 controller_source = (ROOT / "iina/MPVController.swift").read_text()
+player_core_source = (ROOT / "iina/PlayerCore.swift").read_text()
 
 start = bridge_source.index("struct AirPlayTimingRestorePlan")
 end = bridge_source.index("// MARK: - Bridge", start)
@@ -21,7 +22,8 @@ assert re.search(
     bridge,
 )
 assert "synchronousTimingRestoreBarrier.blocksDrain" in bridge
-assert "restoreAirPlayTimingValue(timingRestore.property, value: timingRestore.value)" in bridge
+assert "restoreAirPlayTimingValue(timingRestore.property, value: timingRestore.value," in bridge
+assert "ifStillOwned: timingOwnership" in bridge
 assert "restoreAirPlayTimingValue(_ property: String, value: Double" in controller_source
 
 
@@ -68,9 +70,48 @@ def check_restore_integration(bridge_text: str, controller_text: str) -> None:
         "private func releaseFile(",
         "private func log(",
     )
-    assert release.index("enqueueMPVProperty(") < release.index("mpv.setDouble(")
-    assert "speedWrites.record(userSpeed)" in release
-    assert "delayWrites.record(userAudioDelay)" in release
+    assert "mpv.setDouble(" not in release, (
+        "timing release must go through the serialized queue so its file fence is checked"
+    )
+    assert "expectedFileTransitionGeneration: expectedFileTransitionGeneration" in release
+    assert "expectedPlaylistEntryID: expectedPlaylistEntryID" in release
+    assert release.count("enqueueMPVProperty(") >= 2
+    stop_playback = section(
+        bridge_text,
+        "func stopPlayback()",
+        "func whenMPVCommandsDrained(",
+    )
+    assert "releaseFile(restoreTimingOnlyWhileStillOwned: true)" in stop_playback, (
+        "Stop and Quit timing restores must carry their current file identity"
+    )
+
+    stop = section(
+        player_core_source,
+        "func stop() {",
+        "func toggleMute(",
+    )
+    assert stop.index("Pausing playback before releasing AirPlay timing") < stop.index(
+        "airPlayAudio.stopPlayback()"
+    ) < stop.index("whenMPVCommandsDrained")
+    watch_later = section(
+        player_core_source,
+        "private func writeStopWatchLaterIfPending()",
+        "/// A [MPV_EVENT_START_FILE]",
+    )
+    assert watch_later.index("MPVOption.PlaybackControl.pause") < watch_later.index(
+        "MPVProperty.playlistPlayingPos"
+    ) < watch_later.index("MPVProperty.playlistNId") < watch_later.index(
+        ".writeWatchLaterConfig"
+    ), "watch-later must be written only after pausing and verifying the active entry"
+
+    shutdown = section(
+        player_core_source,
+        "func shutdown() {",
+        "/// Notify the task running in the background queue",
+    )
+    assert shutdown.index("MPVOption.PlaybackControl.pause") < shutdown.index(
+        "airPlayAudio.stopPlayback()"
+    ) < shutdown.index("whenMPVCommandsDrained") < shutdown.index("mpv.mpvQuit()")
 
     finish = section(
         bridge_text,
@@ -110,9 +151,13 @@ def check_restore_integration(bridge_text: str, controller_text: str) -> None:
         "mpv_wait_async_requests(mpv)",
         "airPlaySnapshotCallLock.lock()",
         "if hasReceivedShutdownEvent || mpv == nil",
+        "snapshot.fileTransitionGeneration == timingOwnership.fileTransitionGeneration",
+        "snapshot.currentPlaylistEntryID == timingOwnership.playlistEntryID",
+        "livePlaylistEntryID == timingOwnership.playlistEntryID",
+        "abs(currentValue - timingOwnership.expectedValue) < 1e-9",
         "mpv_set_property(mpv, property, MPV_FORMAT_DOUBLE, &mutableValue)",
         "airPlaySnapshotCallLock.unlock()",
-        "DispatchQueue.main.async { completion(result) }",
+        "DispatchQueue.main.async { completion(result, wasSuperseded) }",
     )
     positions = [worker.index(snippet) for snippet in ordering]
     assert positions == sorted(positions), (

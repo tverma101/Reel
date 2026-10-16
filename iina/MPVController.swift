@@ -89,6 +89,8 @@ struct MPVHookValue {
 struct MPVAirPlaySnapshot {
   /// Advances as soon as the event reader observes START_FILE, fencing restores from the prior item.
   var fileTransitionGeneration: UInt64 = 0
+  /// Playlist identity paired with the current START_FILE event.
+  var currentPlaylistEntryID: Int64?
   var audioOutput: String?
   /// Advances for event-fed or recovery-read AO observations, independently of snapshot fencing.
   var audioOutputObservedGeneration: UInt64 = 0
@@ -141,6 +143,7 @@ struct MPVAirPlaySnapshot {
 
 struct MPVAirPlayTimingOwnership {
   let fileTransitionGeneration: UInt64
+  let playlistEntryID: Int64
   let property: String
   let expectedValue: Double
 }
@@ -1982,9 +1985,9 @@ class MPVController: NSObject {
       }
       let result: Int32
       if let timingOwnership {
-        // Keep the event-fed ownership check and libmpv enqueue in one snapshot transaction.
-        // Otherwise START_FILE or a timing change can land between a main-thread preflight and
-        // the actual async setter submission.
+        // Check both the event-fed state and libmpv's live state immediately before enqueue.
+        // The playback core can advance while its detached event reader still has START_FILE or a
+        // timing property event waiting to be consumed.
         let submittedResult = self.$airPlaySnapshot.withLock { snapshot -> Int32? in
           let currentValue: Double?
           switch timingOwnership.property {
@@ -1995,10 +1998,16 @@ class MPVController: NSObject {
           default:
             currentValue = nil
           }
+          let livePlaylistEntryID = self.activePlaylistEntryIDIfAvailable()
+          let liveTimingValue = self.getDoubleIfAvailable(timingOwnership.property)
           guard let currentValue,
                 snapshot.fileTransitionGeneration == timingOwnership.fileTransitionGeneration,
+                snapshot.currentPlaylistEntryID == timingOwnership.playlistEntryID,
+                livePlaylistEntryID == timingOwnership.playlistEntryID,
                 currentValue.isFinite, timingOwnership.expectedValue.isFinite,
-                abs(currentValue - timingOwnership.expectedValue) < 1e-9 else { return nil }
+                abs(currentValue - timingOwnership.expectedValue) < 1e-9,
+                let liveTimingValue, liveTimingValue.isFinite,
+                abs(liveTimingValue - timingOwnership.expectedValue) < 1e-9 else { return nil }
           return submission()
         }
         guard let submittedResult else {
@@ -2106,10 +2115,12 @@ class MPVController: NSObject {
   /// Restore the bridge's final speed or delay after its async write was rejected. Run off AppKit,
   /// after prior async requests settle, and under the client-call gate used by shutdown.
   func restoreAirPlayTimingValue(_ property: String, value: Double,
-                                 completion: @escaping (Int32) -> Void) {
+                                 ifStillOwned timingOwnership: MPVAirPlayTimingOwnership,
+                                 completion: @escaping (Int32, Bool) -> Void) {
     guard property == MPVOption.PlaybackControl.speed ||
-            property == MPVOption.Audio.audioDelay else {
-      DispatchQueue.main.async { completion(MPV_ERROR_OPTION_NOT_FOUND.rawValue) }
+            property == MPVOption.Audio.audioDelay,
+          property == timingOwnership.property else {
+      DispatchQueue.main.async { completion(MPV_ERROR_OPTION_NOT_FOUND.rawValue, false) }
       return
     }
     airPlaySnapshotQueue.async { [self] in
@@ -2120,19 +2131,37 @@ class MPVController: NSObject {
 
       airPlaySnapshotCallLock.lock()
       let result: Int32
+      var wasSuperseded = false
       if hasReceivedShutdownEvent || mpv == nil {
         result = MPV_ERROR_UNINITIALIZED.rawValue
       } else if let mpv {
-        log("Restoring AirPlay timing property synchronously: \(property)=\(value)",
-            level: .warning)
-        var mutableValue = value
-        result = mpv_set_property(mpv, property, MPV_FORMAT_DOUBLE, &mutableValue)
+        let stillOwned = $airPlaySnapshot.withLock { snapshot -> Bool in
+          guard snapshot.fileTransitionGeneration == timingOwnership.fileTransitionGeneration,
+                snapshot.currentPlaylistEntryID == timingOwnership.playlistEntryID,
+                let livePlaylistEntryID = activePlaylistEntryIDIfAvailable(),
+                livePlaylistEntryID == timingOwnership.playlistEntryID,
+                let currentValue = getDoubleIfAvailable(timingOwnership.property),
+                currentValue.isFinite, timingOwnership.expectedValue.isFinite,
+                abs(currentValue - timingOwnership.expectedValue) < 1e-9 else { return false }
+          return true
+        }
+        if stillOwned {
+          log("Restoring AirPlay timing property synchronously: \(property)=\(value)",
+              level: .warning)
+          var mutableValue = value
+          result = mpv_set_property(mpv, property, MPV_FORMAT_DOUBLE, &mutableValue)
+        } else {
+          log("Skipping stale synchronous AirPlay timing restore for \(property)",
+              level: .verbose)
+          result = 0
+          wasSuperseded = true
+        }
       } else {
         result = MPV_ERROR_UNINITIALIZED.rawValue
       }
       airPlaySnapshotCallLock.unlock()
 
-      DispatchQueue.main.async { completion(result) }
+      DispatchQueue.main.async { completion(result, wasSuperseded) }
     }
   }
 
@@ -2360,6 +2389,14 @@ class MPVController: NSObject {
     var data = Int64()
     guard mpv_get_property(mpv, name, MPV_FORMAT_INT64, &data) >= 0 else { return nil }
     return Int(data)
+  }
+
+  private func activePlaylistEntryIDIfAvailable() -> Int64? {
+    guard let playingPosition = getIntIfAvailable(MPVProperty.playlistPlayingPos),
+          playingPosition >= 0,
+          let entryID = getIntIfAvailable(MPVProperty.playlistNId(playingPosition)),
+          entryID >= 0 else { return nil }
+    return Int64(entryID)
   }
 
   func getDouble(_ name: String) -> Double {
@@ -2665,6 +2702,7 @@ class MPVController: NSObject {
       let playlistEntryID = startFile.playlist_entry_id
       let fileTransitionGeneration = $airPlaySnapshot.withLock { snapshot -> UInt64 in
         snapshot.fileTransitionGeneration &+= 1
+        snapshot.currentPlaylistEntryID = playlistEntryID
         snapshot.resetMediaValues()
         return snapshot.fileTransitionGeneration
       }
@@ -2686,7 +2724,9 @@ class MPVController: NSObject {
         guard player.info.state != .shuttingDown, player.info.state != .shutDown else { return }
         if player.info.state == .stopping { return }
         player.info.state = .starting
-        player.fileStarted(path: path, fileTransitionGeneration: fileTransitionGeneration)
+        player.fileStarted(path: path,
+                           fileTransitionGeneration: fileTransitionGeneration,
+                           playlistEntryID: playlistEntryID)
       }
 
     case MPV_EVENT_FILE_LOADED:
@@ -3062,7 +3102,7 @@ class MPVController: NSObject {
         // The AirPlay bridge holds the picture with a near-zero speed while the speaker starts.
         guard !self.player.airPlayAudio.consumeInternalSpeed(speed) else { return }
         self.player.speedChanged(speed)
-        self.player.airPlayAudio.userSpeedChanged()
+        self.player.airPlayAudio.userSpeedChanged(speed)
       }
 
     case MPVOption.PlaybackControl.loopPlaylist, MPVOption.PlaybackControl.loopFile:
@@ -3147,6 +3187,7 @@ class MPVController: NSObject {
       DispatchQueue.main.async { [self] in
         // While the AirPlay bridge carries the audio, part of mpv's delay is its sync correction.
         guard let delay = player.airPlayAudio.userAudioDelay(fromMPV: data) else { return }
+        player.airPlayAudio.userAudioDelayChanged(delay)
         player.info.audioDelay = delay
         player.sendOSD(.audioDelay(delay))
         player.postNotification(.iinaAudioDelayChanged)

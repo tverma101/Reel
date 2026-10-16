@@ -124,7 +124,11 @@ extension MainMenuActionHandler {
       return
     }
     if let multiplier = sender.representedObject as? Double {
-      player.setSpeed(player.info.playSpeed * multiplier)
+      if player.airPlayAudio.isCarrying {
+        player.airPlayAudio.multiplyUserSpeed(by: multiplier)
+      } else {
+        player.setSpeed(player.info.playSpeed * multiplier)
+      }
     }
   }
 
@@ -319,8 +323,12 @@ extension MainMenuActionHandler {
 
   @objc func menuChangeAudioDelay(_ sender: NSMenuItem) {
     if let delayDelta = sender.representedObject as? Double {
-      let newDelay = player.info.audioDelay + delayDelta
-      player.setAudioDelay(newDelay)
+      if player.airPlayAudio.isCarrying {
+        player.airPlayAudio.adjustUserAudioDelay(by: delayDelta)
+      } else {
+        let newDelay = player.info.audioDelay + delayDelta
+        player.setAudioDelay(newDelay)
+      }
     } else {
       Logger.log("sender.representedObject is not Double in menuChangeAudioDelay()", level: .error)
     }
