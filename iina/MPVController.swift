@@ -254,6 +254,14 @@ class MPVController: NSObject {
   private var lifecycleHookShutdown = false
   private var lifecycleHookGeneration: UInt64 = 0
   private var lifecycleHookUserdata = Set<UInt64>()
+  @Atomic private var lifecycleHookSafetyAvailable = false
+  @Atomic private var lifecycleHookSetupComplete = false
+  @Atomic private var lifecycleHookHasEverBeenAvailable = false
+  private struct LifecycleHookRecoveryBoundary {
+    var epoch: UInt64 = 0
+    var fileGeneration: UInt64?
+  }
+  @Atomic private var lifecycleHookRecoveryBoundary = LifecycleHookRecoveryBoundary()
   /// These fields are confined to `lifecycleHookQueue`.
   private var activeLifecycleHook: LifecycleHookInvocation?
   private var lifecycleHookRecoveryPending = false
@@ -2697,26 +2705,118 @@ class MPVController: NSObject {
   /// Register lifecycle hooks on a handle with an independent event queue. The primary handle
   /// receives frequent property and UI events; MPV removes a hook if its event cannot be queued.
   private func setupCriticalLifecycleHooks() {
-    if let client = mpv_create_client(mpv, "iina_lifecycle") {
-      if configureLifecycleHookClient(client), registerCriticalLifecycleHooks(on: client) {
-        lifecycleHookClient = client
-        lifecycleHookShutdown = false
-        lifecycleHookGeneration &+= 1
-        installLifecycleHookWakeupCallback(on: client)
-        readLifecycleHookEvents()
-        return
-      }
-      removeLifecycleHookValues()
-      mpv_destroy(client)
-      log("Could not configure all isolated MPV lifecycle hooks; using the primary event queue",
-          level: .error)
-    } else {
-      log("Could not create isolated MPV lifecycle client; using the primary event queue",
-          level: .error)
+    if createDedicatedLifecycleHookClient() {
+      $lifecycleHookHasEverBeenAvailable.withLock { $0 = true }
+      setLifecycleHookSafetyAvailable(true)
+      $lifecycleHookSetupComplete.withLock { $0 = true }
+      return
     }
 
-    if !registerCriticalLifecycleHooks(on: mpv) {
-      log("One or more critical MPV lifecycle hooks could not be registered", level: .error)
+    log("Could not create or configure the isolated MPV lifecycle client; AirPlay is disabled until recovery",
+        level: .error)
+    setLifecycleHookSafetyAvailable(false)
+    $lifecycleHookSetupComplete.withLock { $0 = true }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+      self?.retryDedicatedLifecycleHookClient()
+    }
+  }
+
+  /// Creates the low-traffic event client used to protect Stop persistence and AirPlay transitions.
+  /// This helper is called during setup and later only on `lifecycleHookQueue`.
+  @discardableResult
+  private func createDedicatedLifecycleHookClient() -> Bool {
+    guard !hasReceivedShutdownEvent, let primaryClient = mpv,
+          let client = mpv_create_client(primaryClient, "iina_lifecycle") else {
+      return false
+    }
+    guard configureLifecycleHookClient(client),
+          registerCriticalLifecycleHooks(on: client) else {
+      removeDedicatedLifecycleHookValues()
+      mpv_destroy(client)
+      return false
+    }
+    lifecycleHookClient = client
+    lifecycleHookShutdown = false
+    activeLifecycleHook = nil
+    lifecycleHookGeneration &+= 1
+    installLifecycleHookWakeupCallback(on: client)
+    readLifecycleHookEvents()
+    return true
+  }
+
+  private func setLifecycleHookSafetyAvailable(_ available: Bool) {
+    let changed = $lifecycleHookSafetyAvailable.withLock { current -> Bool in
+      guard current != available else { return false }
+      current = available
+      return true
+    }
+    guard changed else { return }
+    let update = { [weak self] in
+      self?.player.airPlayAudio.lifecycleHookAvailabilityChanged(available)
+    }
+    if Thread.isMainThread {
+      update()
+    } else {
+      DispatchQueue.main.async(execute: update)
+    }
+  }
+
+  private func retryDedicatedLifecycleHookClient() {
+    guard $lifecycleHookSetupComplete.withLock({ $0 }),
+          !$lifecycleHookSafetyAvailable.withLock({ $0 }) else { return }
+    lifecycleHookQueue.async { [weak self] in
+      guard let self, self.lifecycleHookClient == nil,
+            !self.hasReceivedShutdownEvent else { return }
+      guard self.createDedicatedLifecycleHookClient() else {
+        self.log("Isolated MPV lifecycle client recovery failed; AirPlay remains disabled",
+                 level: .error)
+        return
+      }
+      let mustWaitForFileLoaded = self.$lifecycleHookHasEverBeenAvailable.withLock { $0 }
+      self.$lifecycleHookHasEverBeenAvailable.withLock { $0 = true }
+      if mustWaitForFileLoaded {
+        self.armLifecycleHookRecoveryAtNextFileBoundary()
+      } else {
+        self.setLifecycleHookSafetyAvailable(true)
+      }
+    }
+  }
+
+  /// Ignore FILE_LOADED events already queued when recovered hooks are installed. Drain the
+  /// primary client first, then require a later file generation before AirPlay can resume.
+  private func armLifecycleHookRecoveryAtNextFileBoundary() {
+    let epoch = $lifecycleHookRecoveryBoundary.withLock { boundary -> UInt64 in
+      boundary.epoch &+= 1
+      boundary.fileGeneration = nil
+      return boundary.epoch
+    }
+    queue.async { [weak self] in
+      guard let self else { return }
+      self.readEventsOnQueue(afterDraining: { [weak self] in
+        guard let self else { return }
+        let generation = self.$airPlaySnapshot.withLock { $0.fileTransitionGeneration }
+        self.$lifecycleHookRecoveryBoundary.withLock { boundary in
+          guard boundary.epoch == epoch else { return }
+          boundary.fileGeneration = generation
+        }
+      })
+    }
+  }
+
+  private func invalidateLifecycleHookRecoveryBoundary() {
+    $lifecycleHookRecoveryBoundary.withLock { boundary in
+      boundary.epoch &+= 1
+      boundary.fileGeneration = nil
+    }
+  }
+
+  private func consumeLifecycleHookRecoveryBoundary(for fileGeneration: UInt64?) -> Bool {
+    guard let fileGeneration else { return false }
+    return $lifecycleHookRecoveryBoundary.withLock { boundary in
+      guard let recoveredAtGeneration = boundary.fileGeneration,
+            fileGeneration > recoveredAtGeneration else { return false }
+      boundary.fileGeneration = nil
+      return true
     }
   }
 
@@ -2761,7 +2861,7 @@ class MPVController: NSObject {
     // even though the isolated client can only be created after mpv_initialize().
     if let unloadHook = addHook(MPVHook.onUnLoad, priority: -1, client: client,
                                 hook: MPVHookValue(withBlock: { [weak playerCore] next in
-      playerCore?.writeStopWatchLaterIfPendingAtUnload()
+      playerCore?.writeStopWatchLaterIfPending()
       next()
     })) {
       userData.insert(unloadHook)
@@ -2794,9 +2894,18 @@ class MPVController: NSObject {
     return userData.count == 2
   }
 
-  private func removeLifecycleHookValues() {
+  private func removeDedicatedLifecycleHookValues() {
+    let userData = lifecycleHookUserdata
     $hooks.withLock { hooks in
-      lifecycleHookUserdata.forEach { hooks.removeValue(forKey: $0) }
+      userData.forEach { hooks.removeValue(forKey: $0) }
+    }
+    lifecycleHookUserdata.removeAll()
+  }
+
+  private func removeLifecycleHookValues() {
+    let userData = lifecycleHookUserdata
+    $hooks.withLock { hooks in
+      userData.forEach { hooks.removeValue(forKey: $0) }
     }
     lifecycleHookUserdata.removeAll()
   }
@@ -2821,6 +2930,8 @@ class MPVController: NSObject {
         case MPV_EVENT_QUEUE_OVERFLOW:
           log("Isolated MPV lifecycle event queue overflowed; rebuilding hook delivery",
               level: .error)
+          invalidateLifecycleHookRecoveryBoundary()
+          setLifecycleHookSafetyAvailable(false)
           recoverLifecycleHookClientAfterOverflow(client)
           // MPV requires the client to drain its queue through NONE after overflow. Recovery
           // may be deferred while an active pre-start hook waits for the AirPlay command drain.
@@ -2917,33 +3028,20 @@ class MPVController: NSObject {
     lifecycleHookClient = nil
     mpv_set_wakeup_callback(oldClient, nil, nil)
     mpv_destroy(oldClient)
-    removeLifecycleHookValues()
+    removeDedicatedLifecycleHookValues()
 
-    guard !hasReceivedShutdownEvent, let primaryClient = mpv else { return }
-    guard let newClient = mpv_create_client(primaryClient, "iina_lifecycle") else {
-      log("Could not recreate isolated MPV lifecycle client; falling back to the primary queue",
-          level: .error)
-      if !registerCriticalLifecycleHooks(on: primaryClient) {
-        log("Critical MPV lifecycle hook recovery failed", level: .error)
-      }
+    guard !hasReceivedShutdownEvent, mpv != nil else { return }
+    if createDedicatedLifecycleHookClient() {
+      $lifecycleHookHasEverBeenAvailable.withLock { $0 = true }
+      armLifecycleHookRecoveryAtNextFileBoundary()
       return
     }
-    guard configureLifecycleHookClient(newClient), registerCriticalLifecycleHooks(on: newClient) else {
-      removeLifecycleHookValues()
-      mpv_destroy(newClient)
-      log("Could not restore isolated MPV lifecycle hooks; falling back to the primary queue",
-          level: .error)
-      if !registerCriticalLifecycleHooks(on: primaryClient) {
-        log("Critical MPV lifecycle hook recovery failed", level: .error)
-      }
-      return
+    log("Could not recreate isolated MPV lifecycle hooks; AirPlay remains disabled",
+        level: .error)
+    setLifecycleHookSafetyAvailable(false)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+      self?.retryDedicatedLifecycleHookClient()
     }
-    lifecycleHookClient = newClient
-    lifecycleHookShutdown = false
-    activeLifecycleHook = nil
-    lifecycleHookGeneration &+= 1
-    installLifecycleHookWakeupCallback(on: newClient)
-    readLifecycleHookEvents()
   }
 
   func removeHooks(withIdentifier id: String) {
@@ -3092,10 +3190,14 @@ class MPVController: NSObject {
       }
 
     case MPV_EVENT_FILE_LOADED:
-      let transition = activePlaylistLoadTransition
-      activePlaylistLoadTransition = nil
       let fileTransitionGeneration = activeFileTransitionGeneration
       activeFileTransitionGeneration = nil
+      if consumeLifecycleHookRecoveryBoundary(for: fileTransitionGeneration) {
+        $lifecycleHookHasEverBeenAvailable.withLock { $0 = true }
+        setLifecycleHookSafetyAvailable(true)
+      }
+      let transition = activePlaylistLoadTransition
+      activePlaylistLoadTransition = nil
       DispatchQueue.main.async {
         self.player.fileLoaded(fileTransitionGeneration: fileTransitionGeneration)
         self.player.playlistLoadDidFinish(transition)
@@ -3212,9 +3314,12 @@ class MPVController: NSObject {
       // discarded IINA will experience severe malfunctions. For this reason most of the work of
       // processing an event is dispatched to other queues so that MPVController can move on to
       // reading the next event. Snapshot polling and serialized AirPlay command replies both need
-      // explicit recovery because either kind of response may have been dropped.
+      // explicit recovery because either kind of response may have been dropped. If the
+      // lifecycle hooks are using this busy queue as a fallback, retry the isolated client here;
+      // AirPlay remains disabled until independent hook delivery is restored.
       log("Critical failure, mpv events lost, queue overflowed; recovering AirPlay requests",
           level: .error)
+      retryDedicatedLifecycleHookClient()
       beginAirPlayEventQueueOverflowRecovery()
 
     default: break
@@ -3469,7 +3574,14 @@ class MPVController: NSObject {
       }
       DispatchQueue.main.async {
         // The AirPlay bridge holds the picture with a near-zero speed while the speaker starts.
-        guard !self.player.airPlayAudio.consumeInternalSpeed(speed) else { return }
+        let isInternalWrite = self.player.airPlayAudio.consumeInternalSpeed(speed)
+        if self.player.airPlayAudio.hasPendingUserSpeedTarget(speed) {
+          let osdMode = self.player.airPlayAudio.userSpeedOSDMode(for: speed)
+          self.player.speedChanged(speed, osdMode: osdMode)
+          self.player.airPlayAudio.userSpeedChanged(speed)
+          return
+        }
+        guard !isInternalWrite else { return }
         let osdMode = self.player.airPlayAudio.userSpeedOSDMode(for: speed)
         self.player.speedChanged(speed, osdMode: osdMode)
         self.player.airPlayAudio.userSpeedChanged(speed)

@@ -803,6 +803,9 @@ final class AirPlayAudioBridge: NSObject {
   private var bridgeFailedForFile = false
   /// Whether Reel currently owns audio through the AVPlayer bridge.
   private var bridgeEngaged = false
+  /// AirPlay timing transitions require the isolated MPV lifecycle hook client.
+  private var lifecycleHooksAvailable = false
+  private var lifecycleSafetyNoticeShown = false
   /// Prevents a route callback from re-engaging audio while stop/quit is draining MPV work.
   private var stoppingOrQuitting = false
   /// The last known local mpv output. Retain it across route transitions while `ao` is `null`.
@@ -1034,6 +1037,17 @@ final class AirPlayAudioBridge: NSObject {
   /// Brings the bridge in line with the route, the file and its audio track.
   private func reconcile() {
     guard !stoppingOrQuitting, let player, player.info.state.active, player.mpv != nil else { return }
+    guard lifecycleHooksAvailable else {
+      if isEngaged { disengage() }
+      if routeActive, player.info.state.loaded, !lifecycleSafetyNoticeShown {
+        lifecycleSafetyNoticeShown = true
+        player.sendOSD(.custom(NSLocalizedString(
+          "osc_toolbar.airplay_output.lifecycle_unavailable",
+          value: "AirPlay was disabled because Reel could not protect a file transition; audio will play on this Mac.",
+          comment: "The isolated MPV lifecycle hook client is unavailable")), external: true)
+      }
+      return
+    }
     _ = routeAudioOwnershipNow()
     guard routeActive && !bridgeFailedForFile else {
       if isEngaged { disengage() }
@@ -1687,6 +1701,10 @@ final class AirPlayAudioBridge: NSObject {
     requestHold("speed change", realign: true)
   }
 
+  func hasPendingUserSpeedTarget(_ speed: Double) -> Bool {
+    pendingUserSpeedTargets.contains { Self.sameTimingValue($0.value, speed) }
+  }
+
   func volumeChanged() {
     guard let avPlayer, let player else { return }
     avPlayer.volume = Float((player.info.volume / 100).clamped(to: 0...1))
@@ -1712,6 +1730,20 @@ final class AirPlayAudioBridge: NSObject {
     guard isCarrying, speed.isFinite else { return }
     userSpeedOverride = speed
     pendingUserSpeedTargets.append(AirPlayUserSpeedTarget(value: speed, osdMode: osdMode))
+  }
+
+  /// Serializes a user's speed change behind bridge writes that may still be restoring the old
+  /// route's speed. This includes the drain window after `isCarrying` becomes false.
+  @discardableResult
+  func enqueueUserSpeed(_ speed: Double,
+                        osdMode: AirPlayTimingOSDMode = .automatic) -> Bool {
+    let carriesAudio = isCarrying
+    guard (carriesAudio || hasUndrainedMPVCommands), speed.isFinite else { return false }
+    userSpeedOverride = speed
+    pendingUserSpeedTargets.append(AirPlayUserSpeedTarget(value: speed, osdMode: osdMode))
+    enqueueMPVProperty(.doubleProperty(MPVOption.PlaybackControl.speed, speed),
+                       coalescingKey: "airplay-speed")
+    return true
   }
 
   func noteUserAudioDelayRequest(_ delay: Double, osdMode: AirPlayTimingOSDMode = .automatic) {
@@ -1834,6 +1866,16 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   func fileStarted(fileTransitionGeneration: UInt64? = nil, playlistEntryID: Int64? = nil) {
+    let transitionUserSpeed = userSpeed
+    let transitionUserAudioDelay = userAudioDelay
+    let needsUserSpeedRestore = holdSpeedApplied || pendingMPVPropertyValue(
+      MPVOption.PlaybackControl.speed).map {
+        !Self.sameTimingValue($0, transitionUserSpeed)
+      } == true
+    let needsUserAudioDelayRestore = audioDelayCorrection != 0 || pendingMPVPropertyValue(
+      MPVOption.Audio.audioDelay).map {
+        !Self.sameTimingValue($0, transitionUserAudioDelay)
+      } == true
     releaseFile()
     currentFileTransitionGeneration = fileTransitionGeneration ??
       player?.mpv?.airPlayPlaybackSnapshot.fileTransitionGeneration
@@ -1843,7 +1885,34 @@ final class AirPlayAudioBridge: NSObject {
     clearUserTimingTargets()
     stoppingOrQuitting = false
     bridgeFailedForFile = false
+    lifecycleSafetyNoticeShown = false
+    // A missing on_before_start_file hook fences its old-file restore out at START_FILE. Reapply
+    // the user's timing on the new item before route reconciliation can add another bridge write.
+    if needsUserSpeedRestore {
+      enqueueMPVProperty(.doubleProperty(MPVOption.PlaybackControl.speed, transitionUserSpeed),
+                         coalescingKey: "airplay-speed")
+    }
+    if needsUserAudioDelayRestore {
+      enqueueMPVProperty(.doubleProperty(MPVOption.Audio.audioDelay, transitionUserAudioDelay),
+                         coalescingKey: "airplay-audio-delay")
+    }
     _ = routeAudioOwnershipNow()
+  }
+
+  /// AirPlay requires an isolated event queue for its file-transition timing barrier.
+  func lifecycleHookAvailabilityChanged(_ available: Bool) {
+    guard lifecycleHooksAvailable != available else { return }
+    lifecycleHooksAvailable = available
+    lifecycleSafetyNoticeShown = false
+    guard available else {
+      if isEngaged {
+        bridgeFailedForFile = true
+        disengage()
+      }
+      reconcile()
+      return
+    }
+    reconcile()
   }
 
   func fileEnded(fileTransitionGeneration: UInt64?, playlistEntryID: Int64?) {

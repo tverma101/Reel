@@ -1375,7 +1375,7 @@ class PlayerCore: NSObject {
 
     // The player may already be stopped in which case the state must not be set to stopping.
     if info.state != .idle {
-      // The watch-later file is written after AirPlay commands drain below.
+      // The watch-later file is written before Stop, after AirPlay commands drain below.
       info.state = .stopping
     }
 
@@ -1426,6 +1426,12 @@ class PlayerCore: NSObject {
         // MPV may finish the current item while the bridge queue drains. In that case the stop
         // already took effect, so release compound-binding continuations without sending another.
         if self.info.state == .idle { runStopCompletions() }
+        return
+      }
+      guard self.mpv.performIfNotShutdown({
+        self.writeStopWatchLaterIfPending()
+      }) else {
+        self.clearPendingStopWatchLaterWrite()
         return
       }
       guard self.mpv.commandIfNotShutdown(.stop, args: stopFlags.map { Optional($0) },
@@ -1773,6 +1779,7 @@ class PlayerCore: NSObject {
 
   func setSpeed(_ speed: Double, osdMode: AirPlayTimingOSDMode = .automatic) {
     let speed = max(AppData.mpvMinPlaybackSpeed, speed)
+    if airPlayAudio.enqueueUserSpeed(speed, osdMode: osdMode) { return }
     airPlayAudio.noteUserSpeedRequest(speed, osdMode: osdMode)
     mpv.setDouble(MPVOption.PlaybackControl.speed, speed)
   }
@@ -2584,9 +2591,9 @@ class PlayerCore: NSObject {
     }
   }
 
-  /// Save Stop's watch-later state while MPV is synchronously paused in `on_unload`.
-  /// The hook keeps the active file from changing between the identity check and write command.
-  func writeStopWatchLaterIfPendingAtUnload() {
+  /// Save Stop's watch-later state after bridge commands drain and while playback is paused.
+  /// The unload hook repeats this idempotently for requests that bypass PlayerCore.stop().
+  func writeStopWatchLaterIfPending() {
     let pending = $stopWatchLaterWriteState.withLock { state -> (UInt64, Int64)? in
       guard let generation = state.pendingWriteGeneration,
             generation == state.observedStartFileGeneration,
@@ -2613,8 +2620,8 @@ class PlayerCore: NSObject {
           level: .verbose)
       return
     }
-    // Do not take performIfNotShutdown here: Stop holds its client-call gate while waiting for
-    // this hook. The core is blocked at on_unload, so this synchronous write precedes any advance.
+    // The hook path runs while PlayerCore.stop holds the client-call gate waiting for on_unload;
+    // the pre-Stop path acquires that gate around this same write before submitting Stop.
     mpv.command(.writeWatchLaterConfig, level: .verbose)
   }
 
