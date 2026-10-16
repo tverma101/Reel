@@ -1721,6 +1721,30 @@ final class AirPlayAudioBridge: NSObject {
                                         osdMode: osdMode)
   }
 
+  /// Serializes a user delay change behind accepted bridge writes so an older async correction
+  /// cannot land after the user's newer value, including while a route is disengaging.
+  @discardableResult
+  func enqueueUserAudioDelay(_ delay: Double,
+                             osdMode: AirPlayTimingOSDMode = .automatic) -> Bool {
+    let carriesAudio = isCarrying
+    guard (carriesAudio || hasUndrainedMPVCommands), delay.isFinite else { return false }
+    let correction = carriesAudio ? audioDelayCorrection : 0
+    let mpvDelay = delay + correction
+    guard mpvDelay.isFinite else { return false }
+    if carriesAudio {
+      noteUserAudioDelayRequest(delay, osdMode: osdMode)
+    } else {
+      // The queued write is tracked as an internal timing write, so retain the target that maps
+      // its property-change event back to this user's value after the route has disengaged.
+      userAudioDelayOverride = delay
+      pendingUserAudioDelayTargets.append(userValue: delay, correction: correction,
+                                          osdMode: osdMode)
+    }
+    enqueueMPVProperty(.doubleProperty(MPVOption.Audio.audioDelay, mpvDelay),
+                       coalescingKey: "airplay-audio-delay")
+    return true
+  }
+
   func userSpeedOSDMode(for speed: Double) -> AirPlayTimingOSDMode {
     guard let matchedTarget = pendingUserSpeedTargets.lastIndex(where: {
       Self.sameTimingValue($0.value, speed)

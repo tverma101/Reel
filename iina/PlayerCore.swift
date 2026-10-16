@@ -1421,7 +1421,13 @@ class PlayerCore: NSObject {
       return
     }
     airPlayAudio.whenMPVCommandsDrained { [weak self] in
-      guard let self, self.info.state == .stopping else { return }
+      guard let self else { return }
+      guard self.info.state == .stopping else {
+        // MPV may finish the current item while the bridge queue drains. In that case the stop
+        // already took effect, so release compound-binding continuations without sending another.
+        if self.info.state == .idle { runStopCompletions() }
+        return
+      }
       guard self.mpv.commandIfNotShutdown(.stop, args: stopFlags.map { Optional($0) },
                                           level: .verbose) else {
         self.clearPendingStopWatchLaterWrite()
@@ -1944,6 +1950,7 @@ class PlayerCore: NSObject {
 
   func setAudioDelay(_ delay: Double, osdMode: AirPlayTimingOSDMode = .automatic) {
     // While the AirPlay bridge carries the audio, mpv's delay also holds its sync correction.
+    if airPlayAudio.enqueueUserAudioDelay(delay, osdMode: osdMode) { return }
     airPlayAudio.noteUserAudioDelayRequest(delay, osdMode: osdMode)
     mpv.setDouble(MPVOption.Audio.audioDelay, delay + airPlayAudio.audioDelayCorrection)
   }

@@ -362,7 +362,6 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
 
   private struct ManagedStopBindingCommand {
     let flags: [String]
-    let asynchronous: Bool
   }
 
   private enum AirPlayTimingBindingParse {
@@ -389,8 +388,7 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
           let afterStop: (() -> Void)? = nextIndex < segments.count
             ? { executeSegment(at: nextIndex) } : nil
           player.stop(mpvStopFlags: stopCommand.flags,
-                      afterMPVStopCommandSubmitted: stopCommand.asynchronous ? nil : afterStop)
-          if stopCommand.asynchronous { executeSegment(at: nextIndex) }
+                      afterMPVStopCommandSubmitted: afterStop)
         } else {
           let result = player.mpv.command(rawString: segment)
           if result < 0 {
@@ -555,12 +553,9 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
     if let first = tokens.first, first.hasPrefix("{"), first.hasSuffix("}") {
       commandIndex += 1
     }
-    var asynchronous = false
     while commandIndex < tokens.count,
           let prefix = MPVController.literalRawCommandToken(tokens[commandIndex]),
           commandPrefixes.contains(prefix) {
-      if prefix == "async" { asynchronous = true }
-      if prefix == "sync" { asynchronous = false }
       commandIndex += 1
     }
     guard commandIndex < tokens.count,
@@ -573,11 +568,11 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
       guard let flag = MPVController.literalRawCommandToken(token) else { return nil }
       stopFlags.append(flag)
     }
-    return ManagedStopBindingCommand(flags: stopFlags, asynchronous: asynchronous)
+    return ManagedStopBindingCommand(flags: stopFlags)
   }
 
   /// Route Stop commands in single or compound bindings through PlayerCore. Commands before Stop
-  /// execute first; commands after a synchronous Stop resume when MPV receives the managed Stop.
+  /// execute first; commands after a managed Stop resume once MPV receives it.
   private func handlePlayerStopKeyBinding(_ rawAction: String) -> Bool {
     let segments = MPVController.rawCommandSegments(rawAction)
       .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -592,8 +587,7 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
         let afterStop: (() -> Void)? = nextIndex < segments.count
           ? { executeSegment(at: nextIndex) } : nil
         player.stop(mpvStopFlags: stopCommand.flags,
-                    afterMPVStopCommandSubmitted: stopCommand.asynchronous ? nil : afterStop)
-        if stopCommand.asynchronous { executeSegment(at: nextIndex) }
+                    afterMPVStopCommandSubmitted: afterStop)
       } else {
         let result = player.mpv.command(rawString: segment)
         if result < 0 {

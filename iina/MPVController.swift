@@ -2771,9 +2771,21 @@ class MPVController: NSObject {
       guard let self else { next(); return }
       DispatchQueue.main.async { [weak self] in
         guard let self else { next(); return }
-        // END_FILE is delivered before this hook. Let its AirPlay timing restore queue finish
-        // while the next file is held before START_FILE, closing the check/write transition gap.
-        self.player.airPlayAudio.whenMPVCommandsDrained { next() }
+        // The lifecycle client has its own event queue, so this hook can arrive before the primary
+        // client's END_FILE callback has queued the previous file's timing restore. Drain primary
+        // events first; their main-thread callbacks are enqueued before this continuation.
+        self.queue.async { [weak self] in
+          guard let self else {
+            DispatchQueue.main.async { next() }
+            return
+          }
+          self.readEventsOnQueue {
+            DispatchQueue.main.async { [weak self] in
+              guard let self else { next(); return }
+              self.player.airPlayAudio.whenMPVCommandsDrained { next() }
+            }
+          }
+        }
       }
     })) {
       userData.insert(beforeStartHook)
