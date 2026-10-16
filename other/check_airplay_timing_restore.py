@@ -97,7 +97,7 @@ def check_restore_integration(bridge_text: str, controller_text: str) -> None:
     ) < stop.index("whenMPVCommandsDrained")
     watch_later = section(
         player_core_source,
-        "func writeStopWatchLaterIfPendingAtUnload()",
+        "func writeStopWatchLaterIfPending()",
         "/// A [MPV_EVENT_START_FILE]",
     )
     assert watch_later.index("MPVProperty.playlistPlayingPos") < watch_later.index(
@@ -105,16 +105,20 @@ def check_restore_integration(bridge_text: str, controller_text: str) -> None:
     ) < watch_later.index(
         ".writeWatchLaterConfig"
     ), "watch-later must be written only after verifying the active entry"
-    assert "writeStopWatchLaterIfPendingAtUnload()" in controller_text
+    assert "writeStopWatchLaterIfPending()" in controller_text
     assert "MPVHook.onUnLoad" in controller_text
     assert "stopWatchLaterUnloadCompleted()" in controller_text
     assert "mpv.commandIfNotShutdown(.stop" in stop
-    assert "writeStopWatchLaterIfPending()" not in stop
+    assert stop.index("whenMPVCommandsDrained") < stop.index(
+        "self.writeStopWatchLaterIfPending()"
+    ) < stop.index("mpv.commandIfNotShutdown(.stop"), (
+        "Stop must persist the paused entry after its timing restore and before unloading it"
+    )
 
     transition_hook = section(
         controller_text,
         "addHook(MPVHook.onBeforeStartFile",
-        "// User default settings",
+        "private func removeDedicatedLifecycleHookValues()",
     )
     assert "whenMPVCommandsDrained { next() }" in transition_hook
     assert "isAirPlayPreStartBarrierActive(" in controller_text

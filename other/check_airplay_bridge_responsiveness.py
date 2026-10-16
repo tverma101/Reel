@@ -122,10 +122,10 @@ assert "MPVController.rawCommandArgumentToken(header.tokens[header.commandIndex 
 assert "whenMPVCommandsDrained" in key_handler, (
     "compound commands must wait for synchronous bridge timing writes before the next segment"
 )
-assert "player.airPlayAudio.adjustUserSpeed(by: binding.value" in key_handler
-assert "player.airPlayAudio.multiplyUserSpeed(by: binding.value" in key_handler
-assert "player.airPlayAudio.multiplyUserAudioDelay(by: binding.value" in key_handler
-assert "self.player.mpv.isAirPlayPlaybackFileCurrent(" in key_handler
+assert "player.airPlayAudio.adjustUserSpeed(by: value" in key_handler
+assert "player.airPlayAudio.multiplyUserSpeed(by: value" in key_handler
+assert "player.airPlayAudio.multiplyUserAudioDelay(by: value" in key_handler
+assert "player.mpv.isAirPlayPlaybackFileCurrent(" in key_handler
 assert "Ignoring unsupported AirPlay timing key binding" in key_handler
 
 menu_source = (ROOT / "iina/MainMenuActions.swift").read_text()

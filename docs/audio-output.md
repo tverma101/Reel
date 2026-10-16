@@ -53,7 +53,11 @@ output. If a receiver's latency is not included in AVPlayer's clock,
 timeline is checked by `python3 other/test_pcm_stream_reader.py`. Audible routing, other apps'
 output and speaker disconnects need a real receiver.
 
-Maintenance note: bridge timers must read the event-fed mpv snapshot rather than call synchronous
+Maintenance note: route notifications and the picker-close callback defer reconciliation to a later
+main-queue turn, so AVFoundation never waits for route handling inside its own notification. The
+bridge caches its single AVPlayer's output context and does not query private buffered-playback
+state for diagnostics; re-reading the player's context while closing the picker can deadlock AppKit.
+Bridge timers must read the event-fed mpv snapshot rather than call synchronous
 libmpv getters. Snapshot requests and AirPlay command submissions run on a dedicated serial queue
 because libmpv serializes its client API through a shared core lock; AppKit does not wait for those
 submissions. The AVPlayer time observer feeds the WAV loader on its own serial queue, independent

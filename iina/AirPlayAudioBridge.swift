@@ -965,7 +965,10 @@ final class AirPlayAudioBridge: NSObject {
   /// The player's output context exists once a picker is bound to it. These notifications are
   /// private to AVFoundation; the picker's own callbacks cover a release that renames them.
   private func observeOutputContext() {
-    guard let avPlayer, avPlayer.responds(to: NSSelectorFromString("outputContext")),
+    // The bridge keeps one AVPlayer for its lifetime. Reuse its context: querying outputContext
+    // again while AVKit closes the picker can wait on the media queue and deadlock AppKit.
+    guard observedContext == nil,
+          let avPlayer, avPlayer.responds(to: NSSelectorFromString("outputContext")),
           let context = avPlayer.value(forKey: "outputContext") as? NSObject,
           context !== observedContext else { return }
     routeObservers.forEach { NotificationCenter.default.removeObserver($0) }
@@ -973,8 +976,10 @@ final class AirPlayAudioBridge: NSObject {
     routeObservers = ["AVOutputContextOutputDevicesDidChangeNotification",
                       "AVOutputContextOutputDeviceDidChangeNotification"].map { name in
       NotificationCenter.default.addObserver(forName: Notification.Name(name), object: context,
-                                             queue: .main) { [weak self] _ in
-        self?.routeMayHaveChanged()
+                                             queue: nil) { [weak self] _ in
+        // A main OperationQueue observer makes the posting AVFoundation thread wait for AppKit.
+        // Return to AVFoundation before reading any player or route state on the main queue.
+        DispatchQueue.main.async { [weak self] in self?.routeMayHaveChanged() }
       }
     }
   }
@@ -997,11 +1002,7 @@ final class AirPlayAudioBridge: NSObject {
         "\($0)=\(property(device, $0).map { "\($0)" } ?? "nil")"
       }.joined(separator: " ")
     }
-    var buffered = "unknown"
-    if let avPlayer, avPlayer.responds(to: NSSelectorFromString("_isBufferedAirPlayActive")) {
-      buffered = "\(avPlayer.value(forKey: "isBufferedAirPlayActive") ?? "nil")"
-    }
-    let description = "picker AirPlay \(airPlayActive), buffered AirPlay \(buffered), devices [\(details.joined(separator: "; "))]"
+    let description = "picker AirPlay \(airPlayActive), devices [\(details.joined(separator: "; "))]"
     // With no explicit choice the context has no devices and follows the system output.
     return (airPlayActive || !devices.isEmpty, names, description)
   }
@@ -3010,8 +3011,10 @@ final class AirPlayAudioBridge: NSObject {
 
 extension AirPlayAudioBridge: AVRoutePickerViewDelegate {
   func routePickerViewDidEndPresentingRoutes(_ routePickerView: AVRoutePickerView) {
+    // Leave AVKit's popover-close notification before querying its route/player state. Calling
+    // back into AVPlayer here can deadlock the main thread against its media queue.
+    DispatchQueue.main.async { [weak self] in self?.routeMayHaveChanged() }
     // The route can settle a moment after the list closes.
-    routeMayHaveChanged()
     for delay in [0.5, 1.5] {
       DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.routeMayHaveChanged() }
     }
