@@ -423,6 +423,7 @@ class PlayerCore: NSObject {
     var pendingWritePlaylistEntryID: Int64?
   }
   @Atomic private var stopWatchLaterWriteState = StopWatchLaterWriteState()
+  @Atomic private var deferredMPVStopFlags: [String]?
   private var currentFileTransitionGeneration: UInt64?
 
   var initialWindow: InitialWindowController!
@@ -1057,6 +1058,7 @@ class PlayerCore: NSObject {
   ///     can.
   func mpvHasShutdown() {
     clearPendingStopWatchLaterWrite()
+    $deferredMPVStopFlags.withLock { $0 = nil }
     guard info.state != .shutDown else { return }
     let isMPVInitiated = info.state != .shuttingDown
     let suffix = isMPVInitiated ? " (initiated by mpv)" : ""
@@ -1321,6 +1323,10 @@ class PlayerCore: NSObject {
   ///     and call this method again to continue the process of stopping. It is important to stop the background task as if it is still
   ///     running when the mpv core is shutdown it may call into mpv triggering a crash.
   func stop() {
+    stop(mpvStopFlags: [])
+  }
+
+  func stop(mpvStopFlags: [String]) {
     guard info.state != .shuttingDown, info.state != .shutDown,
           !mpv.hasObservedShutdownEvent else { return }
     var shouldSavePosition = false
@@ -1373,8 +1379,16 @@ class PlayerCore: NSObject {
 
     // Must first stop the background task if it is running.
     if backgroundTaskInUse {
+      $deferredMPVStopFlags.withLock { flags in
+        if flags == nil { flags = mpvStopFlags }
+      }
       stopBackgroundTask()
       return
+    }
+
+    let stopFlags = $deferredMPVStopFlags.withLock { flags -> [String] in
+      defer { flags = nil }
+      return flags ?? mpvStopFlags
     }
 
     if info.state != .idle {
@@ -1390,7 +1404,8 @@ class PlayerCore: NSObject {
     guard info.state != .idle else { return }
     airPlayAudio.whenMPVCommandsDrained { [weak self] in
       guard let self, self.info.state == .stopping else { return }
-      guard self.mpv.commandIfNotShutdown(.stop, level: .verbose) else {
+      guard self.mpv.commandIfNotShutdown(.stop, args: stopFlags.map { Optional($0) },
+                                          level: .verbose) else {
         self.clearPendingStopWatchLaterWrite()
         return
       }

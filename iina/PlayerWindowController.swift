@@ -299,6 +299,7 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
       }
     } else {
       if handleAirPlayTimingKeyBinding(keyBinding.rawAction) { return true }
+      if handlePlayerStopKeyBinding(keyBinding.rawAction) { return true }
       // - mpv command
       let returnValue: Int32
       // execute the command
@@ -450,6 +451,9 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
     }
     guard action.count - commandIndex >= 2,
           let command = MPVController.literalRawCommandToken(action[commandIndex]),
+          [MPVCommand.set.rawValue, MPVCommand.del.rawValue,
+           MPVCommand.add.rawValue, MPVCommand.multiply.rawValue,
+           MPVCommand.cycle.rawValue, MPVCommand.cycleValues.rawValue].contains(command),
           let property = MPVController.literalRawCommandToken(action[commandIndex + 1]),
           property == MPVOption.PlaybackControl.speed ||
             property == MPVOption.Audio.audioDelay else { return nil }
@@ -472,7 +476,8 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
       value = 1
     } else if argumentCount == 3,
               let operand = MPVController.rawCommandArgumentToken(header.tokens[header.commandIndex + 2]) {
-      value = Self.parseTimingOperand(operand, expandingProperties: header.expandsProperties,
+      let expandsProperties = header.expandsProperties && header.command == MPVCommand.set.rawValue
+      value = Self.parseTimingOperand(operand, expandingProperties: expandsProperties,
                                       player: player)
     } else {
       value = nil
@@ -488,6 +493,43 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
                                                   property: header.property, value: value,
                                                   osdMode: header.osdMode,
                                                   asynchronous: header.asynchronous))
+  }
+
+  /// Route a single built-in MPV Stop action through PlayerCore so its identity-fenced
+  /// watch-later write is armed. Mixed command lists stay on MPV's raw parser to preserve order.
+  private func handlePlayerStopKeyBinding(_ rawAction: String) -> Bool {
+    let segments = MPVController.rawCommandSegments(rawAction)
+      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    guard segments.count == 1, player.info.state.active else { return false }
+    let tokens = MPVController.rawCommandTokens(segments[0])
+    guard !tokens.isEmpty else { return false }
+
+    let commandPrefixes: Set<String> = [
+      "no-osd", "osd-auto", "osd-bar", "osd-msg", "osd-msg-bar",
+      "raw", "expand-properties", "repeatable", "nonrepeatable", "nonscalable",
+      "async", "sync",
+    ]
+    var commandIndex = 0
+    if let first = tokens.first, first.hasPrefix("{"), first.hasSuffix("}") {
+      commandIndex += 1
+    }
+    while commandIndex < tokens.count,
+          let prefix = MPVController.literalRawCommandToken(tokens[commandIndex]),
+          commandPrefixes.contains(prefix) {
+      commandIndex += 1
+    }
+    guard commandIndex < tokens.count,
+          MPVController.literalRawCommandToken(tokens[commandIndex]) == MPVCommand.stop.rawValue else {
+      return false
+    }
+
+    var stopFlags: [String] = []
+    for token in tokens.dropFirst(commandIndex + 1) {
+      guard let flag = MPVController.literalRawCommandToken(token) else { return false }
+      stopFlags.append(flag)
+    }
+    player.stop(mpvStopFlags: stopFlags)
+    return true
   }
 
   private func applyAirPlayTimingBindingCommand(_ binding: AirPlayTimingBindingCommand) {
