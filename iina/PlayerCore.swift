@@ -424,6 +424,7 @@ class PlayerCore: NSObject {
   }
   @Atomic private var stopWatchLaterWriteState = StopWatchLaterWriteState()
   @Atomic private var deferredMPVStopFlags: [String]?
+  @Atomic private var deferredMPVStopCompletions: [() -> Void] = []
   private var currentFileTransitionGeneration: UInt64?
 
   var initialWindow: InitialWindowController!
@@ -1059,6 +1060,7 @@ class PlayerCore: NSObject {
   func mpvHasShutdown() {
     clearPendingStopWatchLaterWrite()
     $deferredMPVStopFlags.withLock { $0 = nil }
+    $deferredMPVStopCompletions.withLock { $0.removeAll() }
     guard info.state != .shutDown else { return }
     let isMPVInitiated = info.state != .shuttingDown
     let suffix = isMPVInitiated ? " (initiated by mpv)" : ""
@@ -1326,7 +1328,7 @@ class PlayerCore: NSObject {
     stop(mpvStopFlags: [])
   }
 
-  func stop(mpvStopFlags: [String]) {
+  func stop(mpvStopFlags: [String], afterMPVStopCommandSubmitted completion: (() -> Void)? = nil) {
     guard info.state != .shuttingDown, info.state != .shutDown,
           !mpv.hasObservedShutdownEvent else { return }
     var shouldSavePosition = false
@@ -1382,8 +1384,21 @@ class PlayerCore: NSObject {
       $deferredMPVStopFlags.withLock { flags in
         if flags == nil { flags = mpvStopFlags }
       }
+      if let completion {
+        $deferredMPVStopCompletions.withLock { $0.append(completion) }
+      }
       stopBackgroundTask()
       return
+    }
+
+    let stopCompletions = $deferredMPVStopCompletions.withLock { completions -> [() -> Void] in
+      let result = completions + (completion.map { [$0] } ?? [])
+      completions.removeAll()
+      return result
+    }
+
+    func runStopCompletions() {
+      stopCompletions.forEach { $0() }
     }
 
     let stopFlags = $deferredMPVStopFlags.withLock { flags -> [String] in
@@ -1401,7 +1416,10 @@ class PlayerCore: NSObject {
     refreshSyncUITimer()
 
     // Do not send a stop command to mpv if it is already stopped.
-    guard info.state != .idle else { return }
+    guard info.state != .idle else {
+      runStopCompletions()
+      return
+    }
     airPlayAudio.whenMPVCommandsDrained { [weak self] in
       guard let self, self.info.state == .stopping else { return }
       guard self.mpv.commandIfNotShutdown(.stop, args: stopFlags.map { Optional($0) },
@@ -1409,6 +1427,7 @@ class PlayerCore: NSObject {
         self.clearPendingStopWatchLaterWrite()
         return
       }
+      runStopCompletions()
     }
   }
 

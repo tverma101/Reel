@@ -30,8 +30,9 @@ selected, Reel engages the bridge again when the next supported file loads.
   drift more than 45 ms apart, it adjusts mpv's audio delay, which moves the picture.
 - **What carries over.** Pause, seek, speed, audio-track changes, **Audio Delay**, mute and volume all
   apply to the speaker. Watch-later files keep your own speed and audio delay.
-- Custom MPV `set`, `add` and `multiply` bindings for speed and Audio Delay keep applying to the
-  user's timing while AirPlay carries audio; their OSD and async prefixes are preserved.
+- Custom MPV `set`, `add`, `multiply` and `cycle-values` bindings for speed and Audio Delay keep
+  applying to the user's timing while AirPlay carries audio. Their OSD settings are preserved, and
+  timing commands stay in order within a command list, including bindings with an async prefix.
 - **Supported sources.** Local files, external audio tracks and direct http(s) streams, with any
   audio codec FFmpeg decodes.
 
