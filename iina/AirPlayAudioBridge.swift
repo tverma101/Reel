@@ -891,8 +891,10 @@ final class AirPlayAudioBridge: NSObject {
       // A new choice deserves a new attempt.
       bridgeFailedForFile = false
     }
-    reconcile()
-    guard let player, player.info.state.loaded else { return }
+    guard let player, player.info.state.loaded else {
+      reconcile()
+      return
+    }
     if active {
       // This reports the picker selection, not successful audio playback; engage queues async MPV work.
       let name = routeNames.isEmpty ? NSLocalizedString("osc_toolbar.airplay_output.speaker", value: "the AirPlay speaker",
@@ -906,6 +908,7 @@ final class AirPlayAudioBridge: NSObject {
                                                value: "AirPlay speaker disconnected",
                                                comment: "The selected AirPlay speaker disconnected")))
     }
+    reconcile()
   }
 
   // MARK: Engaging
