@@ -265,6 +265,8 @@ class MPVController: NSObject {
   /// These fields are confined to `lifecycleHookQueue`.
   private var activeLifecycleHook: LifecycleHookInvocation?
   private var lifecycleHookRecoveryPending = false
+  private var lifecycleHookRetryAttempt = 0
+  private var lifecycleHookRetryScheduled = false
   /// Snapshot queries share libmpv's core lock and must not delay the AppKit event thread.
   private let airPlaySnapshotQueue = DispatchQueue(label: "com.colliderli.iina.airplay-snapshot",
                                                     qos: .userInitiated)
@@ -940,6 +942,8 @@ class MPVController: NSObject {
       lifecycleHookShutdown = true
       activeLifecycleHook = nil
       lifecycleHookRecoveryPending = false
+      lifecycleHookRetryAttempt = 0
+      lifecycleHookRetryScheduled = false
       $airPlayPreStartBarrierGeneration.withLock { $0 = nil }
       if let lifecycleHookClient {
         mpv_set_wakeup_callback(lifecycleHookClient, nil, nil)
@@ -2716,9 +2720,7 @@ class MPVController: NSObject {
         level: .error)
     setLifecycleHookSafetyAvailable(false)
     $lifecycleHookSetupComplete.withLock { $0 = true }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-      self?.retryDedicatedLifecycleHookClient()
-    }
+    scheduleDedicatedLifecycleHookRetry()
   }
 
   /// Creates the low-traffic event client used to protect Stop persistence and AirPlay transitions.
@@ -2766,20 +2768,49 @@ class MPVController: NSObject {
     guard $lifecycleHookSetupComplete.withLock({ $0 }),
           !$lifecycleHookSafetyAvailable.withLock({ $0 }) else { return }
     lifecycleHookQueue.async { [weak self] in
-      guard let self, self.lifecycleHookClient == nil,
-            !self.hasReceivedShutdownEvent else { return }
-      guard self.createDedicatedLifecycleHookClient() else {
-        self.log("Isolated MPV lifecycle client recovery failed; AirPlay remains disabled",
-                 level: .error)
-        return
-      }
-      let mustWaitForFileLoaded = self.$lifecycleHookHasEverBeenAvailable.withLock { $0 }
-      self.$lifecycleHookHasEverBeenAvailable.withLock { $0 = true }
-      if mustWaitForFileLoaded {
-        self.armLifecycleHookRecoveryAtNextFileBoundary()
-      } else {
-        self.setLifecycleHookSafetyAvailable(true)
-      }
+      guard let self, !self.lifecycleHookRetryScheduled else { return }
+      self.retryDedicatedLifecycleHookClientOnQueue()
+    }
+  }
+
+  private func retryDedicatedLifecycleHookClientOnQueue() {
+    guard $lifecycleHookSetupComplete.withLock({ $0 }),
+          !$lifecycleHookSafetyAvailable.withLock({ $0 }),
+          lifecycleHookClient == nil, !hasReceivedShutdownEvent, mpv != nil else { return }
+    guard createDedicatedLifecycleHookClient() else {
+      log("Isolated MPV lifecycle client recovery failed; AirPlay remains disabled", level: .error)
+      scheduleDedicatedLifecycleHookRetryOnQueue()
+      return
+    }
+    lifecycleHookRetryAttempt = 0
+    let mustWaitForFileLoaded = $lifecycleHookHasEverBeenAvailable.withLock { $0 }
+    $lifecycleHookHasEverBeenAvailable.withLock { $0 = true }
+    if mustWaitForFileLoaded {
+      armLifecycleHookRecoveryAtNextFileBoundary()
+    } else {
+      setLifecycleHookSafetyAvailable(true)
+    }
+  }
+
+  private func scheduleDedicatedLifecycleHookRetry() {
+    lifecycleHookQueue.async { [weak self] in
+      self?.scheduleDedicatedLifecycleHookRetryOnQueue()
+    }
+  }
+
+  private func scheduleDedicatedLifecycleHookRetryOnQueue() {
+    guard $lifecycleHookSetupComplete.withLock({ $0 }),
+          !$lifecycleHookSafetyAvailable.withLock({ $0 }),
+          !hasReceivedShutdownEvent, mpv != nil,
+          lifecycleHookClient == nil, !lifecycleHookRetryScheduled else { return }
+    lifecycleHookRetryScheduled = true
+    let attempt = lifecycleHookRetryAttempt
+    lifecycleHookRetryAttempt = min(attempt + 1, 5)
+    let delaySeconds = min(1 << min(attempt, 5), 30)
+    lifecycleHookQueue.asyncAfter(deadline: .now() + .seconds(delaySeconds)) { [weak self] in
+      guard let self else { return }
+      self.lifecycleHookRetryScheduled = false
+      self.retryDedicatedLifecycleHookClientOnQueue()
     }
   }
 
@@ -2942,6 +2973,8 @@ class MPVController: NSObject {
           lifecycleHookShutdown = true
           activeLifecycleHook = nil
           lifecycleHookRecoveryPending = false
+          lifecycleHookRetryAttempt = 0
+          lifecycleHookRetryScheduled = false
           return
         default:
           // No other events are requested by this handle.
@@ -3040,9 +3073,7 @@ class MPVController: NSObject {
     log("Could not recreate isolated MPV lifecycle hooks; AirPlay remains disabled",
         level: .error)
     setLifecycleHookSafetyAvailable(false)
-    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-      self?.retryDedicatedLifecycleHookClient()
-    }
+    scheduleDedicatedLifecycleHookRetryOnQueue()
   }
 
   func removeHooks(withIdentifier id: String) {

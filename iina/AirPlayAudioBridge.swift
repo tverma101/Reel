@@ -731,12 +731,35 @@ final class AirPlayAudioBridge: NSObject {
     /// Route epoch checked by background AO submission and queue-pressure recovery.
     var routeOwnershipGenerationBeforeSubmission: UInt64? = nil
 
+    func targetsFile(fileTransitionGeneration: UInt64?, playlistEntryID: Int64?) -> Bool {
+      guard expectedFileTransitionGeneration != nil || expectedPlaylistEntryID != nil else {
+        return true
+      }
+      guard let expectedFileTransitionGeneration, let expectedPlaylistEntryID,
+            let fileTransitionGeneration, let playlistEntryID else { return false }
+      return expectedFileTransitionGeneration == fileTransitionGeneration &&
+        expectedPlaylistEntryID == playlistEntryID
+    }
+
     func matches(_ other: MPVCommandRequest) -> Bool {
       operation.matches(other.operation) &&
         expectedCurrentTimingValue == other.expectedCurrentTimingValue &&
         expectedFileTransitionGeneration == other.expectedFileTransitionGeneration &&
         expectedPlaylistEntryID == other.expectedPlaylistEntryID &&
         allowsNoActivePlaylistEntry == other.allowsNoActivePlaylistEntry
+    }
+  }
+
+  private struct TimingRestoreFileIdentity {
+    let fileTransitionGeneration: UInt64?
+    let playlistEntryID: Int64?
+
+    func matches(fileTransitionGeneration: UInt64?, playlistEntryID: Int64?) -> Bool {
+      guard let selfGeneration = self.fileTransitionGeneration,
+            let selfEntryID = self.playlistEntryID,
+            let fileTransitionGeneration,
+            let playlistEntryID else { return false }
+      return selfGeneration == fileTransitionGeneration && selfEntryID == playlistEntryID
     }
   }
 
@@ -791,6 +814,9 @@ final class AirPlayAudioBridge: NSObject {
   /// Snapshot epoch for the item whose timing this bridge currently owns.
   private var currentFileTransitionGeneration: UInt64?
   private var currentPlaylistEntryID: Int64?
+  /// Keeps a release tied to its source file until a later START_FILE has received a fresh timing
+  /// write. The old-file request may already have completed or been rejected by that boundary.
+  private var pendingTimingRestoreFileIdentities: [String: TimingRestoreFileIdentity] = [:]
   /// A bridge timing release is enqueued once per carry session and survives duplicate cleanup.
   private var currentFileTimingReleaseStarted = true
   private var userSpeedOverride: Double?
@@ -1785,35 +1811,35 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   func multiplyUserSpeed(by factor: Double, osdMode: AirPlayTimingOSDMode = .automatic) {
-    guard isCarrying, factor.isFinite, factor > 0 else { return }
+    guard shouldSerializeTimingChanges, factor.isFinite, factor > 0 else { return }
     let speed = userSpeed * factor
     guard speed.isFinite else { return }
     player?.setSpeed(speed, osdMode: osdMode)
   }
 
   func adjustUserAudioDelay(by delta: Double, osdMode: AirPlayTimingOSDMode = .automatic) {
-    guard isCarrying, delta.isFinite else { return }
+    guard shouldSerializeTimingChanges, delta.isFinite else { return }
     let delay = userAudioDelay + delta
     guard delay.isFinite else { return }
     player?.setAudioDelay(delay, osdMode: osdMode)
   }
 
   func adjustUserSpeed(by delta: Double, osdMode: AirPlayTimingOSDMode = .automatic) {
-    guard isCarrying, delta.isFinite else { return }
+    guard shouldSerializeTimingChanges, delta.isFinite else { return }
     let speed = userSpeed + delta
     guard speed.isFinite else { return }
     player?.setSpeed(speed, osdMode: osdMode)
   }
 
   func multiplyUserAudioDelay(by factor: Double, osdMode: AirPlayTimingOSDMode = .automatic) {
-    guard isCarrying, factor.isFinite else { return }
+    guard shouldSerializeTimingChanges, factor.isFinite else { return }
     let delay = userAudioDelay * factor
     guard delay.isFinite else { return }
     player?.setAudioDelay(delay, osdMode: osdMode)
   }
 
   func adjustUserSpeedForScroll(by relativeDelta: Double, minimum: Double, maximum: Double) {
-    guard isCarrying, relativeDelta.isFinite else { return }
+    guard shouldSerializeTimingChanges, relativeDelta.isFinite else { return }
     let newSpeed = round(1000 * (userSpeed + userSpeed * relativeDelta)
       .clamped(to: minimum...maximum)) / 1000
     guard newSpeed.isFinite else { return }
@@ -1868,20 +1894,36 @@ final class AirPlayAudioBridge: NSObject {
   func fileStarted(fileTransitionGeneration: UInt64? = nil, playlistEntryID: Int64? = nil) {
     let transitionUserSpeed = userSpeed
     let transitionUserAudioDelay = userAudioDelay
-    let needsUserSpeedRestore = holdSpeedApplied || pendingMPVPropertyValue(
-      MPVOption.PlaybackControl.speed).map {
-        !Self.sameTimingValue($0, transitionUserSpeed)
+    let snapshot = player?.mpv?.airPlayPlaybackSnapshot
+    let transitionGeneration = fileTransitionGeneration ?? snapshot?.fileTransitionGeneration
+    let transitionPlaylistEntryID = playlistEntryID ?? snapshot?.currentPlaylistEntryID
+    let pendingSpeedRequest = pendingMPVPropertyRequest(MPVOption.PlaybackControl.speed)
+    let pendingAudioDelayRequest = pendingMPVPropertyRequest(MPVOption.Audio.audioDelay)
+    let needsUserSpeedRestore = holdSpeedApplied ||
+      pendingTimingRestoreFileIdentities[MPVOption.PlaybackControl.speed].map {
+        !$0.matches(fileTransitionGeneration: transitionGeneration,
+                    playlistEntryID: transitionPlaylistEntryID)
+      } == true || pendingSpeedRequest.map { request in
+        guard case let .doubleProperty(_, value) = request.operation else { return false }
+        return !Self.sameTimingValue(value, transitionUserSpeed) ||
+          !request.targetsFile(fileTransitionGeneration: transitionGeneration,
+                              playlistEntryID: transitionPlaylistEntryID)
       } == true
-    let needsUserAudioDelayRestore = audioDelayCorrection != 0 || pendingMPVPropertyValue(
-      MPVOption.Audio.audioDelay).map {
-        !Self.sameTimingValue($0, transitionUserAudioDelay)
+    let needsUserAudioDelayRestore = audioDelayCorrection != 0 ||
+      pendingTimingRestoreFileIdentities[MPVOption.Audio.audioDelay].map {
+        !$0.matches(fileTransitionGeneration: transitionGeneration,
+                    playlistEntryID: transitionPlaylistEntryID)
+      } == true || pendingAudioDelayRequest.map { request in
+        guard case let .doubleProperty(_, value) = request.operation else { return false }
+        return !Self.sameTimingValue(value, transitionUserAudioDelay) ||
+          !request.targetsFile(fileTransitionGeneration: transitionGeneration,
+                              playlistEntryID: transitionPlaylistEntryID)
       } == true
     releaseFile()
-    currentFileTransitionGeneration = fileTransitionGeneration ??
-      player?.mpv?.airPlayPlaybackSnapshot.fileTransitionGeneration
-    currentPlaylistEntryID = playlistEntryID ??
-      player?.mpv?.airPlayPlaybackSnapshot.currentPlaylistEntryID
+    currentFileTransitionGeneration = transitionGeneration
+    currentPlaylistEntryID = transitionPlaylistEntryID
     currentFileTimingReleaseStarted = false
+    pendingTimingRestoreFileIdentities.removeAll(keepingCapacity: true)
     clearUserTimingTargets()
     stoppingOrQuitting = false
     bridgeFailedForFile = false
@@ -1942,6 +1984,8 @@ final class AirPlayAudioBridge: NSObject {
     activeMPVCommand != nil || !mpvCommandQueue.isEmpty || waitingForMPVEventOverflowRecovery ||
       hasDeferredAudioOutputResolution || synchronousTimingRestoreBarrier.blocksDrain
   }
+
+  var shouldSerializeTimingChanges: Bool { isCarrying || hasUndrainedMPVCommands }
 
   func whenMPVCommandsDrained(_ completion: @escaping () -> Void) {
     let hasPendingCommands = activeMPVCommand != nil || !mpvCommandQueue.isEmpty ||
@@ -2076,16 +2120,28 @@ final class AirPlayAudioBridge: NSObject {
       expectedFileTransitionGeneration != nil && expectedPlaylistEntryID != nil
     let pendingSpeed = pendingMPVPropertyValue(MPVOption.PlaybackControl.speed)
     let pendingDelay = pendingMPVPropertyValue(MPVOption.Audio.audioDelay)
-    let restoreSpeed = shouldRestoreTiming &&
-      (holdSpeedApplied || pendingSpeed.map { !Self.sameTimingValue($0, userSpeed) } == true)
-    let restoreDelay = shouldRestoreTiming &&
-      (audioDelayCorrection != 0 || pendingDelay.map { !Self.sameTimingValue($0, userAudioDelay) } == true)
+    let timingSpeedNeedsRestore = holdSpeedApplied ||
+      pendingSpeed.map { !Self.sameTimingValue($0, userSpeed) } == true
+    let timingDelayNeedsRestore = audioDelayCorrection != 0 ||
+      pendingDelay.map { !Self.sameTimingValue($0, userAudioDelay) } == true
+    let restoreSpeed = shouldRestoreTiming && timingSpeedNeedsRestore
+    let restoreDelay = shouldRestoreTiming && timingDelayNeedsRestore
     let expectedSpeed = restoreSpeed
       ? (pendingSpeed ?? Self.holdSpeed) : nil
     let expectedDelay = restoreDelay
       ? (pendingDelay ?? userAudioDelay + audioDelayCorrection)
       : nil
     if player?.mpv != nil, player?.info.state != .shutDown {
+      if !currentFileTimingReleaseStarted && timingSpeedNeedsRestore {
+        pendingTimingRestoreFileIdentities[MPVOption.PlaybackControl.speed] =
+          TimingRestoreFileIdentity(fileTransitionGeneration: expectedFileTransitionGeneration,
+                                    playlistEntryID: expectedPlaylistEntryID)
+      }
+      if !currentFileTimingReleaseStarted && timingDelayNeedsRestore {
+        pendingTimingRestoreFileIdentities[MPVOption.Audio.audioDelay] =
+          TimingRestoreFileIdentity(fileTransitionGeneration: expectedFileTransitionGeneration,
+                                    playlistEntryID: expectedPlaylistEntryID)
+      }
       // The bridge owns these values while the corresponding flag/correction is active. A flag
       // can clear before its async write receives a reply, so also restore a pending bridge value
       // unless that request already targets the user's timing. Every transition uses the queue so
@@ -2159,6 +2215,21 @@ final class AirPlayAudioBridge: NSObject {
     request.expectedPlaylistEntryID = expectedPlaylistEntryID
     request.allowsNoActivePlaylistEntry = allowsNoActivePlaylistEntry
     enqueueMPVRequest(request)
+  }
+
+  private func pendingMPVPropertyRequest(_ name: String) -> MPVCommandRequest? {
+    for request in mpvCommandQueue.reversed() {
+      if case let .doubleProperty(requestName, _) = request.operation,
+         requestName == name {
+        return request
+      }
+    }
+    if let activeMPVCommand,
+       case let .doubleProperty(activeName, _) = activeMPVCommand.operation,
+       activeName == name {
+      return activeMPVCommand
+    }
+    return nil
   }
 
   private func pendingMPVPropertyValue(_ name: String) -> Double? {

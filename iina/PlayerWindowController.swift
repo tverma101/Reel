@@ -373,7 +373,7 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
   /// Apply timing commands in raw MPV key bindings through PlayerCore while AirPlay carries audio.
   /// MPV's tokenization is quote-aware and command lists are separated only by unquoted semicolons.
   private func handleAirPlayTimingKeyBinding(_ rawAction: String) -> Bool {
-    guard player.airPlayAudio.isCarrying else { return false }
+    guard player.airPlayAudio.shouldSerializeTimingChanges else { return false }
     let segments = MPVController.rawCommandSegments(rawAction)
       .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     guard segments.contains(where: { airPlayTimingBindingHeader($0) != nil }) else { return false }
@@ -398,7 +398,7 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
         }
 
       case let .unsupported(reason):
-        if !player.airPlayAudio.isCarrying {
+        if !player.airPlayAudio.shouldSerializeTimingChanges {
           let result = player.mpv.command(rawString: segment)
           if result < 0 {
             player.log("Return value \(result) when executing key command \(segment)", level: .error)
@@ -409,7 +409,7 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
         executeSegment(at: nextIndex)
 
       case let .supported(command):
-        guard player.airPlayAudio.isCarrying else {
+        guard player.airPlayAudio.shouldSerializeTimingChanges else {
           let result = player.mpv.command(rawString: segment)
           if result < 0 {
             player.log("Return value \(result) when executing key command \(segment)", level: .error)
@@ -885,7 +885,7 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
       let min = 0.05
       let max = 4.0
       let relativeDelta = AppData.playbackSpeedMap[playbackSpeedScrollAmount] * delta
-      if player.airPlayAudio.isCarrying {
+      if player.airPlayAudio.shouldSerializeTimingChanges {
         player.airPlayAudio.adjustUserSpeedForScroll(by: relativeDelta,
                                                      minimum: min, maximum: max)
       } else {
