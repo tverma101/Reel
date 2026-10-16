@@ -123,6 +123,7 @@ struct MPVAirPlaySnapshot {
   var estimatedVideoFPS: Double?
   var containerFPS: Double?
   var speed: Double?
+  var audioDelay: Double?
 
   mutating func resetMediaValues() {
     pausedForCache = nil
@@ -2610,6 +2611,7 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.onVideoReconfig() }
 
     case MPV_EVENT_START_FILE:
+      let startFileGeneration = player.fileStartEventObserved()
       let abandonedTransition = activePlaylistLoadTransition
       activePlaylistLoadTransition = consumeOrStartPlaylistLoadTransition()
       if let abandonedTransition {
@@ -2622,11 +2624,9 @@ class MPVController: NSObject {
       }
       guard let path = getString(MPVProperty.path) else { break }
       DispatchQueue.main.async { [self] in
+        player.fileStartEventReachedMain(startFileGeneration)
         guard player.info.state != .shuttingDown, player.info.state != .shutDown else { return }
-        if player.info.state == .stopping {
-          player.fileStartObservedWhileStopping()
-          return
-        }
+        if player.info.state == .stopping { return }
         player.info.state = .starting
         player.fileStarted(path: path)
       }
@@ -2923,6 +2923,8 @@ class MPVController: NSObject {
         snapshot.containerFPS = doubleValue(from: property)
       case MPVOption.PlaybackControl.speed:
         snapshot.speed = doubleValue(from: property)
+      case MPVOption.Audio.audioDelay:
+        snapshot.audioDelay = doubleValue(from: property)
       default:
         break
       }

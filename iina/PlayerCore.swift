@@ -414,7 +414,12 @@ class PlayerCore: NSObject {
   }
 
   private var backgroundTaskInUse = false
-  private var shouldWriteWatchLaterAfterStopDrain = false
+  private struct StopWatchLaterWriteState {
+    var observedStartFileGeneration: UInt64 = 0
+    var handledStartFileGeneration: UInt64 = 0
+    var pendingWriteGeneration: UInt64?
+  }
+  @Atomic private var stopWatchLaterWriteState = StopWatchLaterWriteState()
 
   var initialWindow: InitialWindowController!
 
@@ -1002,7 +1007,7 @@ class PlayerCore: NSObject {
   ///     task is still running this method only changes the player state. When the background task ends it will notice that shutting
   ///     down was in progress and will call this method again to continue the process of shutting down..
   func shutdown() {
-    shouldWriteWatchLaterAfterStopDrain = false
+    clearPendingStopWatchLaterWrite()
     // mpv writes its watch-later file on quit, so give it the user's own speed and audio delay.
     airPlayAudio.stopPlayback()
     if !isPluginRuntimeUnavailable {
@@ -1039,7 +1044,7 @@ class PlayerCore: NSObject {
   ///     windows of vulnerability that can not be fully closed. IINA has no choice but to support a mpv initiated shutdown as best it
   ///     can.
   func mpvHasShutdown() {
-    shouldWriteWatchLaterAfterStopDrain = false
+    clearPendingStopWatchLaterWrite()
     guard info.state != .shutDown else { return }
     let isMPVInitiated = info.state != .shuttingDown
     let suffix = isMPVInitiated ? " (initiated by mpv)" : ""
@@ -1306,11 +1311,23 @@ class PlayerCore: NSObject {
   func stop() {
     guard info.state != .shuttingDown, info.state != .shutDown,
           !mpv.hasObservedShutdownEvent else { return }
+    var shouldSavePosition = false
+    guard mpv.performIfNotShutdown({
+      if info.state.active {
+        shouldSavePosition = mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit)
+      }
+      savePlaybackPosition(writeWatchLater: false)
+    }) else { return }
     if info.state.active {
-      shouldWriteWatchLaterAfterStopDrain =
-        mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit)
+      $stopWatchLaterWriteState.withLock { state in
+        guard shouldSavePosition,
+              state.observedStartFileGeneration == state.handledStartFileGeneration else {
+          state.pendingWriteGeneration = nil
+          return
+        }
+        state.pendingWriteGeneration = state.observedStartFileGeneration
+      }
     }
-    savePlaybackPosition(writeWatchLater: false)
     airPlayAudio.stopPlayback()
     if mainWindow.loaded { mainWindow.liveCaptions.stop() }
 
@@ -1328,9 +1345,11 @@ class PlayerCore: NSObject {
       info.state = .stopping
 
       // Make sure playback is paused to free up machine resources when quitting.
-      if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
-        log("Pausing playback before sending stop command")
-        mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
+      mpv.performIfNotShutdown {
+        if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
+          log("Pausing playback before sending stop command")
+          mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
+        }
       }
     }
 
@@ -1353,14 +1372,7 @@ class PlayerCore: NSObject {
     guard info.state != .idle else { return }
     airPlayAudio.whenMPVCommandsDrained { [weak self] in
       guard let self, self.info.state == .stopping else { return }
-      if self.shouldWriteWatchLaterAfterStopDrain {
-        self.shouldWriteWatchLaterAfterStopDrain = false
-        self.mpv.performIfNotShutdown {
-          if self.mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) {
-            self.mpv.command(.writeWatchLaterConfig, level: .verbose)
-          }
-        }
-      }
+      self.writeStopWatchLaterIfPending()
       self.mpv.commandIfNotShutdown(.stop, level: .verbose)
     }
   }
@@ -2472,6 +2484,17 @@ class PlayerCore: NSObject {
     mpv.addHook(MPVHook.onBeforeStartFile, hook: MPVHookValue(withBlock: callback))
   }
 
+  // MARK: - MPV event queue coordination
+
+  /// Records START_FILE on MPV's event queue before its main-thread state update is enqueued.
+  func fileStartEventObserved() -> UInt64 {
+    $stopWatchLaterWriteState.withLock { state in
+      state.observedStartFileGeneration &+= 1
+      state.pendingWriteGeneration = nil
+      return state.observedStartFileGeneration
+    }
+  }
+
   // MARK: - Listeners
 
   // IMPORTANT!
@@ -2480,11 +2503,34 @@ class PlayerCore: NSObject {
   // main thread avoids thread data races without the need for locks. Also a few of the methods call
   // AppKit methods that require use of the main thread.
 
-  func fileStartObservedWhileStopping() {
-    guard info.state == .stopping else { return }
-    // MPV may auto-advance while Stop waits for AirPlay commands; don't write the old item's state
-    // against the new current item in the drain callback.
-    shouldWriteWatchLaterAfterStopDrain = false
+  /// Records that the main-thread START_FILE state update has caught up with the event reader.
+  func fileStartEventReachedMain(_ generation: UInt64) {
+    $stopWatchLaterWriteState.withLock { state in
+      state.handledStartFileGeneration = max(state.handledStartFileGeneration, generation)
+    }
+  }
+
+  private func clearPendingStopWatchLaterWrite() {
+    $stopWatchLaterWriteState.withLock { $0.pendingWriteGeneration = nil }
+  }
+
+  private func writeStopWatchLaterIfPending() {
+    $stopWatchLaterWriteState.withLock { state in
+      guard let generation = state.pendingWriteGeneration,
+            generation == state.observedStartFileGeneration,
+            generation == state.handledStartFileGeneration else {
+        state.pendingWriteGeneration = nil
+        return
+      }
+      state.pendingWriteGeneration = nil
+      // Keep START_FILE observation serialized through the write, so an event cannot arrive
+      // between validating the stop target and asking mpv to persist its resume state.
+      mpv.performIfNotShutdown {
+        if mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) {
+          mpv.command(.writeWatchLaterConfig, level: .verbose)
+        }
+      }
+    }
   }
 
   /// A [MPV_EVENT_START_FILE](https://mpv.io/manual/stable/#command-interface-mpv-event-start-file)
@@ -2492,7 +2538,7 @@ class PlayerCore: NSObject {
   /// - Important: The event may be received after IINA has started to stop and shutdown the core. The event must be ignored if
   ///         the player is no longer active.
   func fileStarted(path: String) {
-    shouldWriteWatchLaterAfterStopDrain = false
+    clearPendingStopWatchLaterWrite()
     guard info.state.active else { return }
     log("File started")
     airPlayAudio.fileStarted()
