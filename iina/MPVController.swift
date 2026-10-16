@@ -2751,8 +2751,9 @@ class MPVController: NSObject {
       return true
     }
     guard changed else { return }
-    let update = { [weak self] in
-      self?.player.airPlayAudio.lifecycleHookAvailabilityChanged(available)
+    let update: () -> Void = { [weak self] in
+      guard let self else { return }
+      self.player.airPlayAudio.lifecycleHookAvailabilityChanged(available)
     }
     if Thread.isMainThread {
       update()
