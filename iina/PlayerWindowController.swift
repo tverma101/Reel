@@ -298,6 +298,7 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
         return false
       }
     } else {
+      if handleAirPlayTimingKeyBinding(keyBinding.action) { return true }
       // - mpv command
       let returnValue: Int32
       // execute the command
@@ -333,6 +334,43 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
         return false
       }
     }
+  }
+
+  /// Apply raw MPV timing shortcuts through PlayerCore while the AirPlay bridge carries audio.
+  /// Menu accelerators already use these bridge-aware setters; this covers bindings dispatched
+  /// directly to MPV, including alternate built-in keybinding profiles.
+  private func handleAirPlayTimingKeyBinding(_ action: [String]) -> Bool {
+    guard player.airPlayAudio.isCarrying, action.count == 3,
+          let value = Self.parseTimingOperand(action[2]) else { return false }
+
+    switch (action[0], action[1]) {
+    case (MPVCommand.multiply.rawValue, MPVOption.PlaybackControl.speed):
+      player.setSpeed(player.info.playSpeed * value)
+      return true
+    case (MPVCommand.set.rawValue, MPVOption.PlaybackControl.speed):
+      player.setSpeed(value)
+      return true
+    case (MPVCommand.add.rawValue, MPVOption.Audio.audioDelay):
+      player.setAudioDelay(player.info.audioDelay + value)
+      return true
+    case (MPVCommand.set.rawValue, MPVOption.Audio.audioDelay):
+      player.setAudioDelay(value)
+      return true
+    default:
+      return false
+    }
+  }
+
+  private static func parseTimingOperand(_ operand: String) -> Double? {
+    if let value = Double(operand), value.isFinite { return value }
+    let fraction = operand.split(separator: "/", omittingEmptySubsequences: false)
+    guard fraction.count == 2,
+          let numerator = Double(fraction[0]),
+          let denominator = Double(fraction[1]), denominator.isFinite, denominator != 0 else {
+      return nil
+    }
+    let value = numerator / denominator
+    return value.isFinite ? value : nil
   }
 
   func abLoop() {

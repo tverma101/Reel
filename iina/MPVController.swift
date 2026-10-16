@@ -87,6 +87,8 @@ struct MPVHookValue {
 /// A lock-protected view of the mpv values used by Reel's AirPlay bridge. The bridge samples this
 /// snapshot on the main thread instead of calling synchronous libmpv getters from its timers.
 struct MPVAirPlaySnapshot {
+  /// Advances as soon as the event reader observes START_FILE, fencing restores from the prior item.
+  var fileTransitionGeneration: UInt64 = 0
   var audioOutput: String?
   /// Advances for event-fed or recovery-read AO observations, independently of snapshot fencing.
   var audioOutputObservedGeneration: UInt64 = 0
@@ -135,6 +137,12 @@ struct MPVAirPlaySnapshot {
     estimatedVideoFPS = nil
     containerFPS = nil
   }
+}
+
+struct MPVAirPlayTimingOwnership {
+  let fileTransitionGeneration: UInt64
+  let property: String
+  let expectedValue: Double
 }
 
 struct MPVAirPlayPendingAudioOutputIntent {
@@ -223,6 +231,8 @@ class MPVController: NSObject {
   private var airPlayRouteOwnershipGeneration: UInt64 = 0
   /// Accessed only by the serial mpv event queue; pairs START_FILE with FILE_LOADED or END_FILE.
   private var activePlaylistLoadTransition: UInt64?
+  /// Exact AirPlay ownership epoch paired with the current START_FILE event.
+  private var activeFileTransitionGeneration: UInt64?
   @Atomic private var pendingPlaylistLoadTransitions: [UInt64] = []
 
   // Once the shutdown event is received, the main-thread handler destroys the mpv handle. Wakeup
@@ -1916,6 +1926,7 @@ class MPVController: NSObject {
   func submitAirPlayCommand(
     ifAudioOutputIntentGeneration expectedIntentGeneration: UInt64? = nil,
     ifRouteOwnershipGeneration expectedRouteOwnershipGeneration: UInt64? = nil,
+    ifTimingOwnership timingOwnership: MPVAirPlayTimingOwnership? = nil,
     submission: @escaping () -> Int32,
     completion: @escaping (Int32, Bool) -> Void
   ) {
@@ -1969,7 +1980,45 @@ class MPVController: NSObject {
           return
         }
       }
-      let result = submission()
+      let result: Int32
+      if let timingOwnership {
+        // Keep the event-fed ownership check and libmpv enqueue in one snapshot transaction.
+        // Otherwise START_FILE or a timing change can land between a main-thread preflight and
+        // the actual async setter submission.
+        let submittedResult = self.$airPlaySnapshot.withLock { snapshot -> Int32? in
+          let currentValue: Double?
+          switch timingOwnership.property {
+          case MPVOption.PlaybackControl.speed:
+            currentValue = snapshot.speed
+          case MPVOption.Audio.audioDelay:
+            currentValue = snapshot.audioDelay
+          default:
+            currentValue = nil
+          }
+          guard let currentValue,
+                snapshot.fileTransitionGeneration == timingOwnership.fileTransitionGeneration,
+                currentValue.isFinite, timingOwnership.expectedValue.isFinite,
+                abs(currentValue - timingOwnership.expectedValue) < 1e-9 else { return nil }
+          return submission()
+        }
+        guard let submittedResult else {
+          if expectedRouteOwnershipGeneration != nil {
+            self.airPlayRouteOwnershipLock.unlock()
+          }
+          if expectedIntentGeneration != nil {
+            self.airPlayAudioOutputWriteLock.unlock()
+          }
+          self.airPlaySnapshotCallLock.unlock()
+          DispatchQueue.main.async { [weak self] in
+            guard let self, !self.hasReceivedShutdownEvent else { return }
+            completion(0, true)
+          }
+          return
+        }
+        result = submittedResult
+      } else {
+        result = submission()
+      }
       if expectedRouteOwnershipGeneration != nil {
         self.airPlayRouteOwnershipLock.unlock()
       }
@@ -2611,31 +2660,42 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.onVideoReconfig() }
 
     case MPV_EVENT_START_FILE:
-      let startFileGeneration = player.fileStartEventObserved()
+      let startFile = event.pointee.data.bindMemory(to: mpv_event_start_file.self,
+                                                    capacity: 1).pointee
+      let playlistEntryID = startFile.playlist_entry_id
+      let fileTransitionGeneration = $airPlaySnapshot.withLock { snapshot -> UInt64 in
+        snapshot.fileTransitionGeneration &+= 1
+        snapshot.resetMediaValues()
+        return snapshot.fileTransitionGeneration
+      }
+      activeFileTransitionGeneration = fileTransitionGeneration
+      let startFileGeneration = player.fileStartEventObserved(playlistEntryID: playlistEntryID)
       let abandonedTransition = activePlaylistLoadTransition
       activePlaylistLoadTransition = consumeOrStartPlaylistLoadTransition()
       if let abandonedTransition {
         DispatchQueue.main.async { self.player.playlistLoadDidFinish(abandonedTransition) }
       }
-      $airPlaySnapshot.withLock { $0.resetMediaValues() }
       $airPlaySnapshotRequests.withLock {
         $0.generation &+= 1
         $0.pendingTokens.removeAll()
       }
       guard let path = getString(MPVProperty.path) else { break }
       DispatchQueue.main.async { [self] in
-        player.fileStartEventReachedMain(startFileGeneration)
+        player.fileStartEventReachedMain(startFileGeneration,
+                                         playlistEntryID: playlistEntryID)
         guard player.info.state != .shuttingDown, player.info.state != .shutDown else { return }
         if player.info.state == .stopping { return }
         player.info.state = .starting
-        player.fileStarted(path: path)
+        player.fileStarted(path: path, fileTransitionGeneration: fileTransitionGeneration)
       }
 
     case MPV_EVENT_FILE_LOADED:
       let transition = activePlaylistLoadTransition
       activePlaylistLoadTransition = nil
+      let fileTransitionGeneration = activeFileTransitionGeneration
+      activeFileTransitionGeneration = nil
       DispatchQueue.main.async {
-        self.player.fileLoaded()
+        self.player.fileLoaded(fileTransitionGeneration: fileTransitionGeneration)
         self.player.playlistLoadDidFinish(transition)
       }
 

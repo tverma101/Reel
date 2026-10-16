@@ -417,9 +417,13 @@ class PlayerCore: NSObject {
   private struct StopWatchLaterWriteState {
     var observedStartFileGeneration: UInt64 = 0
     var handledStartFileGeneration: UInt64 = 0
+    var observedStartFilePlaylistEntryID: Int64?
+    var handledStartFilePlaylistEntryID: Int64?
     var pendingWriteGeneration: UInt64?
+    var pendingWritePlaylistEntryID: Int64?
   }
   @Atomic private var stopWatchLaterWriteState = StopWatchLaterWriteState()
+  private var currentFileTransitionGeneration: UInt64?
 
   var initialWindow: InitialWindowController!
 
@@ -1321,11 +1325,15 @@ class PlayerCore: NSObject {
     if info.state.active {
       $stopWatchLaterWriteState.withLock { state in
         guard shouldSavePosition,
-              state.observedStartFileGeneration == state.handledStartFileGeneration else {
+              state.observedStartFileGeneration == state.handledStartFileGeneration,
+              let playlistEntryID = state.handledStartFilePlaylistEntryID,
+              playlistEntryID == state.observedStartFilePlaylistEntryID else {
           state.pendingWriteGeneration = nil
+          state.pendingWritePlaylistEntryID = nil
           return
         }
         state.pendingWriteGeneration = state.observedStartFileGeneration
+        state.pendingWritePlaylistEntryID = playlistEntryID
       }
     }
     airPlayAudio.stopPlayback()
@@ -2487,10 +2495,12 @@ class PlayerCore: NSObject {
   // MARK: - MPV event queue coordination
 
   /// Records START_FILE on MPV's event queue before its main-thread state update is enqueued.
-  func fileStartEventObserved() -> UInt64 {
+  func fileStartEventObserved(playlistEntryID: Int64) -> UInt64 {
     $stopWatchLaterWriteState.withLock { state in
       state.observedStartFileGeneration &+= 1
+      state.observedStartFilePlaylistEntryID = playlistEntryID
       state.pendingWriteGeneration = nil
+      state.pendingWritePlaylistEntryID = nil
       return state.observedStartFileGeneration
     }
   }
@@ -2504,28 +2514,47 @@ class PlayerCore: NSObject {
   // AppKit methods that require use of the main thread.
 
   /// Records that the main-thread START_FILE state update has caught up with the event reader.
-  func fileStartEventReachedMain(_ generation: UInt64) {
+  func fileStartEventReachedMain(_ generation: UInt64, playlistEntryID: Int64) {
     $stopWatchLaterWriteState.withLock { state in
-      state.handledStartFileGeneration = max(state.handledStartFileGeneration, generation)
+      guard generation >= state.handledStartFileGeneration else { return }
+      state.handledStartFileGeneration = generation
+      state.handledStartFilePlaylistEntryID = playlistEntryID
     }
   }
 
   private func clearPendingStopWatchLaterWrite() {
-    $stopWatchLaterWriteState.withLock { $0.pendingWriteGeneration = nil }
+    $stopWatchLaterWriteState.withLock {
+      $0.pendingWriteGeneration = nil
+      $0.pendingWritePlaylistEntryID = nil
+    }
   }
 
   private func writeStopWatchLaterIfPending() {
     $stopWatchLaterWriteState.withLock { state in
       guard let generation = state.pendingWriteGeneration,
             generation == state.observedStartFileGeneration,
-            generation == state.handledStartFileGeneration else {
+            generation == state.handledStartFileGeneration,
+            let expectedPlaylistEntryID = state.pendingWritePlaylistEntryID,
+            expectedPlaylistEntryID == state.handledStartFilePlaylistEntryID else {
         state.pendingWriteGeneration = nil
+        state.pendingWritePlaylistEntryID = nil
         return
       }
       state.pendingWriteGeneration = nil
-      // Keep START_FILE observation serialized through the write, so an event cannot arrive
-      // between validating the stop target and asking mpv to persist its resume state.
+      state.pendingWritePlaylistEntryID = nil
+      // Verify MPV still points at the item whose START_FILE was handled. The event reader can
+      // lag behind playlist auto-advance, so generation equality alone does not identify the
+      // entry whose resume state write-watch-later-config will save.
       mpv.performIfNotShutdown {
+        guard let playingPosition = mpv.getIntIfAvailable(MPVProperty.playlistPlayingPos),
+              playingPosition >= 0,
+              let activePlaylistEntryID = mpv.getIntIfAvailable(
+                MPVProperty.playlistNId(playingPosition)),
+              Int64(activePlaylistEntryID) == expectedPlaylistEntryID else {
+          log("Skipping watch-later write because MPV has advanced to a different playlist entry",
+              level: .verbose)
+          return
+        }
         if mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) {
           mpv.command(.writeWatchLaterConfig, level: .verbose)
         }
@@ -2537,11 +2566,14 @@ class PlayerCore: NSObject {
   /// was received.
   /// - Important: The event may be received after IINA has started to stop and shutdown the core. The event must be ignored if
   ///         the player is no longer active.
-  func fileStarted(path: String) {
+  func fileStarted(path: String, fileTransitionGeneration: UInt64? = nil) {
     clearPendingStopWatchLaterWrite()
     guard info.state.active else { return }
+    if let fileTransitionGeneration {
+      currentFileTransitionGeneration = fileTransitionGeneration
+    }
     log("File started")
-    airPlayAudio.fileStarted()
+    airPlayAudio.fileStarted(fileTransitionGeneration: fileTransitionGeneration)
 
     // Opening another file in the same window does not necessarily go through `stop()`, so abandon
     // a search that was waiting on the chooser for the previous file — its chooser is stale now.
@@ -2648,8 +2680,11 @@ class PlayerCore: NSObject {
   /// This function is called right after the file is loaded. Should load all meta info here.
   /// - Important: The event may be received after IINA has started to stop and shutdown the core. The event must be ignored if
   ///         the player is no longer active.
-  func fileLoaded() {
+  func fileLoaded(fileTransitionGeneration: UInt64? = nil) {
     guard info.state.active else { return }
+    if let fileTransitionGeneration {
+      currentFileTransitionGeneration = fileTransitionGeneration
+    }
     log("File loaded")
 
     // mpv may apply file-local configuration after the initial CLI properties
@@ -2755,6 +2790,7 @@ class PlayerCore: NSObject {
     Task { @MainActor in
       mainWindow.liveText.requestAnalysis()
     }
+    airPlayAudio.fileLoaded(fileTransitionGeneration: currentFileTransitionGeneration)
   }
 
   func fileEnded(_ dueToStopCommand: Bool) {
@@ -3317,7 +3353,6 @@ class PlayerCore: NSObject {
         mainWindow.toggleWindowFullScreen()
       }
     }
-    airPlayAudio.fileLoaded()
   }
 
   /// Synchronize the video position cached in the `info.videoPosition` property.

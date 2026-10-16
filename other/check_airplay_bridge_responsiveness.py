@@ -52,7 +52,14 @@ def route_lock_follows_ao_lock(body: str) -> bool:
 assert route_lock_follows_ao_lock(submission), (
     "a bridge submission must not hold the route lock while waiting for a direct AO write"
 )
-submitted = submission.split("let result = submission()", 1)[1]
+timing_submission = submission.split("if let timingOwnership {", 1)[1].split(
+    "} else {", 1
+)[0]
+assert "snapshot.fileTransitionGeneration == timingOwnership.fileTransitionGeneration" in timing_submission
+assert "return submission()" in timing_submission, (
+    "timing ownership must remain locked through the async setter enqueue"
+)
+submitted = submission.split("result = submission()", 1)[1]
 assert submitted.index("self.airPlayRouteOwnershipLock.unlock()") < submitted.index(
     "self.airPlayAudioOutputWriteLock.unlock()"
 ), "release submission locks in reverse acquisition order"
