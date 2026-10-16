@@ -1729,9 +1729,9 @@ class PlayerCore: NSObject {
     getSelectedTracks()
   }
 
-  func setSpeed(_ speed: Double) {
+  func setSpeed(_ speed: Double, osdMode: AirPlayTimingOSDMode = .automatic) {
     let speed = max(AppData.mpvMinPlaybackSpeed, speed)
-    airPlayAudio.noteUserSpeedRequest(speed)
+    airPlayAudio.noteUserSpeedRequest(speed, osdMode: osdMode)
     mpv.setDouble(MPVOption.PlaybackControl.speed, speed)
   }
 
@@ -1906,9 +1906,9 @@ class PlayerCore: NSObject {
     }
   }
 
-  func setAudioDelay(_ delay: Double) {
+  func setAudioDelay(_ delay: Double, osdMode: AirPlayTimingOSDMode = .automatic) {
     // While the AirPlay bridge carries the audio, mpv's delay also holds its sync correction.
-    airPlayAudio.noteUserAudioDelayRequest(delay)
+    airPlayAudio.noteUserAudioDelayRequest(delay, osdMode: osdMode)
     mpv.setDouble(MPVOption.Audio.audioDelay, delay + airPlayAudio.audioDelayCorrection)
   }
 
@@ -2561,6 +2561,7 @@ class PlayerCore: NSObject {
         if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
           mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
         }
+        guard mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) else { return }
         guard let playingPosition = mpv.getIntIfAvailable(MPVProperty.playlistPlayingPos),
               playingPosition >= 0,
               let activePlaylistEntryID = mpv.getIntIfAvailable(
@@ -2570,9 +2571,7 @@ class PlayerCore: NSObject {
               level: .verbose)
           return
         }
-        if mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) {
-          mpv.command(.writeWatchLaterConfig, level: .verbose)
-        }
+        mpv.command(.writeWatchLaterConfig, level: .verbose)
       }
     }
   }
@@ -2810,8 +2809,10 @@ class PlayerCore: NSObject {
     airPlayAudio.fileLoaded(fileTransitionGeneration: currentFileTransitionGeneration)
   }
 
-  func fileEnded(_ dueToStopCommand: Bool) {
-    airPlayAudio.fileEnded()
+  func fileEnded(_ dueToStopCommand: Bool, fileTransitionGeneration: UInt64?,
+                 playlistEntryID: Int64?) {
+    airPlayAudio.fileEnded(fileTransitionGeneration: fileTransitionGeneration,
+                           playlistEntryID: playlistEntryID)
     // if receive end-file when loading file, might be error
     // wait for idle
     if info.state == .loading || info.state == .starting {
@@ -3085,10 +3086,19 @@ class PlayerCore: NSObject {
     postNotification(.iinaSubScaleChanged)
   }
 
-  func speedChanged(_ speed: Double) {
+  func speedChanged(_ speed: Double, osdMode: AirPlayTimingOSDMode = .automatic) {
     guard info.state.active else { return }
     info.playSpeed = speed
-    sendOSD(.speed(speed))
+    switch osdMode {
+    case .none:
+      break
+    case .bar:
+      sendOSD(.speedBarOnly(speed))
+    case .messageAndBar:
+      sendOSD(.speedBar(speed))
+    case .automatic, .message:
+      sendOSD(.speed(speed))
+    }
     mainWindow.updateSpeedLabel(speed: speed)
     postNotification(.iinaSpeedChanged)
     NowPlayingInfoManager.shared.updateInfo()

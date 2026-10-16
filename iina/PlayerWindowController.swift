@@ -350,42 +350,101 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
     if let first = action.first, first.hasPrefix("{"), first.hasSuffix("}") {
       commandIndex += 1
     }
+    var osdMode = AirPlayTimingOSDMode.automatic
+    var expandsProperties = true
+    var asynchronous = false
     while commandIndex < action.count && commandPrefixes.contains(action[commandIndex]) {
+      switch action[commandIndex] {
+      case "no-osd": osdMode = .none
+      case "osd-bar": osdMode = .bar
+      case "osd-msg": osdMode = .message
+      case "osd-msg-bar": osdMode = .messageAndBar
+      case "osd-auto": osdMode = .automatic
+      case "expand-properties": expandsProperties = true
+      case "raw": expandsProperties = false
+      case "async": asynchronous = true
+      case "sync": asynchronous = false
+      default: break
+      }
       commandIndex += 1
     }
-    guard action.count - commandIndex == 3,
-          let value = Self.parseTimingOperand(action[commandIndex + 2]) else { return false }
+    guard action.count - commandIndex >= 2 else { return false }
     let command = action[commandIndex]
     let property = action[commandIndex + 1]
+    guard property == MPVOption.PlaybackControl.speed ||
+            property == MPVOption.Audio.audioDelay else { return false }
 
-    switch (command, property) {
-    case (MPVCommand.multiply.rawValue, MPVOption.PlaybackControl.speed):
-      player.airPlayAudio.multiplyUserSpeed(by: value)
-      return true
-    case (MPVCommand.set.rawValue, MPVOption.PlaybackControl.speed):
-      player.setSpeed(value)
-      return true
-    case (MPVCommand.add.rawValue, MPVOption.Audio.audioDelay):
-      player.airPlayAudio.adjustUserAudioDelay(by: value)
-      return true
-    case (MPVCommand.set.rawValue, MPVOption.Audio.audioDelay):
-      player.setAudioDelay(value)
-      return true
-    default:
-      return false
+    // Do not let an unsupported expression or timing command mutate the bridge's hold/correction
+    // value through MPV's raw command path. These forms can be added to the logical-value adapter
+    // explicitly when their MPV semantics are known.
+    let hasImplicitAdd = command == MPVCommand.add.rawValue &&
+      action.count - commandIndex == 2
+    let value: Double?
+    if hasImplicitAdd {
+      value = 1
+    } else if action.count - commandIndex == 3 {
+      value = Self.parseTimingOperand(action[commandIndex + 2],
+                                      expandingProperties: expandsProperties,
+                                      player: player)
+    } else {
+      value = nil
     }
+    guard [MPVCommand.set.rawValue, MPVCommand.add.rawValue,
+           MPVCommand.multiply.rawValue].contains(command),
+          (hasImplicitAdd || action.count - commandIndex == 3),
+          let value else {
+      player.log("Ignoring unsupported AirPlay timing key binding: \(action.joined(separator: " "))",
+                 level: .warning)
+      return true
+    }
+
+    let snapshot = player.mpv.airPlayPlaybackSnapshot
+    guard let playlistEntryID = snapshot.currentPlaylistEntryID else { return true }
+    let apply = { [weak self] in
+      guard let self,
+            self.player.mpv.isAirPlayPlaybackFileCurrent(
+              fileTransitionGeneration: snapshot.fileTransitionGeneration,
+              playlistEntryID: playlistEntryID) else { return }
+      switch (command, property) {
+      case (MPVCommand.set.rawValue, MPVOption.PlaybackControl.speed):
+        self.player.setSpeed(value, osdMode: osdMode)
+      case (MPVCommand.add.rawValue, MPVOption.PlaybackControl.speed):
+        self.player.airPlayAudio.adjustUserSpeed(by: value, osdMode: osdMode)
+      case (MPVCommand.multiply.rawValue, MPVOption.PlaybackControl.speed):
+        self.player.airPlayAudio.multiplyUserSpeed(by: value, osdMode: osdMode)
+      case (MPVCommand.set.rawValue, MPVOption.Audio.audioDelay):
+        self.player.setAudioDelay(value, osdMode: osdMode)
+      case (MPVCommand.add.rawValue, MPVOption.Audio.audioDelay):
+        self.player.airPlayAudio.adjustUserAudioDelay(by: value, osdMode: osdMode)
+      case (MPVCommand.multiply.rawValue, MPVOption.Audio.audioDelay):
+        self.player.airPlayAudio.multiplyUserAudioDelay(by: value, osdMode: osdMode)
+      default:
+        break
+      }
+    }
+    if asynchronous {
+      DispatchQueue.main.async(execute: apply)
+    } else {
+      apply()
+    }
+    return true
   }
 
-  private static func parseTimingOperand(_ operand: String) -> Double? {
+  private static func parseTimingOperand(_ operand: String, expandingProperties: Bool,
+                                         player: PlayerCore) -> Double? {
     if let value = Double(operand), value.isFinite { return value }
     let fraction = operand.split(separator: "/", omittingEmptySubsequences: false)
-    guard fraction.count == 2,
-          let numerator = Double(fraction[0]),
-          let denominator = Double(fraction[1]), denominator.isFinite, denominator != 0 else {
-      return nil
+    if fraction.count == 2,
+       let numerator = Double(fraction[0]),
+       let denominator = Double(fraction[1]), denominator.isFinite, denominator != 0 {
+      let value = numerator / denominator
+      if value.isFinite { return value }
     }
-    let value = numerator / denominator
-    return value.isFinite ? value : nil
+    guard expandingProperties, operand.hasPrefix("${"), operand.hasSuffix("}") else { return nil }
+    let property = String(operand.dropFirst(2).dropLast())
+    guard !property.isEmpty else { return nil }
+    return player.airPlayAudio.userTimingValue(forMPVProperty: property)
+      ?? player.mpv.getDoubleIfAvailable(property)
   }
 
   func abLoop() {
@@ -608,8 +667,15 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
     case .playbackSpeed:
       let min = 0.05
       let max = 4.0
-      let newSpeed = round(1000 * (player.info.playSpeed + (player.info.playSpeed * AppData.playbackSpeedMap[playbackSpeedScrollAmount] * delta)).clamped(to: min...max)) / 1000
-      player.setSpeed(newSpeed)
+      let relativeDelta = AppData.playbackSpeedMap[playbackSpeedScrollAmount] * delta
+      if player.airPlayAudio.isCarrying {
+        player.airPlayAudio.adjustUserSpeedForScroll(by: relativeDelta,
+                                                     minimum: min, maximum: max)
+      } else {
+        let newSpeed = round(1000 * (player.info.playSpeed +
+          (player.info.playSpeed * relativeDelta)).clamped(to: min...max)) / 1000
+        player.setSpeed(newSpeed)
+      }
     default:
       break
     }

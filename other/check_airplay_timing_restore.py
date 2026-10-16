@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the production AirPlay terminal timing-restore policy and drain barrier."""
+"""Exercise AirPlay timing restoration, delayed target mapping, and lifecycle guards."""
 
 from pathlib import Path
 import re
@@ -17,7 +17,7 @@ end = bridge_source.index("// MARK: - Bridge", start)
 helper_source = bridge_source[start:end]
 bridge = bridge_source.split("final class AirPlayAudioBridge", 1)[1]
 assert re.search(
-    r"timingRestorePlan\(\s*afterFailure: result,\s*whileStoppingOrQuitting: stoppingOrQuitting,\s*"
+    r"timingRestorePlan\(\s*afterFailure: result,\s*canRestoreSynchronously: request.expectedCurrentTimingValue != nil,\s*"
     r"hasNewerWriteQueued: hasNewerTimingWriteQueued\)",
     bridge,
 )
@@ -75,13 +75,15 @@ def check_restore_integration(bridge_text: str, controller_text: str) -> None:
     )
     assert "expectedFileTransitionGeneration: expectedFileTransitionGeneration" in release
     assert "expectedPlaylistEntryID: expectedPlaylistEntryID" in release
+    assert "allowsNoActivePlaylistEntry: allowsNoActivePlaylistEntry" in release
+    assert "let shouldRestoreTiming = !currentFileTimingReleaseStarted" in release
     assert release.count("enqueueMPVProperty(") >= 2
     stop_playback = section(
         bridge_text,
         "func stopPlayback()",
         "func whenMPVCommandsDrained(",
     )
-    assert "releaseFile(restoreTimingOnlyWhileStillOwned: true)" in stop_playback, (
+    assert "releaseFile()" in stop_playback, (
         "Stop and Quit timing restores must carry their current file identity"
     )
 
@@ -153,8 +155,8 @@ def check_restore_integration(bridge_text: str, controller_text: str) -> None:
         "if hasReceivedShutdownEvent || mpv == nil",
         "snapshot.fileTransitionGeneration == timingOwnership.fileTransitionGeneration",
         "snapshot.currentPlaylistEntryID == timingOwnership.playlistEntryID",
-        "livePlaylistEntryID == timingOwnership.playlistEntryID",
-        "abs(currentValue - timingOwnership.expectedValue) < 1e-9",
+        "timingOwnership.allowsNoActivePlaylistEntry",
+        "abs(currentValue - expectedValue) < 1e-9",
         "mpv_set_property(mpv, property, MPV_FORMAT_DOUBLE, &mutableValue)",
         "airPlaySnapshotCallLock.unlock()",
         "DispatchQueue.main.async { completion(result, wasSuperseded) }",
@@ -168,6 +170,12 @@ def check_restore_integration(bridge_text: str, controller_text: str) -> None:
 
 check_restore_integration(bridge_source, controller_source)
 
+controls_source = (ROOT / "iina/PlayerWindowController.swift").read_text()
+assert "MPVCommand.add.rawValue, MPVOption.PlaybackControl.speed" in controls_source
+assert "MPVCommand.multiply.rawValue, MPVOption.Audio.audioDelay" in controls_source
+assert "adjustUserSpeedForScroll(by: relativeDelta" in controls_source
+assert "endFile.playlist_entry_id" in controller_source
+
 harness = r"""
 import Foundation
 
@@ -180,18 +188,32 @@ func expect(_ condition: Bool, _ message: String) {
   }
 }
 
+var requestedAudioDelays = AirPlayUserAudioDelayTargets()
+requestedAudioDelays.append(userValue: 0.2, correction: 0.1, osdMode: .none)
+let firstDelayTarget = requestedAudioDelays.target(forMPVValue: 0.3)
+expect(firstDelayTarget?.userValue == 0.2,
+       "a delayed raw audio-delay event must use its request-time correction")
+expect(requestedAudioDelays.complete(firstDelayTarget!) == AirPlayTimingOSDMode.none,
+       "the matching no-OSD delay request must retain its presentation mode")
+requestedAudioDelays.append(userValue: 0.25, correction: 0.2, osdMode: .bar)
+let secondDelayTarget = requestedAudioDelays.target(forMPVValue: 0.45)
+expect(secondDelayTarget?.userValue == 0.25,
+       "a later correction must not change the logical delay target")
+expect(requestedAudioDelays.complete(secondDelayTarget!) == .bar,
+       "audio-delay presentation mode must follow the matched target")
+
 let speed = AirPlayTimingRestorePlan.afterFailure(
-  property: "speed", value: 0.01, result: -11, whileStoppingOrQuitting: true)
+  property: "speed", value: 0.01, result: -11, canRestoreSynchronously: true)
 expect(speed == AirPlayTimingRestorePlan(property: "speed", value: 0.01),
        "terminal speed restore must preserve its requested value")
 
 let delay = AirPlayTimingRestorePlan.afterFailure(
-  property: "audio-delay", value: 0.25, result: -11, whileStoppingOrQuitting: true)
+  property: "audio-delay", value: 0.25, result: -11, canRestoreSynchronously: true)
 expect(delay == AirPlayTimingRestorePlan(property: "audio-delay", value: 0.25),
        "terminal delay restore must preserve its requested value")
 expect(AirPlayTimingRestorePlan.afterFailure(
   property: "speed", value: 0.01, result: -11,
-  whileStoppingOrQuitting: true, hasNewerWriteQueued: true) == nil,
+  canRestoreSynchronously: true, hasNewerWriteQueued: true) == nil,
   "a failed hold write must defer to a newer queued speed restore")
 expect(AirPlayAudioOutputRestorePolicy.shouldEnqueue(
   "A", pendingOutputs: ["A", "B"], observedOutput: "A", forceReload: false),
@@ -206,16 +228,16 @@ expect(AirPlayAudioOutputRestorePolicy.shouldEnqueue(
   "A", pendingOutputs: [], observedOutput: "A", forceReload: true),
   "a forced reload must still enqueue when the output name matches")
 expect(AirPlayTimingRestorePlan.afterFailure(
-  property: "speed", value: 1, result: 0, whileStoppingOrQuitting: true) == nil,
+  property: "speed", value: 1, result: 0, canRestoreSynchronously: true) == nil,
   "successful async writes must not schedule fallback")
 expect(AirPlayTimingRestorePlan.afterFailure(
-  property: "speed", value: 1, result: -11, whileStoppingOrQuitting: false) == nil,
-  "ordinary playback failures must not schedule terminal fallback")
+  property: "speed", value: 1, result: -11, canRestoreSynchronously: false) == nil,
+  "non-final timing writes must not schedule a restore fallback")
 expect(AirPlayTimingRestorePlan.afterFailure(
-  property: "volume", value: 1, result: -11, whileStoppingOrQuitting: true) == nil,
+  property: "volume", value: 1, result: -11, canRestoreSynchronously: true) == nil,
   "unrelated properties must not use timing fallback")
 expect(AirPlayTimingRestorePlan.afterFailure(
-  property: "speed", value: .infinity, result: -11, whileStoppingOrQuitting: true) == nil,
+  property: "speed", value: .infinity, result: -11, canRestoreSynchronously: true) == nil,
   "non-finite timing values must not be restored")
 
 var delayedWrites = AirPlayInternalWrites(observedValue: 1)
@@ -288,13 +310,13 @@ if result.returncode != 0:
     raise SystemExit(result.stderr or result.stdout or "AirPlay timing restore checks failed")
 
 mutant = helper_source.replace(
-    "guard whileStoppingOrQuitting, result < 0, value.isFinite,",
+    "guard canRestoreSynchronously, result < 0, value.isFinite,",
     "guard result < 0, value.isFinite,",
     1,
 )
 assert mutant != helper_source, "negative-control mutation did not match the production policy"
 negative_control = run_helper(mutant)
-assert negative_control.returncode != 0, "negative control failed to catch a missing stop guard"
+assert negative_control.returncode != 0, "negative control failed to catch a missing restore guard"
 print(result.stdout, end="")
 print("AirPlay timing restore negative control passed")
 

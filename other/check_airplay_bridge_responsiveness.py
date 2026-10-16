@@ -53,13 +53,13 @@ assert route_lock_follows_ao_lock(submission), (
     "a bridge submission must not hold the route lock while waiting for a direct AO write"
 )
 timing_submission = submission.split("if let timingOwnership {", 1)[1].split(
-    "} else {", 1
+    "      } else {\n        result = submission()", 1
 )[0]
 assert "snapshot.fileTransitionGeneration == timingOwnership.fileTransitionGeneration" in timing_submission
 assert "snapshot.currentPlaylistEntryID == timingOwnership.playlistEntryID" in timing_submission
-assert "livePlaylistEntryID == timingOwnership.playlistEntryID" in timing_submission
+assert "ownsLiveEntry" in timing_submission
 assert "liveTimingValue" in timing_submission
-assert "abs(liveTimingValue - timingOwnership.expectedValue) < 1e-9" in timing_submission
+assert "currentValue.map" in timing_submission and "liveTimingValue.map" in timing_submission
 assert "return submission()" in timing_submission, (
     "timing ownership must remain locked through live identity/timing checks and async enqueue"
 )
@@ -97,10 +97,13 @@ assert not route_lock_follows_ao_lock(mutated_submission), (
 
 bridge = bridge_source.split("final class AirPlayAudioBridge", 1)[1]
 for snippet in (
-    "func multiplyUserSpeed(by factor: Double)",
-    "func adjustUserAudioDelay(by delta: Double)",
+    "func multiplyUserSpeed(by factor: Double, osdMode:",
+    "func adjustUserSpeed(by delta: Double, osdMode:",
+    "func adjustUserAudioDelay(by delta: Double, osdMode:",
+    "func multiplyUserAudioDelay(by factor: Double, osdMode:",
     "pendingUserSpeedTargets",
     "pendingUserAudioDelayTargets",
+    "mappedAudioDelayTarget",
     "func userSpeedChanged(_ speed: Double)",
     "func userAudioDelayChanged(_ delay: Double)",
 ):
@@ -113,8 +116,11 @@ key_handler = key_source.split("private func handleAirPlayTimingKeyBinding", 1)[
 for prefix in ("no-osd", "osd-bar", "osd-msg", "osd-auto", "async", "sync"):
     assert f'"{prefix}"' in key_handler, f"prefixed binding {prefix} must be recognized"
 assert "commandPrefixes.contains(action[commandIndex])" in key_handler
-assert "player.airPlayAudio.multiplyUserSpeed(by: value)" in key_handler
-assert "player.airPlayAudio.adjustUserAudioDelay(by: value)" in key_handler
+assert "self.player.airPlayAudio.adjustUserSpeed(by: value, osdMode: osdMode)" in key_handler
+assert "self.player.airPlayAudio.multiplyUserSpeed(by: value, osdMode: osdMode)" in key_handler
+assert "self.player.airPlayAudio.multiplyUserAudioDelay(by: value, osdMode: osdMode)" in key_handler
+assert "self.player.mpv.isAirPlayPlaybackFileCurrent(" in key_handler
+assert "Ignoring unsupported AirPlay timing key binding" in key_handler
 
 menu_source = (ROOT / "iina/MainMenuActions.swift").read_text()
 assert "player.airPlayAudio.multiplyUserSpeed(by: multiplier)" in menu_source
