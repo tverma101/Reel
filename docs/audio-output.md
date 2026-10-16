@@ -7,8 +7,8 @@ the picture stays on the Mac.
 
 Click **AirPlay Audio** in the on-screen controller and choose a speaker in Apple's list. Only Reel's
 audio moves; other apps and the Mac's default output are unchanged. Choose the Mac in the same list
-to bring Reel's audio back. The OSD confirms the change with "Reel audio: <speaker>" or
-"Reel audio: this Mac".
+to bring Reel's audio back. The OSD reports speaker selection or disconnection and explains when
+playback falls back to the Mac. These notices remain available while a newly selected file loads.
 
 macOS routes one app's audio only through an AVPlayer bound to an
 [AVRoutePickerView](https://developer.apple.com/documentation/avkit/avroutepickerview), and AVPlayer

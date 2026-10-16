@@ -701,6 +701,7 @@ final class AirPlayAudioBridge: NSObject {
   /// The picker sends this player to a speaker other than the Mac's (or the local test is on).
   private var routeActive = false
   private var routeNames: [String] = []
+  private var pendingRouteNotice: (isActive: Bool, names: [String])?
   private var routeDescription = ""
   /// This file's audio could not be bridged, so mpv plays it on the Mac until the next file.
   private var bridgeFailedForFile = false
@@ -891,24 +892,37 @@ final class AirPlayAudioBridge: NSObject {
       // A new choice deserves a new attempt.
       bridgeFailedForFile = false
     }
-    guard let player, player.info.state.loaded else {
+    guard let player else {
       reconcile()
       return
     }
-    if active {
+    guard player.info.state.loaded else {
+      pendingRouteNotice = (active, routeNames)
+      reconcile()
+      return
+    }
+    pendingRouteNotice = nil
+    sendRouteNotice(isActive: active, names: routeNames, to: player)
+    reconcile()
+  }
+
+  private func sendRouteNotice(isActive: Bool, names: [String], to player: PlayerCore) {
+    // Route changes are system events, so keep their notices visible during post-load OSD suppression.
+    if isActive {
       // This reports the picker selection, not successful audio playback; engage queues async MPV work.
-      let name = routeNames.isEmpty ? NSLocalizedString("osc_toolbar.airplay_output.speaker", value: "the AirPlay speaker",
-                                                        comment: "Unnamed AirPlay speaker")
-                                    : ListFormatter.localizedString(byJoining: routeNames)
+      let name = names.isEmpty ? NSLocalizedString("osc_toolbar.airplay_output.speaker", value: "the AirPlay speaker",
+                                                   comment: "Unnamed AirPlay speaker")
+                               : ListFormatter.localizedString(byJoining: names)
       player.sendOSD(.custom(String(format: NSLocalizedString("osc_toolbar.airplay_output.selected",
                                                               value: "AirPlay speaker selected: %@",
-                                                              comment: "The AirPlay speaker selected in the picker"), name)))
-    } else if wasActive {
+                                                              comment: "The AirPlay speaker selected in the picker"), name)),
+                     external: true)
+    } else {
       player.sendOSD(.custom(NSLocalizedString("osc_toolbar.airplay_output.disconnected",
                                                value: "AirPlay speaker disconnected",
-                                               comment: "The selected AirPlay speaker disconnected")))
+                                               comment: "The selected AirPlay speaker disconnected")),
+                     external: true)
     }
-    reconcile()
   }
 
   // MARK: Engaging
@@ -1173,10 +1187,12 @@ final class AirPlayAudioBridge: NSObject {
     log("playing this file on the Mac: \(reason)", level: .warning)
     bridgeFailedForFile = true
     reconcile()
+    // AVPlayer may report fallback during the post-load OSD suppression window.
     player?.sendOSD(.custom(message ?? NSLocalizedString(
       "osc_toolbar.airplay_output.failed",
       value: "AirPlay stopped playing this file's audio, so it plays on this Mac.",
-      comment: "The AirPlay bridge gave up on the current file")))
+      comment: "The AirPlay bridge gave up on the current file")),
+                     external: true)
   }
 
   // MARK: Holding the picture for the speaker
@@ -1479,6 +1495,10 @@ final class AirPlayAudioBridge: NSObject {
   func fileLoaded() {
     if UserDefaults.standard.bool(forKey: Self.localTestKey) && !routeActive {
       routeMayHaveChanged()
+    }
+    if let notice = pendingRouteNotice, let player, player.info.state.loaded {
+      pendingRouteNotice = nil
+      sendRouteNotice(isActive: notice.isActive, names: notice.names, to: player)
     }
     reconcile()
   }

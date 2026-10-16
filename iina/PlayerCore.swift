@@ -1355,8 +1355,10 @@ class PlayerCore: NSObject {
       guard let self, self.info.state == .stopping else { return }
       if self.shouldWriteWatchLaterAfterStopDrain {
         self.shouldWriteWatchLaterAfterStopDrain = false
-        if self.mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) {
-          self.mpv.commandIfNotShutdown(.writeWatchLaterConfig, level: .verbose)
+        self.mpv.performIfNotShutdown {
+          if self.mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) {
+            self.mpv.command(.writeWatchLaterConfig, level: .verbose)
+          }
         }
       }
       self.mpv.commandIfNotShutdown(.stop, level: .verbose)
@@ -2477,6 +2479,13 @@ class PlayerCore: NSObject {
   // data used by these methods is read by the UI using the main thread. Standardizing on using the
   // main thread avoids thread data races without the need for locks. Also a few of the methods call
   // AppKit methods that require use of the main thread.
+
+  func fileStartObservedWhileStopping() {
+    guard info.state == .stopping else { return }
+    // MPV may auto-advance while Stop waits for AirPlay commands; don't write the old item's state
+    // against the new current item in the drain callback.
+    shouldWriteWatchLaterAfterStopDrain = false
+  }
 
   /// A [MPV_EVENT_START_FILE](https://mpv.io/manual/stable/#command-interface-mpv-event-start-file)
   /// was received.

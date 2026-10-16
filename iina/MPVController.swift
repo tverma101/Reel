@@ -2622,8 +2622,11 @@ class MPVController: NSObject {
       }
       guard let path = getString(MPVProperty.path) else { break }
       DispatchQueue.main.async { [self] in
-        guard player.info.state != .stopping,
-              player.info.state != .shuttingDown, player.info.state != .shutDown else { return }
+        guard player.info.state != .shuttingDown, player.info.state != .shutDown else { return }
+        if player.info.state == .stopping {
+          player.fileStartObservedWhileStopping()
+          return
+        }
         player.info.state = .starting
         player.fileStarted(path: path)
       }
