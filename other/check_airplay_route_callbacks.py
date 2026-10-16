@@ -23,9 +23,20 @@ def method(marker):
 
 OBSERVE = method("private func observeOutputContext()")
 CLOSE = method("func routePickerViewDidEndPresentingRoutes(")
+FEEDER = method("private final class AirPlayPlayheadFeeder:")
+assert ".currentTime()" not in SOURCE.split("// MARK: - Bridge", 1)[1], (
+    "route transitions must not synchronously read the AVPlayer clock from AppKit"
+)
 
 HARNESS = r'''
 import Foundation
+import AVFoundation
+
+final class AirPlayPCMResourceLoader {
+  var feeds: [Double] = []
+  func setPlayhead(seconds: Double) { feeds.append(seconds) }
+}
+__FEEDER__
 
 final class PlayerStub: NSObject {
   let context = NSObject()
@@ -54,6 +65,23 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
     exit(1)
   }
 }
+private let feeder = AirPlayPlayheadFeeder()
+let loader = AirPlayPCMResourceLoader()
+feeder.attach(loader)
+check(feeder.position == nil, "a new item inherited a stale clock sample")
+for index in 0..<100 {
+  feeder.update(CMTime(value: Int64(index), timescale: 100))
+}
+check(feeder.position == 0.99, "cached clock did not retain the latest observer sample")
+check(loader.feeds.count == 4, "fine clock samples caused excess decoder updates")
+feeder.update(CMTime(seconds: 0.1, preferredTimescale: 100))
+check(feeder.position == 0.1 && loader.feeds.last == 0.1, "a backward seek did not update the decoder")
+feeder.update(.invalid)
+check(feeder.position == nil, "an invalid clock retained stale playback progress")
+feeder.attach(nil)
+feeder.update(CMTime(seconds: 50, preferredTimescale: 100))
+check(feeder.position == nil, "an old callback repopulated the detached clock")
+
 let bridge = Bridge()
 bridge.observe()
 bridge.observe()
@@ -84,10 +112,12 @@ def run(observe, close):
     with tempfile.TemporaryDirectory(prefix="reel-route-callbacks-") as folder:
         folder = Path(folder)
         swift = folder / "main.swift"
-        swift.write_text(HARNESS.replace("__OBSERVE__", observe).replace("__CLOSE__", close))
+        swift.write_text(HARNESS.replace("__OBSERVE__", observe).replace("__CLOSE__", close)
+                         .replace("__FEEDER__", FEEDER))
         binary = folder / "check"
-        subprocess.run(["swiftc", str(swift), "-o", str(binary)], check=True,
-                       capture_output=True, text=True)
+        compiled = subprocess.run(["swiftc", str(swift), "-o", str(binary)],
+                                  capture_output=True, text=True)
+        assert compiled.returncode == 0, compiled.stdout + compiled.stderr
         return subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
 
 

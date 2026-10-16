@@ -57,6 +57,9 @@ Maintenance note: route notifications and the picker-close callback defer reconc
 main-queue turn, so AVFoundation never waits for route handling inside its own notification. The
 bridge caches its single AVPlayer's output context and does not query private buffered-playback
 state for diagnostics; re-reading the player's context while closing the picker can deadlock AppKit.
+Clock reads also use the time observer's cached position, including during disconnect cleanup:
+`AVPlayerItem.currentTime()` can block on AVFoundation's route teardown. The observer samples at
+10 ms intervals while decoder playhead updates remain throttled to a quarter second.
 Bridge timers must read the event-fed mpv snapshot rather than call synchronous
 libmpv getters. Snapshot requests and AirPlay command submissions run on a dedicated serial queue
 because libmpv serializes its client API through a shared core lock; AppKit does not wait for those

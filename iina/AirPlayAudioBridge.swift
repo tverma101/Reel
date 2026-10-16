@@ -426,19 +426,37 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
 private final class AirPlayPlayheadFeeder: @unchecked Sendable {
   private let lock = NSLock()
   private weak var loader: AirPlayPCMResourceLoader?
+  private var observedPosition: Double?
+  private var lastFedPosition: Double?
+
+  /// Read the observer's last sample without entering AVFoundation during a route transition.
+  var position: Double? {
+    lock.lock(); defer { lock.unlock() }
+    return observedPosition
+  }
 
   func attach(_ loader: AirPlayPCMResourceLoader?) {
     lock.lock(); defer { lock.unlock() }
     self.loader = loader
+    observedPosition = nil
+    lastFedPosition = nil
   }
 
   func update(_ time: CMTime) {
     let seconds = time.seconds
-    guard seconds.isFinite else { return }
     lock.lock()
-    let loader = self.loader
+    guard seconds.isFinite, seconds >= 0, let loader else {
+      observedPosition = nil
+      lastFedPosition = nil
+      lock.unlock()
+      return
+    }
+    observedPosition = seconds
+    // The sync clock needs fine samples, but the decoder only needs a quarter-second feeder.
+    let shouldFeed = lastFedPosition.map { abs(seconds - $0) >= 0.25 } ?? true
+    if shouldFeed { lastFedPosition = seconds }
     lock.unlock()
-    loader?.setPlayhead(seconds: seconds)
+    if shouldFeed { loader.setPlayhead(seconds: seconds) }
   }
 }
 
@@ -894,7 +912,7 @@ final class AirPlayAudioBridge: NSObject {
 
   /// The media time of the sound being heard.
   var audiblePosition: Double? {
-    guard isCarrying, let avPlayer, let seconds = Self.seconds(avPlayer.currentTime()) else { return nil }
+    guard isCarrying, let seconds = playheadFeeder.position else { return nil }
     return max(0, seconds - latencyCompensation)
   }
 
@@ -954,7 +972,7 @@ final class AirPlayAudioBridge: NSObject {
     }
     let feeder = playheadFeeder
     playheadObserver = avPlayer.addPeriodicTimeObserver(
-      forInterval: CMTime(value: 1, timescale: 4), queue: playheadQueue
+      forInterval: CMTime(value: 1, timescale: 100), queue: playheadQueue
     ) { [weak feeder] time in
       feeder?.update(time)
     }
@@ -1399,11 +1417,11 @@ final class AirPlayAudioBridge: NSObject {
     let videoTime = mpv.airPlayPlaybackSnapshot.timePosition ?? 0
     let target = max(0, videoTime - userAudioDelay)
     loader?.setPlayhead(seconds: target)
-    let heard = Self.seconds(avPlayer.currentTime())
+    let heard = playheadFeeder.position
     let gap = heard.map { abs($0 - target) } ?? .infinity
     let play: () -> Void = { [weak self] in
       guard let self, generation == self.holdGeneration, self.holding else { return }
-      self.speakerClock.reset(position: Self.seconds(avPlayer.currentTime()))
+      self.speakerClock.reset(position: self.playheadFeeder.position)
       avPlayer.rate = Float(self.userSpeed)
     }
     log("\(holding ? "holding" : "aligning") for \(holdReason): picture \(String(format: "%.3f", videoTime)), speaker \(heard.map { String(format: "%.3f", $0) } ?? "none"), target \(String(format: "%.3f", target))")
@@ -1428,7 +1446,7 @@ final class AirPlayAudioBridge: NSObject {
     }
     let videoTime = mpv.airPlayPlaybackSnapshot.timePosition
     let now = Date()
-    let clockPosition = Self.seconds(avPlayer.currentTime())
+    let clockPosition = playheadFeeder.position
     if avPlayer.timeControlStatus == .playing {
       speakerClock.observe(position: clockPosition, at: now,
                            epsilon: Self.audioClockMotionEpsilon)
@@ -1468,7 +1486,7 @@ final class AirPlayAudioBridge: NSObject {
     holding = false
     stopHoldTimer()
     setHoldSpeed(false)
-    speakerClock.markBlocked(position: Self.seconds(avPlayer?.currentTime() ?? .invalid))
+    speakerClock.markBlocked(position: playheadFeeder.position)
     resetAudioClockMotionTracking()
   }
 
@@ -1522,7 +1540,7 @@ final class AirPlayAudioBridge: NSObject {
   private func tick() {
     guard isCarrying, let player, player.info.state.loaded, let mpv = player.mpv, let avPlayer else { return }
     let snapshot = mpv.airPlayPlaybackSnapshot
-    let clockPosition = Self.seconds(avPlayer.currentTime())
+    let clockPosition = playheadFeeder.position
     guard !holding, snapshot.isPaused == false else {
       if waitingForMPVAudio { audioStartupClock.markBlocked() }
       driftSamples.removeAll()
@@ -1655,7 +1673,7 @@ final class AirPlayAudioBridge: NSObject {
     case .playing: status = "playing"
     @unknown default: status = "unknown"
     }
-    log("speaker \(status) at \(Self.seconds(avPlayer.currentTime()).map { String(format: "%.3f", $0) } ?? "none")", level: .verbose)
+    log("speaker \(status) at \(playheadFeeder.position.map { String(format: "%.3f", $0) } ?? "none")", level: .verbose)
   }
 
   // MARK: PlayerCore and MPVController hooks
@@ -3003,10 +3021,6 @@ final class AirPlayAudioBridge: NSObject {
     }
   }
 
-  private static func seconds(_ time: CMTime) -> Double? {
-    let value = CMTimeGetSeconds(time)
-    return value.isFinite && value >= 0 ? value : nil
-  }
 }
 
 extension AirPlayAudioBridge: AVRoutePickerViewDelegate {
