@@ -1311,16 +1311,23 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   private func audioSelection() -> AudioSelection {
-    guard let player, let aid = player.info.aid, aid > 0 else { return .noAudio }
+    guard let player, let mpv = player.mpv else { return .pending }
+    let snapshot = mpv.airPlayPlaybackSnapshot
+    // Property callbacks can reach AppKit after START_FILE advanced the MPV snapshot but before
+    // PlayerCore received that boundary. Its URL/track list still describe the previous file.
+    // Keep the route pending instead of tearing down and reloading the AO during audio startup.
+    guard currentFileTransitionGeneration == snapshot.fileTransitionGeneration,
+          currentPlaylistEntryID == snapshot.currentPlaylistEntryID else { return .pending }
+    guard let aid = player.info.aid, aid > 0 else { return .noAudio }
     guard let track = player.info.currentTrack(.audio) else {
-      return .unsupported("the selected audio track is not in the track list")
+      // aid and track-list are separate events, including when a track is changed mid-file.
+      return .pending
     }
     guard let streamIndex = track.ffIndex, streamIndex >= 0 else {
       return .unsupported("the audio track has no FFmpeg stream index")
     }
     // mpv's clock starts at each file's start time as its demuxer reports it, which differs from
     // FFmpeg's for Matroska and MP4; external files are rebased on their own start time.
-    let snapshot = player.mpv.airPlayPlaybackSnapshot
     guard let rebased = snapshot.rebaseStartTime else { return .pending }
     if track.isExternal {
       guard let file = track.externalFilename, !file.isEmpty else {

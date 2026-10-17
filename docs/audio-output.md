@@ -68,6 +68,11 @@ Seeks pause the speaker until a fresh mpv position arrives after playback restar
 replies and AVPlayer time-observer samples from before that seek are discarded before realignment.
 User seeks and backward automatic realignments recreate the WAV item on the same routed player;
 buffered AirPlay can otherwise leave a backward seek on the existing item pending until the timeout.
+File selection waits until the MPV snapshot and AppKit agree on the file generation and playlist
+entry. A selected track temporarily absent from the separate track-list update remains pending.
+These loading windows must not trigger a local-output restore and AirPlay re-engagement: reloading
+mpv's audio output during startup can strand the playback clock. The production selector regression
+is `python3 other/check_airplay_file_transition.py`.
 Bridge timers must read the event-fed mpv snapshot rather than call synchronous
 libmpv getters. Snapshot requests and AirPlay command submissions run on a dedicated serial queue
 because libmpv serializes its client API through a shared core lock; AppKit does not wait for those
