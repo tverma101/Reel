@@ -1439,6 +1439,12 @@ final class AirPlayAudioBridge: NSObject {
     loader?.setPlayhead(seconds: target)
     let heard = playheadFeeder.position
     let gap = heard.map { abs($0 - target) } ?? .infinity
+    if let heard, heard > target + 0.25, let selection = itemSelection {
+      // AirPlay's buffered item can also refuse a backward seek during automatic resync after
+      // pause/resume. Use the same fresh-stream path as a user seek before changing its rate.
+      replaceItem(with: selection)
+      return
+    }
     let play: () -> Void = { [weak self] in
       guard let self, generation == self.holdGeneration, self.holding else { return }
       self.speakerClock.reset(position: self.playheadFeeder.position)
