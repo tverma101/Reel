@@ -23,7 +23,10 @@ checked-out commit, version, build number, and Xcode configuration; the installe
 rejects stale metadata, non-Release products, downgrades, reused build numbers for a new commit,
 and commits that are not descendants of the installed build. Close every Reel copy before
 installing. Install and repair serialize through a private lock next to `/Applications/Reel.app`;
-they also take the same private
+after exchanging the app, a root-directory timestamp update by macOS permits one fresh signature
+check and full inventory scan. Changes to identity, content metadata, descendants, or a second
+unstable scan still fail and restore the previous app.
+They also take the same private
 launch-transition lock under `~/Library/Caches` that the Desktop command holds through its final
 bundle verification, profile migration, LaunchServices request, and bounded startup check. A
 durable `~/Library/Caches/.reel-launch-handoff.json` record is published before the open

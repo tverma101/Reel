@@ -1944,5 +1944,54 @@ with module.installation_lock(Path(sys.argv[2])):
             self.assertTrue(restored_plugin.is_dir())
 
 
+class InstalledMetadataSettlementTests(unittest.TestCase):
+    def test_root_timestamp_change_restarts_full_inventory_and_signature_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory)
+            error = RuntimeError(f"Bundle entry changed during extended-attribute inspection: {app}")
+            calls = 0
+            def scan_with_timestamp_update(_):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    info = app.stat()
+                    os.utime(app, ns=(info.st_atime_ns, info.st_mtime_ns))
+                    raise error
+                return {"verified": True}
+            with mock.patch.object(manage, "bundle_inventory", side_effect=scan_with_timestamp_update) as scan, \
+                    mock.patch.object(manage, "run") as run:
+                self.assertEqual(manage.installed_bundle_inventory(app), {"verified": True})
+            self.assertEqual(scan.call_count, 2)
+            run.assert_called_once_with("/usr/bin/codesign", "--verify", "--deep", "--strict", str(app))
+
+    def test_second_root_change_still_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory)
+            error = RuntimeError(f"Bundle entry changed during extended-attribute inspection: {app}")
+            def scan_with_timestamp_update(_):
+                info = app.stat()
+                os.utime(app, ns=(info.st_atime_ns, info.st_mtime_ns))
+                raise error
+            with mock.patch.object(manage, "bundle_inventory", side_effect=scan_with_timestamp_update) as scan, \
+                    mock.patch.object(manage, "run"):
+                with self.assertRaises(RuntimeError):
+                    manage.installed_bundle_inventory(app)
+            self.assertEqual(scan.call_count, 2)
+
+    def test_content_or_identity_mutation_is_not_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory)
+            error = RuntimeError(f"Bundle entry changed during extended-attribute inspection: {app}")
+            def mutate(_):
+                (app / "unexpected").write_text("mutation")
+                raise error
+            with mock.patch.object(manage, "bundle_inventory", side_effect=mutate) as scan, \
+                    mock.patch.object(manage, "run") as run:
+                with self.assertRaises(RuntimeError):
+                    manage.installed_bundle_inventory(app)
+            self.assertEqual(scan.call_count, 1)
+            run.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

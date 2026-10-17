@@ -2682,6 +2682,30 @@ def install(source, support, signing_identity=DEFAULT_SIGNING_IDENTITY):
         return _install_locked(source, support, signing_identity)
 
 
+def installed_bundle_inventory(app):
+    """Recheck a root-only ctime change after the atomic application exchange once."""
+    app = Path(app)
+    before = app.lstat()
+    try:
+        return bundle_inventory(app)
+    except RuntimeError as error:
+        # macOS may update application metadata asynchronously at the canonical path. Do not
+        # relax any inventory comparison: restart the whole scan, only for a ctime-only root
+        # change, and verify the signature again. A second change still triggers rollback.
+        if str(error) != f"Bundle entry changed during extended-attribute inspection: {app}":
+            raise
+        after = app.lstat()
+        def unchanged_identity(info):
+            return (*stable_file_identity(info)[:-1], info.st_uid, info.st_gid,
+                    getattr(info, "st_flags", 0))
+        if (unchanged_identity(before) != unchanged_identity(after)
+                or before.st_ctime_ns == after.st_ctime_ns):
+            raise
+        run("/usr/bin/codesign", "--verify", "--deep", "--strict", str(app))
+        print("Rechecking installed bundle after a root metadata timestamp update.", flush=True)
+        return bundle_inventory(app)
+
+
 def _install_locked(source, support, signing_identity=DEFAULT_SIGNING_IDENTITY):
     ensure_clean_checkout()
     source = Path(source).expanduser()
@@ -2751,7 +2775,7 @@ def _install_locked(source, support, signing_identity=DEFAULT_SIGNING_IDENTITY):
                 fsync_directory(INSTALLED.parent)
             run("/usr/bin/codesign", "--verify", "--deep", "--strict", str(INSTALLED))
             installed_info = identity(INSTALLED)
-            installed_inventory = bundle_inventory(INSTALLED)
+            installed_inventory = installed_bundle_inventory(INSTALLED)
             installed_executable_hash, _ = bundle_executable_identity(
                 INSTALLED, installed_inventory, installed_info,
             )
