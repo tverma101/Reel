@@ -917,6 +917,7 @@ final class AirPlayAudioBridge: NSObject {
   private var waitingForMPVAudioClock = false
   private var waitingForSeekSnapshot = false
   private var seekSnapshotStartedAt: Date?
+  private var rebuildItemAfterSeek = false
   private var speakerClock = AirPlaySpeakerClock()
 
   /// mpv's own audio output is off; the hidden AVPlayer is what can be heard.
@@ -1293,6 +1294,7 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   private func replaceItem(with selection: Selection?) {
+    rebuildItemAfterSeek = false
     let hadItem = itemSelection != nil
     if selection == nil {
       restoreTimingForCurrentFile(allowsNoActivePlaylistEntry: true)
@@ -1564,7 +1566,7 @@ final class AirPlayAudioBridge: NSObject {
     let clockPosition = playheadFeeder.position
     if player.info.isSeeking { return }
     if waitingForSeekSnapshot {
-      guard snapshot.timePosition != nil, snapshot.audioPTS != nil else {
+      guard snapshot.timePosition != nil else {
         if let seekSnapshotStartedAt, Date().timeIntervalSince(seekSnapshotStartedAt) > Self.holdTimeout {
           failForFile("mpv did not supply a fresh playback clock after seeking")
         }
@@ -1572,6 +1574,12 @@ final class AirPlayAudioBridge: NSObject {
       }
       waitingForSeekSnapshot = false
       seekSnapshotStartedAt = nil
+      if rebuildItemAfterSeek, let selection = itemSelection {
+        // Buffered AirPlay can leave a backward seek pending on the existing WAV item. Start a
+        // fresh stream on the same routed player, then align it using the new picture position.
+        replaceItem(with: selection)
+        return
+      }
       requestHold("seek", realign: true)
       return
     }
@@ -1763,6 +1771,7 @@ final class AirPlayAudioBridge: NSObject {
   func playbackSeekStarted() {
     guard isCarrying else { return }
     cancelHold()
+    rebuildItemAfterSeek = true
     waitingForSeekSnapshot = true
     seekSnapshotStartedAt = Date()
     avPlayer?.pause()
