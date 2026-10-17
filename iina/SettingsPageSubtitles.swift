@@ -151,6 +151,16 @@ class SettingsPageSubtitles: SettingsPage {
           .image(name: "server.rack")
           .withHelpLink("https://subdl.com/panel/api")
           .withDetailView(subtitleSourceView)
+        // The same `subLang` preference mpv uses for subtitle tracks. It is listed here because it
+        // is what orders and preselects search results, and what lets an exact match in this
+        // language be loaded without asking.
+        SettingsItem.General(title: .text_PreferredLanguage)
+          .image(name: "character.book.closed")
+          .withDetailView(
+            SettingsAccessory.LanguageSelector()
+              .bind(to: .subLang)
+              .hasDescription()
+          )
         SettingsItem.Switch()
           .image(name: ["text.magnifyingglass", "magnifyingglass"])
           .bindTo(.autoSearchOnlineSub)
@@ -170,13 +180,14 @@ class SettingsPageSubtitles: SettingsPage {
   private func sectionOther() -> SettingsSection {
     return section {
       SettingsList(title: .text_Other) {
-        SettingsItem.General(title: .text_PreferredLanguage)
-          .image(name: "character.book.closed")
-          .withDetailView(
-            SettingsAccessory.LanguageSelector()
-              .bind(to: .subLang)
-              .hasDescription()
-          )
+        SettingsItem.Switch()
+          .image(name: ["character.book.closed", "character.book.closed.fill"])
+          .bindTo(.autoSelectPreferredTrackLanguages)
+          .hasDescription()
+        SettingsItem.Switch()
+          .image(name: ["captions.bubble", "captions.bubble.fill"])
+          .bindTo(.showSecondSubtitleTrack)
+          .hasDescription()
         SettingsItem.General(title: .text_DefaultEncoding)
           .withDetailView(subtitlesEncodingView)
       }
@@ -560,7 +571,6 @@ fileprivate class SubtitleSourceView: SettingsAccessory.Base {
       try KeychainAccess.write(username: "subdl", password: key, forService: .subDLAPIKey)
       subDLKeyField.stringValue = ""
       Preference.set(OnlineSubtitle.Providers.subDL.id, for: .onlineSubProvider)
-      Preference.set(true, for: .autoSearchOnlineSub)
       refreshSubSources()
       refreshSubSourceAccessoryView()
       updateSubDLStatus()

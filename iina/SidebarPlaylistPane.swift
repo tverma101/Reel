@@ -146,13 +146,19 @@ class SidebarPlaylistPane: NSView, SidebarPane {
     }
 
     player.observe(.iinaFileLoaded) { [unowned self] _ in
-      updateTable()
+      // PlayerCore.fileLoaded already refreshed info.playlist before posting this notification.
+      // Reuse that snapshot instead of reading and rebuilding the full mpv playlist a second time.
+      updateTable(refreshPlaylist: false)
     }
 
     player.observe(.iinaPlaylistChanged) { [unowned self] _ in
       playlistTotalLengthIsReady = false
-      updateTable()
+      updateTable(refreshPlaylist: false)
       updateShuffleBtnStatus()
+    }
+
+    player.observe(.iinaPlaylistPlaybackStatusChanged) { [unowned self] _ in
+      updateTable(refreshPlaylist: false)
     }
 
     player.observe(.iinaLoopStatusChanged) { [unowned self] _ in
@@ -168,9 +174,9 @@ class SidebarPlaylistPane: NSView, SidebarPane {
     updateShuffleBtnStatus()
   }
 
-  private func updateTable() {
+  private func updateTable(refreshPlaylist: Bool = true) {
     guard player.info.state.active else { return }
-    player.getPlaylist()
+    if refreshPlaylist, player.info.state.loaded { player.getPlaylist() }
     tableView.reloadData()
   }
 
@@ -782,6 +788,7 @@ class PlaylistTrackCellView: NSTableCellView {
   private var trackNameLabel: NSTextField!
   private var infoLabel: NSTextField!
   private var durationLabel: NSTextField!
+  private var contentRevision = 0
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -837,11 +844,14 @@ class PlaylistTrackCellView: NSTableCellView {
 
   override func prepareForReuse() {
     super.prepareForReuse()
+    contentRevision &+= 1
     setPrefix(nil)
     setAdditionalInfo(nil)
   }
 
   func update(pane: SidebarPlaylistPane, player: PlayerCore, item: MPVPlaylistItem, row: Int) {
+    contentRevision &+= 1
+    let revision = contentRevision
     // file name
     let filename = item.filenameForDisplay
     let displayStr: String = NSString(string: filename).deletingPathExtension
@@ -874,6 +884,7 @@ class PlaylistTrackCellView: NSTableCellView {
       guard let self else { return }
       if let (artist, title) = getCachedMetadata() {
         DispatchQueue.main.async {
+          guard self.contentRevision == revision else { return }
           self.setTitle(title)
           self.setAdditionalInfo(artist)
         }
@@ -884,6 +895,7 @@ class PlaylistTrackCellView: NSTableCellView {
         if duration > 0 {
           // if FFmpeg got the duration successfully
           DispatchQueue.main.async {
+            guard self.contentRevision == revision else { return }
             self.durationLabel.stringValue = VideoTime(duration).stringRepresentation
             if let progress = cached.progress,
                let rowView = self.superview as? PlaylistRowView {
@@ -903,6 +915,7 @@ class PlaylistTrackCellView: NSTableCellView {
             // if FFmpeg got the duration successfully
             pane.refreshTotalLength()
             DispatchQueue.main.async {
+              guard self.contentRevision == revision else { return }
               pane.tableView.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integersIn: 0...1))
             }
           }

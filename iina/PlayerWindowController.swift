@@ -104,8 +104,8 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
     case PK.maxVolume.rawValue:
       if let newValue = change[.newKey] as? Int {
         volumeSlider.maxValue = Double(newValue)
-        if player.mpv.getDouble(MPVOption.Audio.volume) > Double(newValue) {
-          player.mpv.setDouble(MPVOption.Audio.volume, Double(newValue))
+        if player.info.volume > Double(newValue) {
+          player.setVolume(Double(newValue))
         }
       }
     case PK.useExactSeek.rawValue:
@@ -223,6 +223,8 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
 
     self.playSlider = PlaySlider()
     playSlider.translatesAutoresizingMaskIntoConstraints = false
+    // Seeking and thumbnail previews use a left-to-right timeline in every language.
+    playSlider.userInterfaceLayoutDirection = .leftToRight
     playSlider.refusesFirstResponder = true
     playSlider.minValue = 0
     playSlider.maxValue = 100
@@ -296,6 +298,8 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
         return false
       }
     } else {
+      if handleAirPlayTimingKeyBinding(keyBinding.rawAction) { return true }
+      if handlePlayerStopKeyBinding(keyBinding.rawAction) { return true }
       // - mpv command
       let returnValue: Int32
       // execute the command
@@ -331,6 +335,344 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
         return false
       }
     }
+  }
+
+  /// Apply raw MPV timing shortcuts through PlayerCore while the AirPlay bridge carries audio.
+  /// Menu accelerators already use these bridge-aware setters; this covers bindings dispatched
+  /// directly to MPV, including alternate built-in keybinding profiles and command prefixes.
+  private struct AirPlayTimingBindingCommand {
+    let command: String
+    let property: String
+    let value: Double?
+    let cycleValues: [Double]?
+    let cycleValuesReversed: Bool
+    let osdMode: AirPlayTimingOSDMode
+  }
+
+  private struct AirPlayTimingBindingHeader {
+    let tokens: [String]
+    let commandIndex: Int
+    let propertyIndex: Int
+    let command: String
+    let property: String
+    let propertyMayExpandToTiming: Bool
+    let osdMode: AirPlayTimingOSDMode
+    let expandsProperties: Bool
+    let cycleValuesReversed: Bool
+  }
+
+  private struct ManagedStopBindingCommand {
+    let flags: [String]
+  }
+
+  private enum AirPlayTimingBindingParse {
+    case unrelated
+    case unsupported(String)
+    case supported(AirPlayTimingBindingCommand)
+  }
+
+  /// Apply timing commands in raw MPV key bindings through PlayerCore while AirPlay carries audio.
+  /// MPV's tokenization is quote-aware and command lists are separated only by unquoted semicolons.
+  private func handleAirPlayTimingKeyBinding(_ rawAction: String) -> Bool {
+    guard player.airPlayAudio.shouldSerializeTimingChanges else { return false }
+    let segments = MPVController.rawCommandSegments(rawAction)
+      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    guard segments.contains(where: { airPlayTimingBindingHeader($0) != nil }) else { return false }
+
+    func executeSegment(at index: Int) {
+      guard index < segments.count else { return }
+      let segment = segments[index]
+      let nextIndex = index + 1
+      switch parseAirPlayTimingBindingCommand(segment) {
+      case .unrelated:
+        if let stopCommand = managedStopBindingCommand(segment), player.info.state.active {
+          let afterStop: (() -> Void)? = nextIndex < segments.count
+            ? { executeSegment(at: nextIndex) } : nil
+          player.stop(mpvStopFlags: stopCommand.flags,
+                      afterMPVStopCommandSubmitted: afterStop)
+        } else {
+          let result = player.mpv.command(rawString: segment)
+          if result < 0 {
+            player.log("Return value \(result) when executing key command \(segment)", level: .error)
+          }
+          executeSegment(at: nextIndex)
+        }
+
+      case let .unsupported(reason):
+        if !player.airPlayAudio.shouldSerializeTimingChanges {
+          let result = player.mpv.command(rawString: segment)
+          if result < 0 {
+            player.log("Return value \(result) when executing key command \(segment)", level: .error)
+          }
+        } else {
+          player.log("Ignoring unsupported AirPlay timing key binding: \(reason)", level: .warning)
+        }
+        executeSegment(at: nextIndex)
+
+      case let .supported(command):
+        guard player.airPlayAudio.shouldSerializeTimingChanges else {
+          let result = player.mpv.command(rawString: segment)
+          if result < 0 {
+            player.log("Return value \(result) when executing key command \(segment)", level: .error)
+          }
+          executeSegment(at: nextIndex)
+          return
+        }
+        let snapshot = player.mpv.airPlayPlaybackSnapshot
+        if let playlistEntryID = snapshot.currentPlaylistEntryID,
+           player.mpv.isAirPlayPlaybackFileCurrent(
+             fileTransitionGeneration: snapshot.fileTransitionGeneration,
+             playlistEntryID: playlistEntryID) {
+          applyAirPlayTimingBindingCommand(command)
+        }
+        guard nextIndex < segments.count else { return }
+        // MPV's timing set/add/multiply operations have no separate asynchronous implementation.
+        // Preserve command-list order even when an input binding includes the async prefix.
+        player.airPlayAudio.whenMPVCommandsDrained {
+          executeSegment(at: nextIndex)
+        }
+      }
+    }
+
+    executeSegment(at: 0)
+    return true
+  }
+
+  private func airPlayTimingBindingHeader(_ segment: String) -> AirPlayTimingBindingHeader? {
+    let action = MPVController.rawCommandTokens(segment)
+    guard !action.isEmpty else { return nil }
+    let commandPrefixes: Set<String> = [
+      "no-osd", "osd-auto", "osd-bar", "osd-msg", "osd-msg-bar",
+      "raw", "expand-properties", "repeatable", "nonrepeatable", "nonscalable",
+      "async", "sync",
+    ]
+    var commandIndex = 0
+    if let first = action.first, first.hasPrefix("{"), first.hasSuffix("}") {
+      commandIndex += 1
+    }
+    var osdMode = AirPlayTimingOSDMode.automatic
+    var expandsProperties = true
+    while commandIndex < action.count,
+          let prefix = MPVController.literalRawCommandToken(action[commandIndex]),
+          commandPrefixes.contains(prefix) {
+      switch prefix {
+      case "no-osd": osdMode = .none
+      case "osd-bar": osdMode = .bar
+      case "osd-msg": osdMode = .message
+      case "osd-msg-bar": osdMode = .messageAndBar
+      case "osd-auto": osdMode = .automatic
+      case "expand-properties": expandsProperties = true
+      case "raw": expandsProperties = false
+      case "async", "sync": break
+      default: break
+      }
+      commandIndex += 1
+    }
+    guard commandIndex < action.count,
+          let command = MPVController.literalRawCommandToken(action[commandIndex]),
+          [MPVCommand.set.rawValue, MPVCommand.del.rawValue,
+           MPVCommand.add.rawValue, MPVCommand.multiply.rawValue,
+           MPVCommand.cycle.rawValue, MPVCommand.cycleValues.rawValue].contains(command),
+          action.count > commandIndex + 1 else { return nil }
+    var propertyIndex = commandIndex + 1
+    var cycleValuesReversed = false
+    if command == MPVCommand.cycleValues.rawValue,
+       MPVController.literalRawCommandToken(action[propertyIndex]) == "!reverse" {
+      cycleValuesReversed = true
+      propertyIndex += 1
+    }
+    guard propertyIndex < action.count else { return nil }
+    let propertyToken = action[propertyIndex]
+    let literalProperty = MPVController.literalRawCommandToken(propertyToken)
+    let propertyMayExpandToTiming = literalProperty == nil && expandsProperties &&
+      propertyToken.contains("$")
+    guard propertyMayExpandToTiming || literalProperty == MPVOption.PlaybackControl.speed ||
+            literalProperty == MPVOption.Audio.audioDelay else { return nil }
+    let property = literalProperty ?? propertyToken
+    return AirPlayTimingBindingHeader(tokens: action, commandIndex: commandIndex,
+                                      propertyIndex: propertyIndex,
+                                      command: command, property: property,
+                                      propertyMayExpandToTiming: propertyMayExpandToTiming,
+                                      osdMode: osdMode,
+                                      expandsProperties: expandsProperties,
+                                      cycleValuesReversed: cycleValuesReversed)
+  }
+
+  private func parseAirPlayTimingBindingCommand(_ segment: String) -> AirPlayTimingBindingParse {
+    guard let header = airPlayTimingBindingHeader(segment) else { return .unrelated }
+
+    // MPV expands input properties even inside quoted command arguments. A dynamic property name
+    // may resolve to speed or audio-delay, so keep it out of the raw path while timing is serialized.
+    if header.propertyMayExpandToTiming { return .unsupported(segment) }
+
+    // Do not let an unsupported expression or timing command mutate the bridge's hold/correction
+    // value through MPV's raw command path. These forms can be added to the logical-value adapter
+    // explicitly when their MPV semantics are known.
+    if header.command == MPVCommand.cycleValues.rawValue {
+      let operands = header.tokens.dropFirst(header.propertyIndex + 1)
+      let values = operands.compactMap { token -> Double? in
+        guard let operand = MPVController.rawCommandArgumentToken(token) else { return nil }
+        return Self.parseTimingOperand(operand, expandingProperties: header.expandsProperties,
+                                       player: player)
+      }
+      guard !operands.isEmpty, values.count == operands.count else { return .unsupported(segment) }
+      return .supported(AirPlayTimingBindingCommand(command: header.command,
+                                                    property: header.property, value: nil,
+                                                    cycleValues: values,
+                                                    cycleValuesReversed: header.cycleValuesReversed,
+                                                    osdMode: header.osdMode))
+    }
+
+    let argumentCount = header.tokens.count - header.commandIndex
+    let hasImplicitAdd = header.command == MPVCommand.add.rawValue && argumentCount == 2
+    let value: Double?
+    if hasImplicitAdd {
+      value = 1
+    } else if argumentCount == 3,
+              let operand = MPVController.rawCommandArgumentToken(header.tokens[header.commandIndex + 2]) {
+      let expandsProperties = header.expandsProperties && header.command == MPVCommand.set.rawValue
+      value = Self.parseTimingOperand(operand, expandingProperties: expandsProperties,
+                                      player: player)
+    } else {
+      value = nil
+    }
+    guard [MPVCommand.set.rawValue, MPVCommand.add.rawValue,
+           MPVCommand.multiply.rawValue].contains(header.command),
+          (hasImplicitAdd || argumentCount == 3),
+          let value else {
+      return .unsupported(segment)
+    }
+
+    return .supported(AirPlayTimingBindingCommand(command: header.command,
+                                                  property: header.property, value: value,
+                                                  cycleValues: nil, cycleValuesReversed: false,
+                                                  osdMode: header.osdMode))
+  }
+
+  /// Parse Stop actions so a compound binding can run each command in order while Stop still
+  /// passes through PlayerCore's AirPlay drain and identity-fenced watch-later path.
+  private func managedStopBindingCommand(_ segment: String) -> ManagedStopBindingCommand? {
+    let tokens = MPVController.rawCommandTokens(segment)
+    guard !tokens.isEmpty else { return nil }
+
+    let commandPrefixes: Set<String> = [
+      "no-osd", "osd-auto", "osd-bar", "osd-msg", "osd-msg-bar",
+      "raw", "expand-properties", "repeatable", "nonrepeatable", "nonscalable",
+      "async", "sync",
+    ]
+    var commandIndex = 0
+    if let first = tokens.first, first.hasPrefix("{"), first.hasSuffix("}") {
+      commandIndex += 1
+    }
+    while commandIndex < tokens.count,
+          let prefix = MPVController.literalRawCommandToken(tokens[commandIndex]),
+          commandPrefixes.contains(prefix) {
+      commandIndex += 1
+    }
+    guard commandIndex < tokens.count,
+          MPVController.literalRawCommandToken(tokens[commandIndex]) == MPVCommand.stop.rawValue else {
+      return nil
+    }
+
+    var stopFlags: [String] = []
+    for token in tokens.dropFirst(commandIndex + 1) {
+      guard let flag = MPVController.literalRawCommandToken(token) else { return nil }
+      stopFlags.append(flag)
+    }
+    return ManagedStopBindingCommand(flags: stopFlags)
+  }
+
+  /// Route Stop commands in single or compound bindings through PlayerCore. Commands before Stop
+  /// execute first; commands after a managed Stop resume once MPV receives it.
+  private func handlePlayerStopKeyBinding(_ rawAction: String) -> Bool {
+    let segments = MPVController.rawCommandSegments(rawAction)
+      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    guard player.info.state.active,
+          segments.contains(where: { managedStopBindingCommand($0) != nil }) else { return false }
+
+    func executeSegment(at index: Int) {
+      guard index < segments.count else { return }
+      let segment = segments[index]
+      let nextIndex = index + 1
+      if let stopCommand = managedStopBindingCommand(segment), player.info.state.active {
+        let afterStop: (() -> Void)? = nextIndex < segments.count
+          ? { executeSegment(at: nextIndex) } : nil
+        player.stop(mpvStopFlags: stopCommand.flags,
+                    afterMPVStopCommandSubmitted: afterStop)
+      } else {
+        let result = player.mpv.command(rawString: segment)
+        if result < 0 {
+          player.log("Return value \(result) when executing key command \(segment)", level: .error)
+        }
+        executeSegment(at: nextIndex)
+      }
+    }
+
+    executeSegment(at: 0)
+    return true
+  }
+
+  private func applyAirPlayTimingBindingCommand(_ binding: AirPlayTimingBindingCommand) {
+    if let values = binding.cycleValues,
+       let currentValue = player.airPlayAudio.userTimingValue(forMPVProperty: binding.property) {
+      let currentIndex = values.firstIndex { abs($0 - currentValue) < 1e-9 }
+      let targetIndex: Int
+      if let currentIndex {
+        let delta = binding.cycleValuesReversed ? -1 : 1
+        targetIndex = (currentIndex + delta + values.count) % values.count
+      } else {
+        targetIndex = binding.cycleValuesReversed ? values.count - 1 : 0
+      }
+      applyAirPlayTimingValue(values[targetIndex], property: binding.property,
+                              osdMode: binding.osdMode)
+      return
+    }
+    guard let value = binding.value else { return }
+    switch (binding.command, binding.property) {
+    case (MPVCommand.set.rawValue, MPVOption.PlaybackControl.speed):
+      player.setSpeed(value, osdMode: binding.osdMode)
+    case (MPVCommand.add.rawValue, MPVOption.PlaybackControl.speed):
+      player.airPlayAudio.adjustUserSpeed(by: value, osdMode: binding.osdMode)
+    case (MPVCommand.multiply.rawValue, MPVOption.PlaybackControl.speed):
+      player.airPlayAudio.multiplyUserSpeed(by: value, osdMode: binding.osdMode)
+    case (MPVCommand.set.rawValue, MPVOption.Audio.audioDelay):
+      player.setAudioDelay(value, osdMode: binding.osdMode)
+    case (MPVCommand.add.rawValue, MPVOption.Audio.audioDelay):
+      player.airPlayAudio.adjustUserAudioDelay(by: value, osdMode: binding.osdMode)
+    case (MPVCommand.multiply.rawValue, MPVOption.Audio.audioDelay):
+      player.airPlayAudio.multiplyUserAudioDelay(by: value, osdMode: binding.osdMode)
+    default:
+      break
+    }
+  }
+
+  private func applyAirPlayTimingValue(_ value: Double, property: String,
+                                      osdMode: AirPlayTimingOSDMode) {
+    switch property {
+    case MPVOption.PlaybackControl.speed:
+      player.setSpeed(value, osdMode: osdMode)
+    case MPVOption.Audio.audioDelay:
+      player.setAudioDelay(value, osdMode: osdMode)
+    default:
+      break
+    }
+  }
+
+  private static func parseTimingOperand(_ operand: String, expandingProperties: Bool,
+                                         player: PlayerCore) -> Double? {
+    if let value = Double(operand), value.isFinite { return value }
+    let fraction = operand.split(separator: "/", omittingEmptySubsequences: false)
+    if fraction.count == 2,
+       let numerator = Double(fraction[0]),
+       let denominator = Double(fraction[1]), denominator.isFinite, denominator != 0 {
+      let value = numerator / denominator
+      if value.isFinite { return value }
+    }
+    guard expandingProperties, operand.hasPrefix("${"), operand.hasSuffix("}") else { return nil }
+    let property = String(operand.dropFirst(2).dropLast())
+    guard !property.isEmpty else { return nil }
+    return player.airPlayAudio.userTimingValue(forMPVProperty: property)
+      ?? player.mpv.getDoubleIfAvailable(property)
   }
 
   func abLoop() {
@@ -553,8 +895,15 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
     case .playbackSpeed:
       let min = 0.05
       let max = 4.0
-      let newSpeed = round(1000 * (player.info.playSpeed + (player.info.playSpeed * AppData.playbackSpeedMap[playbackSpeedScrollAmount] * delta)).clamped(to: min...max)) / 1000
-      player.setSpeed(newSpeed)
+      let relativeDelta = AppData.playbackSpeedMap[playbackSpeedScrollAmount] * delta
+      if player.airPlayAudio.shouldSerializeTimingChanges {
+        player.airPlayAudio.adjustUserSpeedForScroll(by: relativeDelta,
+                                                     minimum: min, maximum: max)
+      } else {
+        let newSpeed = round(1000 * (player.info.playSpeed +
+          (player.info.playSpeed * relativeDelta)).clamped(to: min...max)) / 1000
+        player.setSpeed(newSpeed)
+      }
     default:
       break
     }

@@ -8,7 +8,7 @@
 "E3I-Q7-9t1.headerCell.title" = "Ad";
 
 /* Class = "NSTextFieldCell"; title = "The following settings will require restarting IINA to take effect."; ObjectID = "HMa-Vz-EUk"; */
-"HMa-Vz-EUk.title" = "Bu ayarların etkinleştirilmesi için IINA’nın yeniden başlatılması gerekecektir.";
+"HMa-Vz-EUk.title" = "Bu ayarların etkinleştirilmesi için Reel’nın yeniden başlatılması gerekecektir.";
 
 /* Class = "NSButtonCell"; title = "Open Log Directory"; ObjectID = "JDA-g3-RNX"; */
 "JDA-g3-RNX.title" = "Günlük Dizinini Aç";

@@ -37,14 +37,14 @@
 /* Class = "NSMenuItem"; title = "Audio Delay + 0.5s"; ObjectID = "4ae-MT-2L1"; */
 "4ae-MT-2L1.title" = "Verzögerung + 0,5 s";
 
-/* Class = "NSMenuItem"; title = "Quit IINA"; ObjectID = "4sb-4s-VLi"; */
-"4sb-4s-VLi.title" = "IINA beenden";
+/* Class = "NSMenuItem"; title = "Quit Reel"; ObjectID = "4sb-4s-VLi"; */
+"4sb-4s-VLi.title" = "Reel beenden";
 
 /* Class = "NSMenuItem"; title = "Reset Speed"; ObjectID = "5Gn-90-oDu"; */
 "5Gn-90-oDu.title" = "Geschwindigkeit zurücksetzen";
 
-/* Class = "NSMenuItem"; title = "About IINA"; ObjectID = "5kV-Vb-QxS"; */
-"5kV-Vb-QxS.title" = "Über IINA";
+/* Class = "NSMenuItem"; title = "About Reel"; ObjectID = "5kV-Vb-QxS"; */
+"5kV-Vb-QxS.title" = "Über Reel";
 
 /* Class = "NSMenu"; title = "Rotation"; ObjectID = "5xN-ZB-VLI"; */
 "5xN-ZB-VLI.title" = "Drehung";
@@ -133,8 +133,8 @@
 /* Class = "NSMenuItem"; title = "Next Chapter"; ObjectID = "F6G-Ln-fqI"; */
 "F6G-Ln-fqI.title" = "Nächstes Kapitel";
 
-/* Class = "NSMenuItem"; title = "IINA Help"; ObjectID = "FKE-Sm-Kum"; */
-"FKE-Sm-Kum.title" = "IINA-Hilfe";
+/* Class = "NSMenuItem"; title = "Reel Help"; ObjectID = "FKE-Sm-Kum"; */
+"FKE-Sm-Kum.title" = "Reel-Hilfe";
 
 /* Class = "NSMenu"; title = "Video Track"; ObjectID = "FTu-CF-O0R"; */
 "FTu-CF-O0R.title" = "Videospur";
@@ -223,8 +223,8 @@
 /* Class = "NSMenuItem"; title = "Minimize"; ObjectID = "OY7-WF-poV"; */
 "OY7-WF-poV.title" = "Im Dock ablegen";
 
-/* Class = "NSMenuItem"; title = "Hide IINA"; ObjectID = "Olw-nP-bQN"; */
-"Olw-nP-bQN.title" = "IINA ausblenden";
+/* Class = "NSMenuItem"; title = "Hide Reel"; ObjectID = "Olw-nP-bQN"; */
+"Olw-nP-bQN.title" = "Reel ausblenden";
 
 /* Class = "NSMenuItem"; title = "Reset Subtitle Scale"; ObjectID = "P1a-ot-P31"; */
 "P1a-ot-P31.title" = "Skalierung zurücksetzen";
@@ -361,8 +361,6 @@
 /* Class = "NSMenuItem"; title = "Subtitle Delay - 0.1s"; ObjectID = "fyL-tr-6Bu"; */
 "fyL-tr-6Bu.title" = "Verzögerung − 0,1 s";
 
-/* Class = "NSMenuItem"; title = "Check for Updates…"; ObjectID = "gMo-qL-m08"; */
-"gMo-qL-m08.title" = "Nach Updates suchen …";
 
 /* Class = "NSMenuItem"; title = "Delete"; ObjectID = "h9w-Rj-Hm1"; */
 "h9w-Rj-Hm1.title" = "Löschen";

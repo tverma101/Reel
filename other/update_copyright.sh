@@ -27,5 +27,7 @@ function update () {
 update ../iina.xcodeproj project.pbxproj
 update en.lproj InfoPlist.strings
 
-# Update the copyright displayed in the about window.
+# Update the copyright displayed in the about window. Contribution.rtf is the
+# upstream list of people to thank; Credits.rtf is the third-party notice file
+# this fork added, which carries its own year-free attribution text.
 update . Contribution.rtf

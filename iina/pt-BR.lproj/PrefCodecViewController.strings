@@ -86,7 +86,7 @@
 "baO-xy-7hD.title" = "nits";
 
 /* Class = "NSTextFieldCell"; title = "Measured peak brightness of the display. If set to 0, IINA detects this value. If detection fails, IINA sets the target peak to 400."; ObjectID = "aTt-aZ-rjK"; */
-"aTt-aZ-rjK.title" = "Pico de brilho medido da tela. Se definido como 0, o IINA detetará esse valor. Se a deteção falhar, o IINA definirá o pico alvo como 400.";
+"aTt-aZ-rjK.title" = "Pico de brilho medido da tela. Se definido como 0, o Reel detetará esse valor. Se a deteção falhar, o Reel definirá o pico alvo como 400.";
 
 /* Class = "NSTextFieldCell"; title = "Algorithm:"; ObjectID = "qzI-rq-PqO"; */
 "qzI-rq-PqO.title" = "Algoritmo:";
