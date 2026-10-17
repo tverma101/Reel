@@ -13,7 +13,8 @@ def run(*args, **kwargs):
 
 
 def signature(path):
-    details = run("/usr/bin/codesign", "-dvvv", "-r-", str(path)).stderr
+    result = run("/usr/bin/codesign", "-dvvv", "-r-", str(path))
+    details = result.stdout + result.stderr
     requirement = re.search(r"^designated => (.+)$", details, re.MULTILINE).group(1)
     cdhash = re.search(r"^CDHash=(.+)$", details, re.MULTILINE).group(1)
     assert 'anchor apple generic' in requirement, "Reel must have an Apple-issued signing identity"
