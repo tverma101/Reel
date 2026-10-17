@@ -675,14 +675,16 @@ private final class AirPlayRouteControl: NSView {
 
   init(picker: AVRoutePickerView) {
     super.init(frame: .zero)
-    picker.wantsLayer = true
-    picker.layer?.opacity = 0
+    // Hide only Apple's animated ink, not the view/its accessibility-owned receiver popover.
+    for state: AVRoutePickerView.ButtonState in [.normal, .normalHighlighted, .active, .activeHighlighted] {
+      picker.setRoutePickerButtonColor(.clear, for: state)
+    }
     picker.translatesAutoresizingMaskIntoConstraints = false
     addSubview(picker)
     glyph.image = Preference.ToolBarButton.airPlay.image()
     glyph.imageScaling = .scaleProportionallyDown
     glyph.translatesAutoresizingMaskIntoConstraints = false
-    glyph.setAccessibilityElement(false)
+    glyph.setAccessibilityHidden(true)
     addSubview(glyph)
     NSLayoutConstraint.activate([
       picker.leadingAnchor.constraint(equalTo: leadingAnchor),
