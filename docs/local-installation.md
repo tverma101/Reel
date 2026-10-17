@@ -62,8 +62,19 @@ running or cannot be ruled out, the record changes, or lock/process inspection f
 system clock for a future timestamp. Investigate any refusal or corrupt/unsafe record; do not delete
 the handoff file manually to unblock an update.
 Target validation and rollback remain inside both locks. The installer
-verifies the bundle identity, ad-hoc signs nested code with the hardened runtime, then signs the
+verifies the bundle identity, signs nested code with the hardened runtime, then signs the
 embedded Open In extension and outer Reel app separately with their target-specific entitlements.
+It uses the Mac's **Apple Development** code-signing certificate by default, preserving a
+certificate-backed identity across rebuilds so macOS can retain folder privacy grants. Use
+`--signing-identity <certificate-name-or-hash>` to select a specific certificate when necessary.
+A missing or ambiguous certificate stops installation; it never silently falls back to ad hoc.
+Explicit `--signing-identity -` is available for disposable builds, whose privacy grants may reset
+after each rebuild. Moving from an old ad-hoc build to a certificate-signed build can require one
+new permission approval. Keep the same signing identity for later updates.
+Apple's [code-signing requirements guide](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)
+explains how this designated requirement identifies successive versions of an app.
+After installation, `python3 other/check_local_signing_identity.py` verifies that the installed
+app's requirement also accepts two different executables signed by the same identity.
 It verifies the signed entitlement dictionaries and the complete nested code signature before it
 archives the current `/Applications/Reel.app`. It rechecks that Reel is not running immediately
 before the swap. It preserves the build product, source files, dependency caches, and other

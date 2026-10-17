@@ -26,6 +26,7 @@ import zlib
 
 
 IDENTIFIER = "io.github.tverma101.reel"
+DEFAULT_SIGNING_IDENTITY = "Apple Development"
 BUILD_COMMIT_KEY = "com.colliderli.iina.build.commit"
 BUILD_CONFIGURATION_KEY = "com.colliderli.iina.build.configuration"
 INSTALLED = Path("/Applications/Reel.app")
@@ -1675,15 +1676,20 @@ def verify_signed_entitlements(bundle, entitlement_file):
         )
 
 
-def sign_staged_bundle(app):
-    """Ad-hoc sign a Release bundle with hardened runtime and target entitlements."""
+def sign_staged_bundle(app, signing_identity=DEFAULT_SIGNING_IDENTITY):
+    """Keep a certificate-backed app identity across updates, with each target's entitlements."""
+    if not signing_identity.strip():
+        raise RuntimeError("A code-signing identity is required.")
+    if signing_identity == "-":
+        print("Ad-hoc signing was explicitly selected; macOS privacy grants may reset after updates.",
+              file=sys.stderr)
     app = Path(app)
     extension = embedded_open_in_extension(app)
 
     # The build product is linker-signed. First sign nested code so the copy has
     # complete signatures, then re-sign the extension and app separately: their
     # sandbox and plug-in entitlements differ, and the outer app must be sealed last.
-    run("/usr/bin/codesign", "--force", "--deep", "--options", "runtime", "--sign", "-", str(app))
+    run("/usr/bin/codesign", "--force", "--deep", "--options", "runtime", "--sign", signing_identity, str(app))
     try:
         extension_info = extension.lstat()
     except FileNotFoundError:
@@ -1693,14 +1699,14 @@ def sign_staged_bundle(app):
             raise RuntimeError(f"Embedded Open In extension is not a real directory: {extension}")
         run(
             "/usr/bin/codesign", "--force", "--options", "runtime",
-            "--entitlements", str(OPEN_IN_EXTENSION_ENTITLEMENTS), "--sign", "-", str(extension),
+            "--entitlements", str(OPEN_IN_EXTENSION_ENTITLEMENTS), "--sign", signing_identity, str(extension),
         )
         run("/usr/bin/codesign", "--verify", "--strict", str(extension))
         verify_signed_entitlements(extension, OPEN_IN_EXTENSION_ENTITLEMENTS)
 
     run(
         "/usr/bin/codesign", "--force", "--options", "runtime",
-        "--entitlements", str(APP_ENTITLEMENTS), "--sign", "-", str(app),
+        "--entitlements", str(APP_ENTITLEMENTS), "--sign", signing_identity, str(app),
     )
     verify_signed_entitlements(app, APP_ENTITLEMENTS)
     run("/usr/bin/codesign", "--verify", "--deep", "--strict", str(app))
@@ -2670,13 +2676,13 @@ def write_evidence(result, support):
         os.close(directory_fd)
 
 
-def install(source, support):
+def install(source, support, signing_identity=DEFAULT_SIGNING_IDENTITY):
     with installation_lock(INSTALLED), launcher_transition_lock():
         check_launcher_handoff()
-        return _install_locked(source, support)
+        return _install_locked(source, support, signing_identity)
 
 
-def _install_locked(source, support):
+def _install_locked(source, support, signing_identity=DEFAULT_SIGNING_IDENTITY):
     ensure_clean_checkout()
     source = Path(source).expanduser()
     if source.is_symlink():
@@ -2710,7 +2716,7 @@ def _install_locked(source, support):
         )
         if copied_executable_hash != source_executable_hash:
             raise RuntimeError("Copied Reel executable differs from the bounded build-source inventory.")
-        sign_staged_bundle(stage)
+        sign_staged_bundle(stage, signing_identity)
         staged_info = identity(stage, allow_stage=True)
         staged_inventory = bundle_inventory(stage)
         validate_candidate(staged_info, installed_info, checkout_commit=candidate_commit)
@@ -2803,6 +2809,7 @@ def _install_locked(source, support):
                 "source": str(source),
                 "version": installed_info.get("CFBundleShortVersionString"),
                 "build": installed_info.get("CFBundleVersion"),
+                "signingIdentity": signing_identity,
                 "executableSHA256": installed_executable_hash,
                 "previousBackup": backup,
                 "before": before,
@@ -2874,6 +2881,8 @@ def main():
     parser.add_argument("action", choices=["check", "repair", "install"])
     parser.add_argument("app", nargs="?", type=Path, help="local Reel.app build product to install; the source is kept")
     parser.add_argument("--support-folder", type=Path, default=Path.home() / "Documents/IINA")
+    parser.add_argument("--signing-identity", default=DEFAULT_SIGNING_IDENTITY,
+                        help="codesign certificate name or hash (default: Apple Development); '-' explicitly uses ad hoc signing")
     args = parser.parse_args()
     if (args.action == "install") != (args.app is not None):
         parser.error("Only install requires an app path.")
@@ -2905,7 +2914,7 @@ def main():
         return 0 if ready and plugins_ready else 1
     support = args.support_folder.expanduser().resolve()
     if args.action == "install":
-        result = install(args.app, support)
+        result = install(args.app, support, args.signing_identity)
         evidence = Path(result["evidence"])
     else:
         result = repair(support)

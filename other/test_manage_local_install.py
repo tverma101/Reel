@@ -233,14 +233,34 @@ class LocalInstallFixtures(unittest.TestCase):
 
             signing_calls = [call for call in calls if call[0] == "/usr/bin/codesign" and "--sign" in call]
             self.assertEqual(signing_calls, [
-                ("/usr/bin/codesign", "--force", "--deep", "--options", "runtime", "--sign", "-", str(app)),
+                ("/usr/bin/codesign", "--force", "--deep", "--options", "runtime", "--sign", "Apple Development", str(app)),
                 ("/usr/bin/codesign", "--force", "--options", "runtime", "--entitlements",
-                 str(extension_entitlements), "--sign", "-", str(extension)),
+                 str(extension_entitlements), "--sign", "Apple Development", str(extension)),
                 ("/usr/bin/codesign", "--force", "--options", "runtime", "--entitlements",
-                 str(app_entitlements), "--sign", "-", str(app)),
+                 str(app_entitlements), "--sign", "Apple Development", str(app)),
             ])
             self.assertIn(("/usr/bin/codesign", "--verify", "--strict", str(extension)), calls)
             self.assertIn(("/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)), calls)
+
+    def test_unavailable_certificate_never_falls_back_to_ad_hoc(self):
+        calls = []
+
+        def unavailable_identity(*args):
+            calls.append(args)
+            raise RuntimeError("The specified item could not be found in the keychain")
+
+        with mock.patch.object(manage, "run", side_effect=unavailable_identity):
+            with self.assertRaisesRegex(RuntimeError, "not be found in the keychain"):
+                manage.sign_staged_bundle(Path("Reel.app"), "A" * 40)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("A" * 40, calls[0])
+        self.assertNotIn("-", calls[0])
+
+    def test_empty_signing_identity_stops_before_signing(self):
+        with mock.patch.object(manage, "run") as run_command:
+            with self.assertRaisesRegex(RuntimeError, "identity is required"):
+                manage.sign_staged_bundle(Path("Reel.app"), " ")
+        run_command.assert_not_called()
 
     def test_staged_signing_fails_closed_when_extension_loses_sandbox_entitlement(self):
         with tempfile.TemporaryDirectory() as folder:
