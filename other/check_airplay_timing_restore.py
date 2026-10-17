@@ -176,7 +176,7 @@ def check_restore_integration(bridge_text: str, controller_text: str) -> None:
         "snapshot.fileTransitionGeneration == timingOwnership.fileTransitionGeneration",
         "snapshot.currentPlaylistEntryID == timingOwnership.playlistEntryID",
         "timingOwnership.allowsNoActivePlaylistEntry",
-        "abs(currentValue - expectedValue) < 1e-9",
+        "currentValue, expectedValue: expectedValue)",
         "mpv_set_property(mpv, property, MPV_FORMAT_DOUBLE, &mutableValue)",
         "airPlaySnapshotCallLock.unlock()",
         "DispatchQueue.main.async { completion(result, wasSuperseded) }",
@@ -201,12 +201,43 @@ import Foundation
 
 __PRODUCTION_HELPERS__
 
+final class DelayClassifier {
+  var delayWrites = AirPlayInternalWrites(observedValue: 0)
+  var pendingUserAudioDelayTargets = AirPlayUserAudioDelayTargets()
+  var mappedAudioDelayTarget: AirPlayUserAudioDelayTarget?
+  var audioDelayCorrection = 0.0
+  var userAudioDelay = 0.0
+
+  static func sameTimingValue(_ lhs: Double, _ rhs: Double) -> Bool {
+    AirPlayTimingRestorePolicy.stillOwnsValue(lhs, expectedValue: rhs)
+  }
+
+  __PRODUCTION_DELAY_CLASSIFIER__
+}
+
 func expect(_ condition: Bool, _ message: String) {
   if !condition {
     FileHandle.standardError.write(Data((message + "\n").utf8))
     exit(1)
   }
 }
+
+let classifier = DelayClassifier()
+classifier.audioDelayCorrection = 0.274177762
+let correctionToken = classifier.delayWrites.record(classifier.audioDelayCorrection)
+expect(classifier.userAudioDelay(fromMPV: Double(Float(classifier.audioDelayCorrection))) == nil,
+       "the real bridge classifier must silence rounded internal corrections")
+classifier.delayWrites.complete(correctionToken)
+classifier.audioDelayCorrection = 0
+expect(classifier.userAudioDelay(fromMPV: 0) == nil,
+       "a seek resetting an unchanged user delay must remain silent")
+classifier.pendingUserAudioDelayTargets.append(userValue: 0, correction: 0, osdMode: .message)
+expect(classifier.userAudioDelay(fromMPV: 0) == 0 &&
+       classifier.mappedAudioDelayTarget?.osdMode == .message,
+       "explicitly resetting manual delay to zero must retain its feedback")
+classifier.pendingUserAudioDelayTargets.reset()
+expect(classifier.userAudioDelay(fromMPV: 0.1) == 0.1,
+       "manual delay changes must still reach the OSD handler")
 
 var requestedAudioDelays = AirPlayUserAudioDelayTargets()
 requestedAudioDelays.append(userValue: 0.2, correction: 0.1, osdMode: .none)
@@ -261,6 +292,20 @@ expect(AirPlayTimingRestorePlan.afterFailure(
   "non-finite timing values must not be restored")
 
 var delayedWrites = AirPlayInternalWrites(observedValue: 1)
+var roundedWrites = AirPlayInternalWrites(observedValue: 0)
+for correction in [0.274177762, -0.608198233, 4.221877324] {
+  let token = roundedWrites.record(correction, commandPending: true)
+  let mpvValue = Double(Float(correction))
+  expect(roundedWrites.consume(mpvValue), "float-rounded internal corrections must not show delay OSD")
+  roundedWrites.complete(token)
+  expect(AirPlayTimingRestorePolicy.stillOwnsValue(mpvValue, expectedValue: correction),
+         "float round trips must preserve restore ownership")
+  expect(!roundedWrites.consume(mpvValue + 0.1), "real manual delay changes must remain user events")
+}
+requestedAudioDelays.append(userValue: 0.3, correction: 0.274177762, osdMode: .message)
+let roundedUserTarget = requestedAudioDelays.target(forMPVValue: Double(Float(0.574177762)))
+expect(roundedUserTarget?.userValue == 0.3 && roundedUserTarget?.osdMode == .message,
+       "manual delay presentation must survive the same mpv rounding")
 let delayedToken = delayedWrites.record(0.01)
 expect(delayedToken != nil, "a changed internal speed must be tracked")
 __DELAYED_PROPERTY_EVENT__
@@ -319,6 +364,9 @@ def run_helper(source: str, simulate_delayed_event: bool = False) -> subprocess.
         delayed_event = "Thread.sleep(forTimeInterval: 2.1)" if simulate_delayed_event else ""
         swift.write_text(
             harness.replace("__PRODUCTION_HELPERS__", source)
+            .replace("__PRODUCTION_DELAY_CLASSIFIER__", section(
+                bridge_source, "  func userAudioDelay(fromMPV delay: Double)",
+                "  func noteUserSpeedRequest("))
             .replace("__DELAYED_PROPERTY_EVENT__", delayed_event)
         )
         subprocess.run(["swiftc", str(swift), "-o", str(binary)], check=True)
@@ -339,6 +387,15 @@ negative_control = run_helper(mutant)
 assert negative_control.returncode != 0, "negative control failed to catch a missing restore guard"
 print(result.stdout, end="")
 print("AirPlay timing restore negative control passed")
+
+rounded_mutant = helper_source.replace(
+    "let tolerance = max(1e-6, abs(expectedValue) * Double(Float.ulpOfOne) * 2)",
+    "let tolerance = 1e-9", 1,
+)
+assert rounded_mutant != helper_source
+negative_control = run_helper(rounded_mutant)
+assert negative_control.returncode != 0, "exact equality must fail the rounded-delay OSD regression"
+print("Rounded-delay OSD negative control passed")
 
 mutant = helper_source.replace(
     """if let lastPendingOutput = pendingOutputs.last {

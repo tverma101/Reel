@@ -555,7 +555,10 @@ struct AirPlayUserAudioDelayTargets {
 struct AirPlayTimingRestorePolicy {
   static func stillOwnsValue(_ currentValue: Double?, expectedValue: Double) -> Bool {
     guard let currentValue, currentValue.isFinite, expectedValue.isFinite else { return false }
-    return abs(currentValue - expectedValue) < 1e-9
+    // mpv stores some timing options as floats, even when the client API uses a Double. Match
+    // their round-trip precision so an internal correction cannot become a user delay/OSD.
+    let tolerance = max(1e-6, abs(expectedValue) * Double(Float.ulpOfOne) * 2)
+    return abs(currentValue - expectedValue) <= tolerance
   }
 }
 
@@ -638,9 +641,11 @@ struct AirPlayInternalWrites {
     // mpv can coalesce property notifications. A newer observed value retires older completed
     // writes, but a still-pending command can apply after this event and must keep its marker.
     writes.removeAll {
-      !$0.commandPending && abs($0.value - value) >= 1e-9
+      !$0.commandPending && !AirPlayTimingRestorePolicy.stillOwnsValue($0.value, expectedValue: value)
     }
-    guard let matchedIndex = writes.lastIndex(where: { abs($0.value - value) < 1e-9 }) else {
+    guard let matchedIndex = writes.lastIndex(where: {
+      AirPlayTimingRestorePolicy.stillOwnsValue($0.value, expectedValue: value)
+    }) else {
       return false
     }
     if writes[matchedIndex].commandPending {
@@ -659,18 +664,58 @@ struct AirPlayInternalWrites {
 
 // MARK: - Bridge
 
+/// Apple's picker remains the interactive/accessibility surface. Its persistent route animation
+/// is replaced with a static toolbar glyph so playback and internal rebuffering don't pulse.
+private final class AirPlayRouteGlyph: NSImageView {
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+private final class AirPlayRouteControl: NSView {
+  private let glyph = AirPlayRouteGlyph()
+
+  init(picker: AVRoutePickerView) {
+    super.init(frame: .zero)
+    picker.wantsLayer = true
+    picker.layer?.opacity = 0
+    picker.translatesAutoresizingMaskIntoConstraints = false
+    addSubview(picker)
+    glyph.image = Preference.ToolBarButton.airPlay.image()
+    glyph.imageScaling = .scaleProportionallyDown
+    glyph.translatesAutoresizingMaskIntoConstraints = false
+    glyph.setAccessibilityElement(false)
+    addSubview(glyph)
+    NSLayoutConstraint.activate([
+      picker.leadingAnchor.constraint(equalTo: leadingAnchor),
+      picker.trailingAnchor.constraint(equalTo: trailingAnchor),
+      picker.topAnchor.constraint(equalTo: topAnchor),
+      picker.bottomAnchor.constraint(equalTo: bottomAnchor),
+      glyph.centerXAnchor.constraint(equalTo: centerXAnchor),
+      glyph.centerYAnchor.constraint(equalTo: centerYAnchor),
+      glyph.widthAnchor.constraint(equalToConstant: 24),
+      glyph.heightAnchor.constraint(equalToConstant: 24),
+    ])
+    update(selected: false)
+  }
+
+  func update(selected: Bool) {
+    glyph.contentTintColor = selected ? .controlAccentColor : .controlTextColor
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
 final class AirPlayAudioBridge: NSObject {
   /// Runs the bridge on the Mac's own output, so sync can be checked without a speaker.
   private static let localTestKey = "ReelAirPlayBridgeLocalTest"
   /// Seconds to subtract from AVPlayer's clock, for a receiver whose latency it does not include.
   private static let latencyKey = "ReelAirPlayBridgeLatencyCompensation"
-  /// mpv's slowest speed. The picture waits at it, without pausing, while the speaker starts.
-  private static let holdSpeed = 0.01
+  /// Stay in mpv's pitch-correction range. A 0.01x hold builds seconds of stale audio on resume.
+  private static let holdSpeed = 0.25
   private static let holdTimeout: TimeInterval = 10
   /// A speaker that claims to play but never advances the item clock is not a usable route.
   private static let speakerClockStartupTimeout: TimeInterval = 4
   private static let speakerClockStallTimeout: TimeInterval = 1
-  private static let correctionThreshold = 0.045
+  private static let correctionThreshold = 0.075
   private static let resyncThreshold = 1.0
   /// How long mpv's audio clock may stay still before the bridge pauses the speaker.
   private static let audioClockStallTimeout: TimeInterval = 0.6
@@ -813,6 +858,7 @@ final class AirPlayAudioBridge: NSObject {
   private weak var player: PlayerCore?
   private var avPlayer: AVPlayer?
   private var routePicker: AVRoutePickerView?
+  private var routeControl: AirPlayRouteControl?
   private var observedContext: NSObject?
   private var routeObservers: [NSObjectProtocol] = []
   private var timeControlObservation: NSKeyValueObservation?
@@ -966,7 +1012,7 @@ final class AirPlayAudioBridge: NSObject {
   // MARK: Picker and route
 
   func makePickerView() -> NSView {
-    if let routePicker { return routePicker }
+    if let routeControl { return routeControl }
     let picker = AVRoutePickerView()
     picker.isRoutePickerButtonBordered = false
     // Bound to Reel's own player, so a choice here moves only Reel's audio.
@@ -975,8 +1021,10 @@ final class AirPlayAudioBridge: NSObject {
     picker.toolTip = NSLocalizedString("osc_toolbar.airplay", comment: "Route Reel audio to an AirPlay speaker")
     picker.setAccessibilityLabel(picker.toolTip)
     routePicker = picker
+    let control = AirPlayRouteControl(picker: picker)
+    routeControl = control
     routeMayHaveChanged()
-    return picker
+    return control
   }
 
   @discardableResult
@@ -1059,6 +1107,7 @@ final class AirPlayAudioBridge: NSObject {
     player?.mpv?.advanceAirPlayRouteOwnershipGeneration()
     let wasActive = routeActive
     routeActive = active
+    routeControl?.update(selected: active)
     if active && !wasActive {
       // A new choice deserves a new attempt.
       bridgeFailedForFile = false
@@ -1499,7 +1548,7 @@ final class AirPlayAudioBridge: NSObject {
       holding = false
       stopHoldTimer()
       setHoldSpeed(false)
-      correctionCooldownUntil = Date().addingTimeInterval(0.5)
+      correctionCooldownUntil = Date().addingTimeInterval(1.5)
       log("speaker playing after \(String(format: "%.2f", waited))s (\(holdReason)); \(currentRoute().description)")
       return
     }
@@ -1696,9 +1745,17 @@ final class AirPlayAudioBridge: NSObject {
       if let fps, fps >= 1, fps <= 1000 { halfFrameDuration = 0.5 / fps }
     }
     let error = videoTime + (halfFrameDuration ?? 0) - (heard + userAudioDelay)
+    // Discard samples gathered while a speed/delay write is still settling. Reusing that window
+    // makes the controller integrate the same old offset repeatedly during startup.
+    guard Date() >= correctionCooldownUntil,
+          pendingMPVPropertyRequest(MPVOption.PlaybackControl.speed) == nil,
+          pendingMPVPropertyRequest(MPVOption.Audio.audioDelay) == nil else {
+      driftSamples.removeAll()
+      return
+    }
     driftSamples.append(error)
     if driftSamples.count > 8 { driftSamples.removeFirst() }
-    guard driftSamples.count >= 4, Date() >= correctionCooldownUntil else { return }
+    guard driftSamples.count >= 4 else { return }
     let median = driftSamples.sorted()[driftSamples.count / 2]
     if abs(median) > Self.resyncThreshold {
       requestHold("picture \(String(format: "%.2f", median))s off", realign: true)
@@ -1706,9 +1763,10 @@ final class AirPlayAudioBridge: NSObject {
     }
     guard abs(median) > Self.correctionThreshold else { return }
     // Changing mpv's audio delay moves the picture against its (silent) audio clock.
-    setCorrection(audioDelayCorrection - median)
+    let adjustment = median.clamped(to: -0.25...0.25)
+    setCorrection(audioDelayCorrection - adjustment)
     driftSamples.removeAll()
-    correctionCooldownUntil = Date().addingTimeInterval(abs(median) + 0.75)
+    correctionCooldownUntil = Date().addingTimeInterval(1.5)
     log("picture \(String(format: "%+.3f", median))s from the speaker; correction now \(String(format: "%+.3f", audioDelayCorrection))s", level: .verbose)
   }
 
@@ -1830,7 +1888,11 @@ final class AirPlayAudioBridge: NSObject {
       return target.userValue
     }
     mappedAudioDelayTarget = nil
-    return isInternalWrite ? nil : delay - audioDelayCorrection
+    guard !isInternalWrite else { return nil }
+    let userDelay = delay - audioDelayCorrection
+    // A repeated/rounded zero while a seek resets correction is not a new user adjustment.
+    // Explicit UI/key requests already matched their retained target above and still get OSD.
+    return Self.sameTimingValue(userDelay, userAudioDelay) ? nil : userDelay
   }
 
   func noteUserSpeedRequest(_ speed: Double, osdMode: AirPlayTimingOSDMode = .automatic) {
@@ -1941,7 +2003,7 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   private static func sameTimingValue(_ lhs: Double, _ rhs: Double) -> Bool {
-    lhs.isFinite && rhs.isFinite && abs(lhs - rhs) < 1e-9
+    AirPlayTimingRestorePolicy.stillOwnsValue(lhs, expectedValue: rhs)
   }
 
   private func clearUserTimingTargets() {

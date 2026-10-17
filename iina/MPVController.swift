@@ -2081,9 +2081,9 @@ class MPVController: NSObject {
           let ownsTimingValue: Bool
           if let expectedValue = timingOwnership.expectedValue {
             ownsTimingValue = currentValue.map {
-              $0.isFinite && expectedValue.isFinite && abs($0 - expectedValue) < 1e-9
+              AirPlayTimingRestorePolicy.stillOwnsValue($0, expectedValue: expectedValue)
             } == true && liveTimingValue.map {
-              $0.isFinite && expectedValue.isFinite && abs($0 - expectedValue) < 1e-9
+              AirPlayTimingRestorePolicy.stillOwnsValue($0, expectedValue: expectedValue)
             } == true
           } else {
             ownsTimingValue = true
@@ -2229,8 +2229,8 @@ class MPVController: NSObject {
           guard ownsLiveEntry,
                 let expectedValue = timingOwnership.expectedValue,
                 let currentValue = getDoubleIfAvailable(timingOwnership.property),
-                currentValue.isFinite, expectedValue.isFinite,
-                abs(currentValue - expectedValue) < 1e-9 else { return false }
+                AirPlayTimingRestorePolicy.stillOwnsValue(
+                  currentValue, expectedValue: expectedValue) else { return false }
           return true
         }
         if stillOwned {

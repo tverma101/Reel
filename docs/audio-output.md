@@ -9,6 +9,8 @@ Click **AirPlay Audio** in the on-screen controller and choose a speaker in Appl
 audio moves; other apps and the Mac's default output are unchanged. Choose the Mac in the same list
 to bring Reel's audio back. The OSD reports speaker selection or disconnection and explains when
 playback falls back to the Mac. These notices remain available while a newly selected file loads.
+The toolbar uses a steady blue AirPlay glyph for a selected speaker. Apple's receiver picker still
+handles the click and keyboard interaction; playback buffering does not animate the toolbar glyph.
 
 macOS routes one app's audio only through an AVPlayer bound to an
 [AVRoutePickerView](https://developer.apple.com/documentation/avkit/avroutepickerview), and AVPlayer
@@ -18,7 +20,7 @@ picture, subtitles, Live Text and live captions; its own audio output is switche
 When playback stops or reaches idle, Reel restores mpv's saved local output. If the speaker remains
 selected, Reel engages the bridge again when the next supported file loads.
 
-- **Starting, resuming and seeking.** The picture waits, at mpv's slowest speed, until the speaker is
+- **Starting, resuming and seeking.** The picture slows to quarter speed until the speaker is
   playing the matching sound. The speaker's buffering (about two seconds on AirPlay 2) shows as a
   short wait instead of a lip-sync offset. Selecting a speaker restarts mpv's own audio output, and
   Reel starts the speaker only once that output is running, so nothing is timed against a clock that
@@ -26,8 +28,10 @@ selected, Reel engages the bridge again when the next supported file loads.
   low-frame-rate picture does not pause sound while audio is advancing. If mpv's audio clock stalls,
   the speaker pauses and re-aligns when it resumes. If the selected route reports playback but its
   media clock stops, Reel returns audio to the Mac so the file keeps playing.
-- **Keeping sync.** Four times a second Reel compares the picture with AVPlayer's clock. When they
-  drift more than 45 ms apart, it adjusts mpv's audio delay, which moves the picture.
+- **Keeping sync.** Four times a second Reel compares the picture with AVPlayer's clock. It allows
+  timing writes to settle before collecting a fresh drift window, ignores differences under 75 ms,
+  and limits each correction to 250 ms. Internal corrections remain silent; manual Audio Delay
+  changes retain their normal on-screen feedback.
 - **What carries over.** Pause, seek, speed, audio-track changes, **Audio Delay**, mute and volume all
   apply to the speaker. Watch-later files keep your own speed and audio delay.
 - Custom MPV `set`, `add`, `multiply` and `cycle-values` bindings for speed and Audio Delay keep
