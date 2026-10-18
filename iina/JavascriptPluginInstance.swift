@@ -91,6 +91,11 @@ class JavascriptPluginInstance {
     guard !isGlobal, !didPrepareForPlayerShutdown, !didRetireAfterPlayerShutdown,
           let player, player.info.state != .shuttingDown && player.info.state != .shutDown else { return }
     didPrepareForPlayerShutdown = true
+    if let identifier = plugin?.identifier {
+      // Notify plugins while the player and JavaScript context are still live. Synchronous listeners
+      // can flush local state before timers and generic event callbacks are removed for app quit.
+      player.events.emitToPlugin(.pluginWillUnload, identifier: identifier, data: [identifier])
+    }
     polyfill.removeAllTimers()
     apis.values.forEach { $0.cleanUp(self) }
   }

@@ -20,8 +20,10 @@ picture, subtitles, Live Text and live captions; its own audio output is switche
   playing the matching sound. The speaker's buffering (about two seconds on AirPlay 2) shows as a
   short wait instead of a lip-sync offset. Selecting a speaker restarts mpv's own audio output, and
   Reel starts the speaker only once that output is running, so nothing is timed against a clock that
-  has not started. If the picture's clock stops anyway, the speaker pauses with it and re-aligns when
-  it resumes, instead of correcting against the stall.
+  has not started. Stall detection follows both mpv's audio clock and AVPlayer's media clock, so a
+  low-frame-rate picture does not pause sound while audio is advancing. If mpv's audio clock stalls,
+  the speaker pauses and re-aligns when it resumes. If the selected route reports playback but its
+  media clock stops, Reel returns audio to the Mac so the file keeps playing.
 - **Keeping sync.** Four times a second Reel compares the picture with AVPlayer's clock. When they
   drift more than 45 ms apart, it adjusts mpv's audio delay, which moves the picture.
 - **What carries over.** Pause, seek, speed, audio-track changes, **Audio Delay**, mute and volume all
@@ -45,6 +47,14 @@ output. If a receiver's latency is not included in AVPlayer's clock,
 `-ReelAirPlayBridgeLatencyCompensation <seconds>` subtracts it. The decoder's alignment with mpv's
 timeline is checked by `python3 other/test_pcm_stream_reader.py`. Audible routing, other apps'
 output and speaker disconnects need a real receiver.
+
+Maintenance note: bridge timers must read the event-fed mpv snapshot rather than call synchronous
+libmpv getters. Audio-output changes and routine speed/delay adjustments use the bridge's serialized
+async command queue; speed and delay updates are coalesced while a prior mpv command is pending.
+Keep the queue order intact. File teardown queues its final speed/delay restore behind pending
+bridge writes and also writes synchronously so stop/quit can persist watch-later state. `withUserTiming`
+remains synchronous because its caller immediately writes a watch-later file between temporary timing
+changes.
 
 ## mpv audio devices
 

@@ -8,6 +8,10 @@ struct BoundedProcessOutputChecks {
       try checkStuckHookTimeoutSemantics()
       try checkCallbackBatchFairness()
       checkProcessExecutionAdmissionBound()
+      try checkTimedChildProcessIsTerminated()
+      try checkTimeoutRejectsBeforeSuccessfulTermination()
+      try checkExitedChildDoesNotBecomeTimeout()
+      checkCancelledTimeoutReleasesCaptures()
       print("bounded process lifecycle checks passed")
       return
     }
@@ -130,6 +134,14 @@ struct BoundedProcessOutputChecks {
 
   private static func checkCallbackBatchFairness() throws {
     let callbackQueue = DispatchQueue(label: "bounded-process-output-batch-fairness-check")
+    let callbackQueueStarted = DispatchSemaphore(value: 0)
+    let releaseCallbackQueue = DispatchSemaphore(value: 0)
+    callbackQueue.async {
+      callbackQueueStarted.signal()
+      _ = releaseCallbackQueue.wait(timeout: .now() + .seconds(3))
+    }
+    precondition(callbackQueueStarted.wait(timeout: .now() + .seconds(2)) == .success)
+
     let completionGroup = DispatchGroup()
     let markerReached = DispatchSemaphore(value: 0)
     let deliveredLock = NSLock()
@@ -159,6 +171,9 @@ struct BoundedProcessOutputChecks {
       .map { "output-\($0)" }
     outputs.forEach(delivery.enqueue)
     delivery.finishInput()
+    // Keep the serial queue blocked until every item is enqueued, so the first
+    // drain starts with a full batch and this fairness assertion is deterministic.
+    releaseCallbackQueue.signal()
 
     let interleaved = markerReached.wait(timeout: .now() + .seconds(2)) == .success
     let completed = completionGroup.wait(timeout: .now() + .seconds(2)) == .success
@@ -174,14 +189,21 @@ struct BoundedProcessOutputChecks {
   }
 
   private static func checkProcessExecutionAdmissionBound() {
+    precondition(BoundedProcessExecutionAdmission.shared.maximumTotalActiveControlExecutions >=
+                 BoundedProcessExecutionAdmission.shared.maximumTotalActiveExecutions &&
+                 BoundedProcessExecutionAdmission.shared.maximumActiveControlExecutionsPerPlugin >=
+                 BoundedProcessExecutionAdmission.shared.maximumTotalActiveExecutions,
+                 "production lifecycle-control capacity must cover the global bounded fan-out")
     let admission = BoundedProcessExecutionAdmission(
       maximumTotalActiveExecutions: 4,
-      maximumActiveExecutionsPerPlugin: 2)
-    let stalledPluginPermits = [
-      admission.acquire(forPluginIdentifier: "stalled-plugin")!,
-      admission.acquire(forPluginIdentifier: "stalled-plugin")!
+      maximumActiveExecutionsPerPlugin: 2,
+      maximumTotalActiveControlExecutions: 4,
+      maximumActiveControlExecutionsPerPlugin: 4)
+    let airPlayServePermits = [
+      admission.acquire(forPluginIdentifier: "dev.faruk.iina-airplay")!,
+      admission.acquire(forPluginIdentifier: "dev.faruk.iina-airplay")!
     ]
-    precondition(admission.acquire(forPluginIdentifier: "stalled-plugin") == nil,
+    precondition(admission.acquire(forPluginIdentifier: "dev.faruk.iina-airplay") == nil,
                  "per-plugin admission exceeded its limit")
 
     let otherPluginPermits = [
@@ -190,7 +212,21 @@ struct BoundedProcessOutputChecks {
     ]
     precondition(admission.acquire(forPluginIdentifier: "third-plugin") == nil,
                  "global admission exceeded its limit")
-    stalledPluginPermits.forEach { $0.release() }
+
+    let airPlayStopPermits = (0..<4).map { _ in
+      admission.acquireLifecycleControl(forPluginIdentifier: "dev.faruk.iina-airplay")!
+    }
+    precondition(admission.acquireLifecycleControl(forPluginIdentifier: "dev.faruk.iina-airplay") == nil,
+                 "AirPlay stop admission exceeded its reserved bound")
+    precondition(admission.acquireLifecycleControl(forPluginIdentifier: "other-plugin") == nil,
+                 "reserved control admission exceeded its global bound")
+    airPlayStopPermits[0].release()
+    let replacementStop = admission.acquireLifecycleControl(forPluginIdentifier: "dev.faruk.iina-airplay")
+    precondition(replacementStop != nil, "a released AirPlay stop slot was not reusable")
+    replacementStop?.release()
+    airPlayStopPermits.dropFirst().forEach { $0.release() }
+
+    airPlayServePermits.forEach { $0.release() }
     let replacement = admission.acquire(forPluginIdentifier: "third-plugin")
     precondition(replacement != nil, "a released plugin slot was not reusable")
     otherPluginPermits.forEach { $0.release() }
@@ -198,6 +234,102 @@ struct BoundedProcessOutputChecks {
     let idleProbe = admission.acquire(forPluginIdentifier: "idle-probe")
     precondition(idleProbe != nil, "admission did not return to idle")
     idleProbe?.release()
+  }
+
+  private static func checkTimedChildProcessIsTerminated() throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    process.arguments = ["10"]
+    let exited = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in exited.signal() }
+    try process.run()
+
+    let timedOut = DispatchSemaphore(value: 0)
+    let timeout = BoundedProcessTimeout.schedule(
+      for: process,
+      after: 0.05,
+      terminationGrace: 0.05) {
+        timedOut.signal()
+      }
+    let timeoutSignaled = timedOut.wait(timeout: .now() + .seconds(2)) == .success
+    timeout.cancel()
+    let processExited = exited.wait(timeout: .now() + .seconds(2)) == .success
+    precondition(timeoutSignaled, "timed child did not report expiration")
+    precondition(processExited && !process.isRunning,
+                 "timed child remained alive after timeout termination")
+  }
+
+  private static func checkTimeoutRejectsBeforeSuccessfulTermination() throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = ["-c", "trap 'exit 0' TERM; while :; do :; done"]
+    let exited = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in exited.signal() }
+    try process.run()
+
+    let timeoutCalled = DispatchSemaphore(value: 0)
+    let processWasAliveAtTimeout = NSLock()
+    var wasAliveAtTimeout = false
+    let timeout = BoundedProcessTimeout.schedule(for: process, after: 0.05) {
+      processWasAliveAtTimeout.lock()
+      wasAliveAtTimeout = process.isRunning
+      processWasAliveAtTimeout.unlock()
+      timeoutCalled.signal()
+    }
+    let timeoutSignaled = timeoutCalled.wait(timeout: .now() + .seconds(2)) == .success
+    let processExited = exited.wait(timeout: .now() + .seconds(2)) == .success
+    timeout.cancel()
+    process.waitUntilExit()
+    processWasAliveAtTimeout.lock()
+    let wasAlive = wasAliveAtTimeout
+    processWasAliveAtTimeout.unlock()
+    precondition(timeoutSignaled && processExited, "timed process lifecycle did not finish")
+    precondition(wasAlive, "timeout callback must win before TERM reaches the child")
+    precondition(process.terminationStatus == 0,
+                 "test child should exit successfully on TERM to exercise the Promise race")
+  }
+
+  private static func checkExitedChildDoesNotBecomeTimeout() throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+    try process.run()
+    process.waitUntilExit()
+    precondition(process.terminationStatus == 0)
+
+    let timedOut = DispatchSemaphore(value: 0)
+    let timeout = BoundedProcessTimeout.schedule(for: process, after: 0.05) {
+      timedOut.signal()
+    }
+    let incorrectlyTimedOut = timedOut.wait(timeout: .now() + .milliseconds(150)) == .success
+    timeout.cancel()
+    precondition(!incorrectlyTimedOut,
+                 "a timeout callback scheduled after process exit must not reject a timely result")
+  }
+
+  private static func checkCancelledTimeoutReleasesCaptures() {
+    final class Probe {}
+    final class WeakBox<T: AnyObject> {
+      weak var value: T?
+      init(_ value: T) { self.value = value }
+    }
+
+    func scheduleAndCancel() -> (WeakBox<Process>, WeakBox<Probe>) {
+      let process = Process()
+      let probe = Probe()
+      let processBox = WeakBox(process)
+      let probeBox = WeakBox(probe)
+      let timeout = BoundedProcessTimeout.schedule(for: process, after: 86_400) { [probe] in
+        _ = probe
+      }
+      timeout.cancel()
+      return (processBox, probeBox)
+    }
+
+    let (processBox, probeBox) = scheduleAndCancel()
+    precondition(processBox.value == nil,
+                 "a canceled day-long timeout does not retain a completed process")
+    precondition(probeBox.value == nil,
+                 "a canceled day-long timeout drops its callback captures immediately")
   }
 
   private static func writeLargeChildOutput() -> Int32 {

@@ -807,6 +807,11 @@ enum BundledAirPlayPluginManager {
           return
         }
         DispatchQueue.main.async {
+          guard !AppDelegate.shared.isApplicationTerminating else {
+            removeStagingDirectoryInBackground(stagedRoot)
+            completion(.unavailable)
+            return
+          }
           guard ObjectIdentifier(plugin) == identity,
                 plugin.root.standardizedFileURL == installedRoot,
                 plugin.version == installedVersion,
@@ -828,11 +833,21 @@ enum BundledAirPlayPluginManager {
           PlayerCore.acquirePluginUnloadPermit(identifier: identifier) { unloadResult in
             switch unloadResult {
             case .success(let permit):
+              guard !AppDelegate.shared.isApplicationTerminating else {
+                permit.release(reloadDeferredContexts: false)
+                removeStagingDirectoryInBackground(stagedRoot)
+                completion(.unavailable)
+                return
+              }
               let result = replace(plugin, with: candidate)
               permit.release()
               completion(result)
             case .failure(let error):
               removeStagingDirectoryInBackground(stagedRoot)
+              guard !AppDelegate.shared.isApplicationTerminating else {
+                completion(.failed)
+                return
+              }
               Logger.log("Unable to stop the installed AirPlay plugin before update: \(error.localizedDescription)",
                          level: .error)
               if let unloadError = error as? EventController.AsyncEventError,
@@ -1294,8 +1309,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   private var commandLineStatus = CommandLineStatus()
 
   private var isTerminating = false
-  private var terminationBarrierPending = false
-  private var terminationBarrierCompleted = false
+  var isApplicationTerminating: Bool { isTerminating }
 
   /// Longest time to wait for asynchronous shutdown tasks to finish before giving up on waiting and proceeding with termination.
   ///
@@ -1761,34 +1775,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     let airPlayIdentifier = BundledAirPlayPluginManager.identifier
-    if !terminationBarrierCompleted && PlayerCore.hasLivePluginContext(identifier: airPlayIdentifier) {
-      guard !terminationBarrierPending else { return .terminateLater }
-      terminationBarrierPending = true
-      PlayerCore.acquirePluginUnloadPermit(identifier: airPlayIdentifier) { result in
-        self.terminationBarrierPending = false
-        switch result {
-        case .success(let permit):
-          self.terminationBarrierCompleted = true
-          let reply = self.beginApplicationTermination(sender)
-          permit.release(reloadDeferredContexts: false)
-          if case .terminateNow = reply {
-            NSApp.reply(toApplicationShouldTerminate: true)
-          }
-        case .failure(let error):
-          // Nothing has been closed or disabled yet, so cancellation leaves the existing player
-          // and plugin context available for the user's retry action.
-          NSApp.reply(toApplicationShouldTerminate: false)
-          self.presentPluginLifecycleFailure(error)
-        }
-      }
-      return .terminateLater
-    }
     if PlayerCore.hasAnyPluginContext(identifier: airPlayIdentifier) {
-      // An mpv-initiated shutdown may already have destroyed the player API. Do not invoke a plugin
-      // callback that might touch that API; its helper's own lifecycle timeout is the only safe
-      // cleanup available at this boundary.
-      Logger.log("AirPlay plugin context belongs to an already shut down player; skipping unsafe unload callback",
-                 level: .warning)
+      // App shutdown must not be held open by an AirPlay Promise that can also block
+      // plugin updates. Closing windows lets live contexts request stop; the helper's
+      // parent monitor is the independent fallback if that asynchronous request stalls.
+      Logger.log("Proceeding with app termination; AirPlay helper will finish through its stop request or parent monitor")
     }
     return beginApplicationTermination(sender)
   }
@@ -2390,6 +2381,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   func presentPluginLifecycleFailure(_ error: Error) {
     Utility.showAlert("plugin.install_error", arguments: [error.localizedDescription], style: .warning,
                       sheetWindow: NSApp.keyWindow)
+        guard !self.isApplicationTerminating else {
+          permit.release(reloadDeferredContexts: false)
+          return
+        }
   }
   
   @objc func toggleNewSettings(_ sender: AnyObject) {

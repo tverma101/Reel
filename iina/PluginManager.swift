@@ -22,7 +22,10 @@ class PluginManager {
   @MainActor
   private func acquireUnloadPermit(for plugin: JavascriptPlugin) async throws -> PluginUnloadPermit? {
     guard plugin.identifier == BundledAirPlayPluginManager.identifier else { return nil }
-    return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<PluginUnloadPermit?, Error>) in
+    guard !AppDelegate.shared.isApplicationTerminating else {
+      throw PluginOperationCancellationError.applicationTerminating
+    }
+    let permit = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<PluginUnloadPermit?, Error>) in
       PlayerCore.acquirePluginUnloadPermit(identifier: plugin.identifier) { result in
         switch result {
         case .success(let permit): continuation.resume(returning: permit)
@@ -30,6 +33,11 @@ class PluginManager {
         }
       }
     }
+    guard !AppDelegate.shared.isApplicationTerminating else {
+      permit?.release(reloadDeferredContexts: false)
+      throw PluginOperationCancellationError.applicationTerminating
+    }
+    return permit
   }
 
   /// Replaces a managed package only after preserving the previous directory as a recoverable
@@ -167,6 +175,12 @@ class PluginManager {
 
   @MainActor
   func handleInstallationError(_ error: Error) {
+    guard PluginOperationErrorPolicy.shouldShowInstallationError(
+      error, whileTerminating: AppDelegate.shared.isApplicationTerminating) else {
+      Logger.log("Suppressing plugin installation cancellation during application termination.", level: .verbose)
+      return
+    }
+
     let message: String
     if let pluginError = error as? JavascriptPlugin.PluginError {
       switch pluginError {

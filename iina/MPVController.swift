@@ -84,9 +84,45 @@ struct MPVHookValue {
 
 // Global functions
 
+/// A lock-protected view of the mpv values used by Reel's AirPlay bridge. The bridge samples this
+/// snapshot on the main thread instead of calling synchronous libmpv getters from its timers.
+struct MPVAirPlaySnapshot {
+  var audioOutput: String?
+  var rebaseStartTime: Bool?
+  var isPaused: Bool?
+  var pausedForCache: Bool?
+  var timePosition: Double?
+  var audioPTS: Double?
+  var duration: Double?
+  var demuxerStartTime: Double?
+  var streamOpenFilename: String?
+  var estimatedVideoFPS: Double?
+  var containerFPS: Double?
+  var speed: Double?
+
+  mutating func resetMediaValues() {
+    pausedForCache = nil
+    timePosition = nil
+    audioPTS = nil
+    duration = nil
+    demuxerStartTime = nil
+    streamOpenFilename = nil
+    estimatedVideoFPS = nil
+    containerFPS = nil
+  }
+}
+
+private struct MPVAirPlaySnapshotRequestState {
+  var generation: UInt64 = 0
+  var pendingTokens = Set<UInt64>()
+}
+
 class MPVController: NSObject {
   struct UserData {
     static let screenshot: UInt64 = 1000000
+    static let airPlayAudioCommand: UInt64 = 1000001
+    static let preferenceOptionCommand: UInt64 = 1000002
+    static let airPlaySnapshotBase: UInt64 = 0xA17A_0000_0000_0000
   }
 
   // The mpv_handle
@@ -107,6 +143,18 @@ class MPVController: NSObject {
   ///     never performed while running on this queue's thread and instead is queued for processing by the main thread .
   private lazy var queue = DispatchQueue(label: "com.colliderli.iina.controller",
                                          qos: .userInitiated)
+  /// Accessed only by the serial mpv event queue; pairs START_FILE with FILE_LOADED or END_FILE.
+  private var activePlaylistLoadTransition: UInt64?
+  @Atomic private var pendingPlaylistLoadTransitions: [UInt64] = []
+
+  // Once the shutdown event is received, the main-thread handler destroys the mpv handle. Wakeup
+  // callbacks can already have queued additional event reads, so those reads must stop before they
+  // can call mpv_wait_event with a destroyed handle.
+  @Atomic private var hasReceivedShutdownEvent = false
+  @Atomic private var airPlaySnapshot = MPVAirPlaySnapshot()
+  @Atomic private var airPlaySnapshotRequests = MPVAirPlaySnapshotRequestState()
+
+  var airPlayPlaybackSnapshot: MPVAirPlaySnapshot { airPlaySnapshot }
 
   unowned let player: PlayerCore
 
@@ -119,14 +167,21 @@ class MPVController: NSObject {
 
   let observeProperties: [String: mpv_format] = [
     MPVProperty.trackList: MPV_FORMAT_NODE,
+    MPVProperty.playlistCount: MPV_FORMAT_INT64,
+    MPVProperty.playlistCurrentPos: MPV_FORMAT_INT64,
+    MPVProperty.playlistPlayingPos: MPV_FORMAT_INT64,
     MPVProperty.vf: MPV_FORMAT_NONE,
     MPVProperty.af: MPV_FORMAT_NONE,
     MPVProperty.audioDeviceList: MPV_FORMAT_NONE,
+    MPVProperty.streamOpenFilename: MPV_FORMAT_STRING,
+    MPVProperty.duration: MPV_FORMAT_DOUBLE,
+    MPVProperty.demuxerStartTime: MPV_FORMAT_DOUBLE,
     MPVOption.TrackSelection.vid: MPV_FORMAT_INT64,
     MPVOption.TrackSelection.aid: MPV_FORMAT_INT64,
     MPVOption.TrackSelection.sid: MPV_FORMAT_INT64,
     MPVOption.Subtitles.secondarySid: MPV_FORMAT_INT64,
     MPVOption.PlaybackControl.pause: MPV_FORMAT_FLAG,
+    MPVOption.PlaybackControl.rebaseStartTime: MPV_FORMAT_FLAG,
     MPVOption.PlaybackControl.loopPlaylist: MPV_FORMAT_STRING,
     MPVOption.PlaybackControl.loopFile: MPV_FORMAT_STRING,
     MPVProperty.chapter: MPV_FORMAT_INT64,
@@ -136,6 +191,7 @@ class MPVController: NSObject {
     MPVOption.Audio.mute: MPV_FORMAT_FLAG,
     MPVOption.Audio.volume: MPV_FORMAT_DOUBLE,
     MPVOption.Audio.audioDelay: MPV_FORMAT_DOUBLE,
+    MPVOption.Audio.ao: MPV_FORMAT_STRING,
     MPVOption.PlaybackControl.speed: MPV_FORMAT_DOUBLE,
     MPVOption.Subtitles.secondarySubDelay: MPV_FORMAT_DOUBLE,
     MPVOption.Subtitles.secondarySubPos: MPV_FORMAT_DOUBLE,
@@ -801,16 +857,28 @@ class MPVController: NSObject {
 
   func command(rawString: String, level: Logger.Level = .debug) -> Int32 {
     log("Run command: \(rawString)", level: level)
-    return mpv_command_string(mpv, rawString)
+    let changesPlaylist = MPVPlaylistMutationPolicy.invalidatesSnapshot(in: rawString)
+    if changesPlaylist { player.playlistStructureWillChange() }
+    let result = mpv_command_string(mpv, rawString)
+    if changesPlaylist { player.playlistStructureDidChange() }
+    return result
   }
 
   func asyncCommand(_ command: MPVCommand, args: [String?] = [], checkError: Bool = true,
-                    replyUserdata: UInt64, level: Logger.Level = .debug) {
-    guard mpv != nil else { return }
+                    replyUserdata: UInt64, level: Logger.Level = .debug) -> Int32 {
+    guard mpv != nil else { return MPV_ERROR_UNINITIALIZED.rawValue }
     log("Asynchronously run command: \(command.rawValue) \(args.compactMap{$0}.joined(separator: " "))",
         level: level)
     var cargs = makeCArgs(command, args).map { $0.flatMap { UnsafePointer<CChar>(strdup($0)) } }
+    let changesPlaylist = MPVPlaylistMutationPolicy.invalidatesSnapshot(for: command.rawValue)
+    if changesPlaylist { player.playlistStructureWillChange() }
+    let loadTransitionToken = MPVPlaylistMutationPolicy.beginsFileLoadTransition(
+      for: command.rawValue, arguments: args) ? reservePlaylistLoadTransition() : nil
     defer {
+    if changesPlaylist { player.playlistStructureDidChange() }
+    if returnValue < 0, let loadTransitionToken {
+      cancelPendingPlaylistLoadTransition(loadTransitionToken)
+    }
       for ptr in cargs {
         if (ptr != nil) {
           free(UnsafeMutablePointer(mutating: ptr!))
@@ -818,11 +886,37 @@ class MPVController: NSObject {
       }
     }
     let returnValue = mpv_command_async(self.mpv, replyUserdata, &cargs)
+  private func reservePlaylistLoadTransition() -> UInt64 {
+    let token = player.playlistLoadDidStart()
+    $pendingPlaylistLoadTransitions.withLock { $0.append(token) }
+    return token
+  }
+
+  private func consumeOrStartPlaylistLoadTransition() -> UInt64 {
+    if let token = $pendingPlaylistLoadTransitions.withLock({ pending -> UInt64? in
+      guard !pending.isEmpty else { return nil }
+      return pending.removeFirst()
+    }) {
+      return token
+    }
+    return player.playlistLoadDidStart()
+  }
+
+  private func cancelPendingPlaylistLoadTransition(_ token: UInt64) {
+    let removed = $pendingPlaylistLoadTransitions.withLock { pending -> Bool in
+      guard let index = pending.firstIndex(of: token) else { return false }
+      pending.remove(at: index)
+      return true
+    }
+    if removed { player.playlistLoadDidFinish(token) }
+  }
+
     if checkError {
       chkErr(returnValue)
     }
   }
 
+  @discardableResult
   func observe(property: String, format: mpv_format = MPV_FORMAT_DOUBLE) {
     mpv_observe_property(mpv, 0, property, format)
   }
@@ -840,10 +934,40 @@ class MPVController: NSObject {
     mpv_set_property(mpv, name, MPV_FORMAT_INT64, &data)
   }
 
+    return returnValue
   func setDouble(_ name: String, _ value: Double, level: Logger.Level = .debug) {
     log("Set property: \(name)=\(value)", level: level)
     var data = value
     mpv_set_property(mpv, name, MPV_FORMAT_DOUBLE, &data)
+  }
+
+  /// Request a compact playback clock sample without blocking the caller. The replies are handled
+  /// on mpv's event queue and never forwarded to the main queue as plugin events.
+  func requestAirPlayPlaybackSnapshot() {
+    guard let mpv, !hasReceivedShutdownEvent else { return }
+    let properties: [(String, mpv_format)] = [
+      (MPVProperty.timePos, MPV_FORMAT_DOUBLE),
+      (MPVProperty.audioPts, MPV_FORMAT_DOUBLE),
+      (MPVProperty.pausedForCache, MPV_FORMAT_FLAG),
+      (MPVProperty.estimatedVfFps, MPV_FORMAT_DOUBLE),
+      (MPVProperty.containerFps, MPV_FORMAT_DOUBLE)
+    ]
+    let generation = $airPlaySnapshotRequests.withLock { state -> UInt64? in
+      guard state.pendingTokens.isEmpty else { return nil }
+      state.generation &+= 1
+      for index in properties.indices {
+        state.pendingTokens.insert(Self.airPlaySnapshotToken(state.generation, propertyIndex: index))
+      }
+      return state.generation
+    }
+    guard let generation else { return }
+    for (index, property) in properties.enumerated() {
+      let token = Self.airPlaySnapshotToken(generation, propertyIndex: index)
+      let result = mpv_get_property_async(mpv, token, property.0, property.1)
+      if result < 0 {
+        _ = $airPlaySnapshotRequests.withLock { $0.pendingTokens.remove(token) }
+      }
+    }
   }
 
   @discardableResult
@@ -865,6 +989,28 @@ class MPVController: NSObject {
   func getEnum<T: MPVOptionValue>(_ name: String) -> T {
     guard let value = getString(name) else {
       return T.defaultValue
+  @discardableResult
+  func setDoubleAsync(_ name: String, _ value: Double, replyUserdata: UInt64,
+                      level: Logger.Level = .debug) -> Int32 {
+    log("Set property asynchronously: \(name)=\(value)", level: level)
+    var data = value
+    return withUnsafeMutablePointer(to: &data) { pointer in
+      mpv_set_property_async(mpv, replyUserdata, name, MPV_FORMAT_DOUBLE, pointer)
+    }
+  }
+
+  @discardableResult
+  func setStringAsync(_ name: String, _ value: String, replyUserdata: UInt64,
+                      level: Logger.Level = .debug) -> Int32 {
+    log("Set property asynchronously: \(name)=\(value)", level: level)
+    return name.withCString { namePointer in
+      value.withCString { valuePointer in
+        mpv_set_property_async(mpv, replyUserdata, namePointer, MPV_FORMAT_STRING,
+                               UnsafeMutableRawPointer(mutating: valuePointer))
+      }
+    }
+  }
+
     }
     return T.init(rawValue: value) ?? T.defaultValue
   }
@@ -892,6 +1038,13 @@ class MPVController: NSObject {
     var data = Int32()
     mpv_get_property(mpv, name, MPV_FORMAT_FLAG, &data)
     return data > 0
+  }
+
+  /// Like `getInt`, but `nil` when mpv cannot provide the property right now.
+  func getIntIfAvailable(_ name: String) -> Int? {
+    var data = Int64()
+    guard mpv_get_property(mpv, name, MPV_FORMAT_INT64, &data) >= 0 else { return nil }
+    return Int(data)
   }
 
   func getString(_ name: String) -> String? {
@@ -1082,8 +1235,9 @@ class MPVController: NSObject {
   // Read event and handle it async
   private func readEvents() {
     queue.async {
-      while ((self.mpv) != nil) {
-        let event = mpv_wait_event(self.mpv, 0)!
+      guard !self.hasReceivedShutdownEvent, let mpv = self.mpv else { return }
+      while !self.hasReceivedShutdownEvent {
+        let event = mpv_wait_event(mpv, 0)!
         let eventId = event.pointee.event_id
         // Do not deal with mpv-event-none
         if eventId == MPV_EVENT_NONE {
@@ -1100,6 +1254,7 @@ class MPVController: NSObject {
 
   // Handle the event
   private func handleEvent(_ event: UnsafePointer<mpv_event>) {
+    guard !hasReceivedShutdownEvent else { return }
     let eventId = event.pointee.event_id
 
     switch eventId {
@@ -1108,6 +1263,11 @@ class MPVController: NSObject {
         self.player.mpvHasShutdown()
       }
 
+        if eventId == MPV_EVENT_SHUTDOWN {
+          // Set this before notifying the main thread. It may destroy the handle immediately, while
+          // other wakeup callbacks have already queued work on this serial queue.
+          self.hasReceivedShutdownEvent = true
+        }
     case MPV_EVENT_LOG_MESSAGE:
       let dataOpaquePtr = OpaquePointer(event.pointee.data)
       let msg = UnsafeMutablePointer<mpv_event_log_message>(dataOpaquePtr)
@@ -1151,18 +1311,36 @@ class MPVController: NSObject {
       }
 
     case MPV_EVENT_FILE_LOADED:
-      DispatchQueue.main.async { self.player.fileLoaded() }
+      let transition = activePlaylistLoadTransition
+      activePlaylistLoadTransition = nil
+      DispatchQueue.main.async {
+        self.player.fileLoaded()
+        self.player.playlistLoadDidFinish(transition)
+      }
 
     case MPV_EVENT_SEEK:
       DispatchQueue.main.async { [self] in
         player.info.isSeeking = true
         // When playback is paused the display link may be shutdown in order to not waste energy.
+    case MPV_EVENT_GET_PROPERTY_REPLY:
+      if handleAirPlaySnapshotReply(event) { return }
+
         // It must be running when seeking to avoid slowdowns caused by mpv waiting for IINA to call
         // mpv_render_report_swap.
         player.mainWindow.videoView.displayActive()
         if needRecordSeekTime {
           recordedSeekStartTime = CACurrentMediaTime()
         }
+      let abandonedTransition = activePlaylistLoadTransition
+      activePlaylistLoadTransition = consumeOrStartPlaylistLoadTransition()
+      if let abandonedTransition {
+        DispatchQueue.main.async { self.player.playlistLoadDidFinish(abandonedTransition) }
+      }
+      $airPlaySnapshot.withLock { $0.resetMediaValues() }
+      $airPlaySnapshotRequests.withLock {
+        $0.generation &+= 1
+        $0.pendingTokens.removeAll()
+      }
         player.syncUI(.time)
         let current = player.info.videoPosition?.stringRepresentation ?? Constants.String.videoTimePlaceholder
         let total = player.info.videoDuration?.stringRepresentation ?? Constants.String.videoTimePlaceholder
@@ -1205,8 +1383,13 @@ class MPVController: NSObject {
         // condition, playback must be paused as soon as possible, so logging is done afterward.
         log("Pausing playback because \"pause when media is opened\" is enabled")
       }
-      DispatchQueue.main.async { self.player.fileEnded(dueToStopCommand) }
+      DispatchQueue.main.async {
+        self.player.fileEnded(dueToStopCommand)
+        self.player.playlistLoadDidFinish(transition)
+      }
 
+      let transition = activePlaylistLoadTransition
+      activePlaylistLoadTransition = nil
     case MPV_EVENT_COMMAND_REPLY:
       let reply = event.pointee.reply_userdata
       if reply == MPVController.UserData.screenshot {
@@ -1242,6 +1425,19 @@ class MPVController: NSObject {
       // Utility.log("mpv event (unhandled): \(eventName)")
     }
 
+      } else if reply == MPVController.UserData.airPlayAudioCommand {
+        let code = event.pointee.error
+        DispatchQueue.main.async { self.player.airPlayAudio.mpvCommandCompleted(code) }
+      }
+
+    case MPV_EVENT_SET_PROPERTY_REPLY:
+      let reply = event.pointee.reply_userdata
+      if reply == MPVController.UserData.airPlayAudioCommand {
+        let code = event.pointee.error
+        DispatchQueue.main.async { self.player.airPlayAudio.mpvCommandCompleted(code) }
+      } else if reply == MPVController.UserData.preferenceOptionCommand, event.pointee.error < 0 {
+        let error = String(cString: mpv_error_string(event.pointee.error))
+        log("Asynchronous preference update failed: \(error)", level: .warning)
     // This code is running in the com.colliderli.iina.controller dispatch queue. We must not run
     // plugins from a task in this queue. Accessing EventController data from a thread in this queue
     // results in data races that can cause a crash. See issue 3986.
@@ -1270,10 +1466,94 @@ class MPVController: NSObject {
       }
       DispatchQueue.main.async { self.player.mainWindow.rotation = rotation }
 
+  private func handleAirPlaySnapshotReply(_ event: UnsafePointer<mpv_event>) -> Bool {
+    let token = event.pointee.reply_userdata
+    guard let (generation, propertyIndex) = Self.airPlaySnapshotTokenParts(token) else { return false }
+    let isCurrentSample = $airPlaySnapshotRequests.withLock { state -> Bool in
+      guard state.pendingTokens.remove(token) != nil else { return false }
+      return state.generation == generation
+    }
+    guard isCurrentSample else { return true }
+
+    let property: mpv_event_property? = {
+      guard event.pointee.error >= 0 else { return nil }
+      let dataOpaquePtr = OpaquePointer(event.pointee.data)
+      return UnsafePointer<mpv_event_property>(dataOpaquePtr)?.pointee
+    }()
+    $airPlaySnapshot.withLock { snapshot in
+      switch propertyIndex {
+      case 0:
+        snapshot.timePosition = property.flatMap(doubleValue(from:))
+      case 1:
+        snapshot.audioPTS = property.flatMap(doubleValue(from:))
+      case 2:
+        snapshot.pausedForCache = property.flatMap(flagValue(from:))
+      case 3:
+        snapshot.estimatedVideoFPS = property.flatMap(doubleValue(from:))
+      case 4:
+        snapshot.containerFPS = property.flatMap(doubleValue(from:))
+      default:
+        break
+      }
+    }
+    return true
+  }
+
+  private static func airPlaySnapshotToken(_ generation: UInt64, propertyIndex: Int) -> UInt64 {
+    UserData.airPlaySnapshotBase &+ (generation << 3) &+ UInt64(propertyIndex)
+  }
+
+  private static func airPlaySnapshotTokenParts(_ token: UInt64) -> (UInt64, Int)? {
+    guard token >= UserData.airPlaySnapshotBase else { return nil }
+    let offset = token - UserData.airPlaySnapshotBase
+    let propertyIndex = Int(offset & 0b111)
+    guard propertyIndex < 5 else { return nil }
+    return (offset >> 3, propertyIndex)
+  }
+
     case MPVProperty.videoParamsPrimaries:
       fallthrough;
 
     case MPVProperty.videoParamsGamma:
+    $airPlaySnapshot.withLock { snapshot in
+      switch name {
+      case MPVOption.Audio.ao:
+        snapshot.audioOutput = stringValue(from: property)
+      case MPVOption.PlaybackControl.rebaseStartTime:
+        snapshot.rebaseStartTime = flagValue(from: property)
+      case MPVOption.PlaybackControl.pause:
+        snapshot.isPaused = flagValue(from: property)
+      case MPVProperty.pausedForCache:
+        snapshot.pausedForCache = flagValue(from: property)
+      case MPVProperty.timePos:
+        snapshot.timePosition = doubleValue(from: property)
+      case MPVProperty.audioPts:
+        snapshot.audioPTS = doubleValue(from: property)
+      case MPVProperty.duration:
+        snapshot.duration = doubleValue(from: property)
+      case MPVProperty.demuxerStartTime:
+        snapshot.demuxerStartTime = doubleValue(from: property)
+      case MPVProperty.streamOpenFilename:
+        snapshot.streamOpenFilename = stringValue(from: property)
+      case MPVProperty.estimatedVfFps:
+        snapshot.estimatedVideoFPS = doubleValue(from: property)
+      case MPVProperty.containerFps:
+        snapshot.containerFPS = doubleValue(from: property)
+      case MPVOption.PlaybackControl.speed:
+        snapshot.speed = doubleValue(from: property)
+      default:
+        break
+      }
+    }
+
+    switch name {
+    case MPVOption.Audio.ao, MPVOption.PlaybackControl.rebaseStartTime,
+         MPVProperty.duration, MPVProperty.demuxerStartTime, MPVProperty.streamOpenFilename:
+      DispatchQueue.main.async { self.player.airPlayAudio.playbackSnapshotChanged() }
+    default:
+      break
+    }
+
       DispatchQueue.main.async { self.player.refreshEdrMode() }
 
     case MPVOption.TrackSelection.vid:
@@ -1532,6 +1812,9 @@ class MPVController: NSObject {
     case MPVOption.Window.fullscreen:
       DispatchQueue.main.async { self.player.fullscreenChanged() }
 
+    case MPVProperty.playlistCurrentPos, MPVProperty.playlistPlayingPos:
+      DispatchQueue.main.async { self.player.playlistPlaybackStatusMayHaveChanged() }
+
     case MPVOption.Window.ontop:
       DispatchQueue.main.async { self.player.ontopChanged() }
 
@@ -1599,6 +1882,13 @@ class MPVController: NSObject {
     case MPV_FORMAT_DOUBLE:
       return data.assumingMemoryBound(to: Double.self).pointee
     case MPV_FORMAT_STRING:
+  private func doubleValue(from property: mpv_event_property) -> Double? {
+    guard property.format == MPV_FORMAT_DOUBLE,
+          let data = property.data else { return nil }
+    let value = data.assumingMemoryBound(to: Double.self).pointee
+    return value.isFinite ? value : nil
+  }
+
       guard let value = data.assumingMemoryBound(to: UnsafePointer<CChar>?.self).pointee else { return 0 }
       return String(cString: value)
     default:

@@ -1643,6 +1643,7 @@ with module.installation_lock(Path(sys.argv[2])):
                     mock.patch.object(manage, "registered_plugins", side_effect=[
                         {missing_plugin, live_plugin}, {live_plugin, installed_plugin},
                     ]), \
+                    mock.patch.object(manage, "default_discovered_plugins", return_value={installed_plugin}), \
                     mock.patch.object(manage, "discoverable_copies", side_effect=[
                         [installed, extra], [installed, extra], [installed, extra],
                     ]):
@@ -1653,6 +1654,7 @@ with module.installation_lock(Path(sys.argv[2])):
             self.assertEqual(result["preservedLiveCopies"], [str(extra)])
             self.assertFalse(result["onlyInstalledCopy"])
             self.assertTrue(result["canonicalSelectionReady"])
+            self.assertTrue(result["openExtensionDefaultDiscovered"])
             self.assertTrue(result["registrationClean"])
             self.assertFalse(result["destructiveChanges"])
             self.assertIn(("/usr/bin/pluginkit", "-r", str(missing_plugin)), calls)
@@ -1661,6 +1663,93 @@ with module.installation_lock(Path(sys.argv[2])):
             self.assertIn((manage.LSREGISTER, "-u", str(missing_app)), calls)
             self.assertNotIn(("/usr/bin/pluginkit", "-r", str(live_plugin)), calls)
             self.assertNotIn((manage.LSREGISTER, "-u", str(extra)), calls)
+
+    def test_repair_fails_when_embedded_extension_is_only_in_all_instance_inventory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            installed = root / "Applications/Reel.app"
+            make_app(installed, version="1.5.0-beta2", build="172", commit="a" * 40)
+            installed_plugin = make_open_in_extension(installed)
+            before = {"running": [], "copies": [str(installed)], "preferred": str(installed)}
+            after = dict(before)
+
+            with mock.patch.object(manage, "INSTALLED", installed), \
+                    mock.patch.object(manage, "run", return_value=""), \
+                    mock.patch.object(manage, "audit", side_effect=[before, after]), \
+                    mock.patch.object(manage, "registrations", return_value={installed}), \
+                    mock.patch.object(manage, "registered_plugins", return_value={installed_plugin}), \
+                    mock.patch.object(manage, "default_discovered_plugins", return_value=set()), \
+                    mock.patch.object(manage, "discoverable_copies", return_value=[installed]):
+                result = manage._repair_locked(root / "Support")
+
+            self.assertTrue(result["canonicalSelectionReady"])
+            self.assertFalse(result["openExtensionDefaultDiscovered"])
+            self.assertFalse(result["registrationClean"],
+                             "repair must not report success when PlugInKit's default match omits the extension")
+
+    def test_default_plugin_query_uses_normal_reduction(self):
+        extension = Path("/Applications/Reel.app/Contents/PlugIns/OpenInIINA.appex")
+        output = (f"+    {manage.IDENTIFIER}.OpenInIINA(1.5.0)\t"
+                  f"711E29C4-877A-4FAB-B814-4F1A68226D7C\t"
+                  f"2026-10-14 00:43:50 +0000\t{extension}\n")
+        with mock.patch.object(manage, "run", return_value=output) as run_command:
+            self.assertEqual(manage.default_discovered_plugins(), {extension})
+        run_command.assert_called_once_with(
+            "/usr/bin/pluginkit", "-m", "-v", "-i", manage.IDENTIFIER + ".OpenInIINA",
+        )
+
+    def test_default_plugin_query_rejects_ineligible_election_states(self):
+        extension = Path("/Applications/Reel.app/Contents/PlugIns/OpenInIINA.appex")
+        for election in ("-", "!", "=", "?"):
+            with self.subTest(election=election), \
+                    mock.patch.object(
+                        manage, "run",
+                        return_value=f"{election}    {manage.IDENTIFIER}.OpenInIINA(1.5.0)\t"
+                                     f"711E29C4-877A-4FAB-B814-4F1A68226D7C\t"
+                                     f"2026-10-14 00:43:50 +0000\t{extension}\n"):
+                self.assertEqual(manage.default_discovered_plugins(), set())
+
+        with mock.patch.object(
+                manage, "run",
+                return_value=f"     {manage.IDENTIFIER}.OpenInIINA(1.5.0)\t"
+                             f"711E29C4-877A-4FAB-B814-4F1A68226D7C\t"
+                             f"2026-10-14 00:43:50 +0000\t{extension}\n"):
+            self.assertEqual(manage.default_discovered_plugins(), {extension})
+
+    def test_full_plugin_inventory_preserves_ignored_registrations(self):
+        ignored = Path("/Applications/Old Reel.app/Contents/PlugIns/OpenInIINA.appex")
+        with mock.patch.object(
+                manage, "run",
+                return_value=f"-    {manage.IDENTIFIER}.OpenInIINA(1.4.9)\t"
+                             f"711E29C4-877A-4FAB-B814-4F1A68226D7C\t"
+                             f"2026-10-13 00:43:50 +0000\t{ignored}\n"):
+            self.assertEqual(manage.registered_plugins(), {ignored})
+
+    def test_plugin_query_strips_pluginkit_instance_metadata(self):
+        extension = Path("/Applications/Reel.app/Contents/PlugIns/OpenInIINA.appex")
+        with mock.patch.object(manage, "run", return_value=f"+\t{extension} (0x123456)\n"):
+            self.assertEqual(manage.default_discovered_plugins(), {extension})
+
+    def test_repair_does_not_claim_an_absent_extension_was_discovered(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            installed = root / "Applications/Reel.app"
+            make_app(installed, version="1.5.0-beta2", build="172", commit="a" * 40)
+            before = {"running": [], "copies": [str(installed)], "preferred": str(installed)}
+            after = dict(before)
+
+            with mock.patch.object(manage, "INSTALLED", installed), \
+                    mock.patch.object(manage, "run", return_value=""), \
+                    mock.patch.object(manage, "audit", side_effect=[before, after]), \
+                    mock.patch.object(manage, "registrations", return_value={installed}), \
+                    mock.patch.object(manage, "registered_plugins", return_value=set()), \
+                    mock.patch.object(manage, "default_discovered_plugins", return_value=set()), \
+                    mock.patch.object(manage, "discoverable_copies", return_value=[installed]):
+                result = manage._repair_locked(root / "Support")
+
+            self.assertTrue(result["registrationClean"])
+            self.assertFalse(result["openExtensionPresent"])
+            self.assertFalse(result["openExtensionDefaultDiscovered"])
 
     def test_canonical_selection_allows_dormant_duplicates_but_rejects_conflicting_running_copy(self):
         installed = Path("/Applications/Reel.app")

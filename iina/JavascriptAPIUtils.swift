@@ -22,10 +22,29 @@ fileprivate extension Process {
   }
 }
 
+private final class JavascriptPromiseCompletion {
+  private let lock = NSLock()
+  private var didSettle = false
+
+  @discardableResult
+  func settle(on queue: DispatchQueue, _ action: @escaping () -> Void) -> Bool {
+    lock.lock()
+    guard !didSettle else {
+      lock.unlock()
+      return false
+    }
+    didSettle = true
+    lock.unlock()
+    queue.async(execute: action)
+    return true
+  }
+}
+
 @objc protocol JavascriptAPIUtilsExportable: JSExport {
   func fileInPath(_ file: String) -> Bool
   func resolvePath(_ path: String) -> String?
   func exec(_ file: String, _ args_: Any, _ cwd: JSValue?, _ stdoutHook_: JSValue?, _ stderrHook_: JSValue?) -> JSValue?
+  func execWithTimeout(_ file: String, _ args_: Any, _ timeoutSeconds: Double) -> JSValue?
   func ask(_ title: String) -> Bool
   func prompt(_ title: String) -> String?
   func chooseFile(_ title: String, _ options: [String: Any]) -> Any
@@ -93,6 +112,23 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
   }
 
   func exec(_ file: String, _ args_: Any, _ cwd: JSValue?, _ stdoutHook_: JSValue?, _ stderrHook_: JSValue?) -> JSValue? {
+    execute(file, args_, cwd, stdoutHook_, stderrHook_, timeoutSeconds: nil)
+  }
+
+  func execWithTimeout(_ file: String, _ args_: Any, _ timeoutSeconds: Double) -> JSValue? {
+    guard timeoutSeconds.isFinite, timeoutSeconds > 0, timeoutSeconds <= 86_400 else {
+      throwError(withMessage: "The exec timeout must be between 0 and 86400 seconds")
+      return nil
+    }
+    return execute(file, args_, nil, nil, nil, timeoutSeconds: timeoutSeconds)
+  }
+
+  private func execute(_ file: String,
+                       _ args_: Any,
+                       _ cwd: JSValue?,
+                       _ stdoutHook_: JSValue?,
+                       _ stderrHook_: JSValue?,
+                       timeoutSeconds: TimeInterval?) -> JSValue? {
     guard permitted(to: .accessFileSystem) else {
       return nil
     }
@@ -156,8 +192,18 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
       }
 
       let pluginIdentifier = self.pluginInstance.plugin.identifier
-      guard let executionPermit = BoundedProcessExecutionAdmission.shared.acquire(
-        forPluginIdentifier: pluginIdentifier) else {
+      // AirPlay's long-lived `serve` process can occupy both ordinary permits
+      // for its plugin. Reserve a separate, globally bounded lane only for the
+      // bundled helper's timed `stop` command so it can always request teardown.
+      let isAirPlayStopCommand = timeoutSeconds != nil &&
+        pluginIdentifier == BundledAirPlayPluginManager.identifier &&
+        URL(fileURLWithPath: path).lastPathComponent == "airplay-helper" &&
+        args.first == "stop"
+      let admission = BoundedProcessExecutionAdmission.shared
+      let executionPermit = isAirPlayStopCommand
+        ? admission.acquireLifecycleControl(forPluginIdentifier: pluginIdentifier)
+        : admission.acquire(forPluginIdentifier: pluginIdentifier)
+      guard let executionPermit else {
         reject.call(withArguments: [-3, "Too many plugin processes are already active for this plugin or application"])
         return
       }
@@ -209,11 +255,20 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
         return
       }
 
+      let promiseCompletion = JavascriptPromiseCompletion()
+      let timeoutDeadline = timeoutSeconds.map { DispatchTime.now() + $0 }
+      let timeoutWork: BoundedProcessTimeoutToken? = timeoutDeadline.map { deadline in
+        BoundedProcessTimeout.schedule(for: process, deadline: deadline) {
+          guard let timeoutSeconds else { return }
+          promiseCompletion.settle(on: completionQueue) {
+            reject.call(withArguments: [-4, "Process timed out after \(timeoutSeconds) seconds"])
+          }
+        }
+      }
+
       processWaitQueue.async {
-        // The current exec contract awaits natural child exit and exposes no
-        // timeout or cancellation input. Keep runtime unlimited here; the
-        // timeout below bounds only post-exit pipe draining.
         process.waitUntilExit()
+        timeoutWork?.cancel()
         // Process exit does not guarantee either pipe has delivered EOF. Give
         // both readers and their hooks a bounded window to drain. Process
         // completion runs off the plugin JS queue so one long process cannot
@@ -238,9 +293,12 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
         // readers, or pipe handles. If an admitted hook never returns, JSCore
         // cannot safely be re-entered to settle its Promise; the process and
         // reader lifecycle still completes and total retained calls stay capped.
-        completionQueue.async {
+        let didQueueSettlement = promiseCompletion.settle(on: completionQueue) {
           defer { executionPermit.release() }
           resolve.call(withArguments: [result])
+        }
+        if !didQueueSettlement {
+          completionQueue.async { executionPermit.release() }
         }
       }
     }

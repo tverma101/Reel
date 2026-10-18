@@ -145,6 +145,17 @@ final class SimulatedPlayerContext {
     lock.unlock()
   }
 
+  func prepareForPlayerShutdown(identifier: String) {
+    guard state == .live else { return }
+    controller.emitToPlugin(.pluginWillUnload, identifier: identifier, data: [identifier])
+    controller.removeAllListeners()
+    lock.lock()
+    storedTimerCount = 0
+    storedPluginRetained = false
+    storedState = .shuttingDown
+    lock.unlock()
+  }
+
   func retireAfterShutdown() {
     guard state == .shutDown else { return }
     controller.removeAllListeners()
@@ -196,8 +207,35 @@ expect(playerContextsLoaded,
        "startup continuation should run only after cold migration has settled")
 expect(!startupGate.continueWhenOpen { playerContextsLoaded = false } && playerContextsLoaded,
        "launch after migration completion should continue immediately without re-deferral")
+expect(!PluginOperationErrorPolicy.shouldShowInstallationError(
+         PluginOperationCancellationError.applicationTerminating, whileTerminating: true),
+       "Quit cancellation must not present an installation-error alert")
+expect(PluginOperationErrorPolicy.shouldShowInstallationError(
+         PluginOperationCancellationError.applicationTerminating, whileTerminating: false),
+       "the termination sentinel outside Quit should remain visible to the user")
+expect(PluginOperationErrorPolicy.shouldShowInstallationError(CancellationError(), whileTerminating: true),
+       "an unrelated cancellation must remain visible even if Quit begins concurrently")
+expect(PluginOperationErrorPolicy.shouldShowInstallationError(HarnessError.timedOut, whileTerminating: true),
+       "a genuine stop timeout must remain visible even if Quit begins concurrently")
+expect(PluginOperationErrorPolicy.shouldShowInstallationError(HarnessError.rejected, whileTerminating: true),
+       "a real plugin stop failure should remain visible during termination")
 
 let identifier = "dev.faruk.iina-airplay"
+let quitFlushController = EventController()
+let quitFlushListener = FakeEventListener(ownerIdentifier: identifier) { done in done(.success(())) }
+let unrelatedQuitListener = FakeEventListener(ownerIdentifier: "other.plugin") { done in done(.success(())) }
+_ = quitFlushController.addListener(quitFlushListener, for: .pluginWillUnload)
+_ = quitFlushController.addListener(unrelatedQuitListener, for: .pluginWillUnload)
+let quitFlushContext = SimulatedPlayerContext(state: .live, controller: quitFlushController)
+quitFlushContext.prepareForPlayerShutdown(identifier: identifier)
+expect(quitFlushListener.synchronousCalls == 1,
+       "player shutdown emits the plugin-unload event before removing generic event listeners")
+expect(unrelatedQuitListener.synchronousCalls == 0,
+       "player shutdown does not run unrelated plugin callbacks while flushing one plugin")
+expect(quitFlushContext.state == .shuttingDown && quitFlushContext.timerCount == 0 &&
+       !quitFlushContext.pluginRetained && !quitFlushController.hasListener(for: .pluginWillUnload),
+       "player shutdown then clears timers, listeners, and the retained plugin context")
+
 let root = FileManager.default.temporaryDirectory
   .appendingPathComponent("plugin-unload-barrier-\(UUID().uuidString)", isDirectory: true)
 let plugins = root.appendingPathComponent("Plugins", isDirectory: true)
@@ -523,38 +561,58 @@ if case .success? = disableResult {
   fatalError("A stale shut-down context must not block disable/reload")
 }
 
-// Orderly termination follows the same rule: wait for the live core before closing windows, while
-// ignoring the unreachable stale context.
-var staleTerminationListenerCalled = false
-var liveTerminationListenerCalled = false
-let staleTerminationContext = SimulatedPlayerContext(state: .shutDown,
-  controller: makeController(identifier: identifier) { done in
-    staleTerminationListenerCalled = true
-    done(.failure(HarnessError.rejected))
-  })
-let liveTerminationContext = SimulatedPlayerContext(state: .live,
-  controller: makeController(identifier: identifier) { done in
-    DispatchQueue.global().asyncAfter(deadline: .now() + 0.06) {
-      liveTerminationListenerCalled = true
-      done(.success(()))
+// App Quit closes windows and begins ordinary player shutdown without waiting for the
+// AirPlay unload Promise. If that Promise later resolves, the update's termination guard
+// must leave the installed package untouched and discard its staging directory.
+let quitRaceStaged = plugins.appendingPathComponent(".temp.quit-race", isDirectory: true)
+try FileManager.default.createDirectory(at: quitRaceStaged, withIntermediateDirectories: true)
+try Data("quit race candidate".utf8).write(to: quitRaceStaged.appendingPathComponent("main.js"))
+let packageBeforeQuitRace = try Data(contentsOf: installed.appendingPathComponent("main.js"))
+var pendingQuitRaceStop: ((Result<Void, Error>) -> Void)?
+var applicationIsTerminating = false
+var windowsClosedForQuit = false
+var updateBlockedByTermination = false
+var quitCancellationWouldShowAlert = false
+let updateSettled = DispatchSemaphore(value: 0)
+let quitRaceContext = SimulatedPlayerContext(state: .live,
+  controller: makeController(identifier: identifier) { done in pendingQuitRaceStop = done })
+runPlayerContextUnloadBarrier([quitRaceContext], identifier: identifier, timeout: 1) { result in
+  if case .success = result {
+    if applicationIsTerminating {
+      updateBlockedByTermination = true
+      quitCancellationWouldShowAlert = PluginOperationErrorPolicy.shouldShowInstallationError(
+        PluginOperationCancellationError.applicationTerminating,
+        whileTerminating: applicationIsTerminating)
+      try? FileManager.default.removeItem(at: quitRaceStaged)
+    } else {
+      try? FileManager.default.removeItem(at: installed)
+      try? FileManager.default.moveItem(at: quitRaceStaged, to: installed)
     }
-  })
-var orderlyTerminationContinued = false
-let terminationResult = awaitResult({ done in
-  runPlayerContextUnloadBarrier([staleTerminationContext, liveTerminationContext],
-                                identifier: identifier,
-                                timeout: 1) { result in
-    if case .success = result { orderlyTerminationContinued = true }
-    done(result)
   }
-})
-if case .success? = terminationResult {
-  expect(liveTerminationListenerCalled, "orderly termination must await the live PlayerCore")
-  expect(!staleTerminationListenerCalled, "termination must not call into a shut-down PlayerCore")
-  expect(orderlyTerminationContinued, "termination may continue after live contexts confirm stop")
-} else {
-  fatalError("A stale shut-down context must not block orderly termination")
+  updateSettled.signal()
 }
+expect(pendingQuitRaceStop != nil, "managed update should be waiting for the exact stop Promise")
+let quitDuringUpdate = awaitResult { done in
+  applicationIsTerminating = true
+  windowsClosedForQuit = true
+  done(.success(()))
+}
+expect(quitDuringUpdate != nil && windowsClosedForQuit,
+       "Quit must start window/player shutdown while the plugin stop Promise is still pending")
+expect(updateSettled.wait(timeout: .now() + .milliseconds(20)) == .timedOut,
+       "the fixture must still have an unresolved stop when Quit proceeds")
+pendingQuitRaceStop?(.success(()))
+expect(updateSettled.wait(timeout: .now() + 1) == .success,
+       "the pending update should settle after its stop Promise resolves")
+expect(updateBlockedByTermination,
+       "a late successful stop must be rejected as an update once app termination begins")
+expect(!quitCancellationWouldShowAlert,
+       "a pending update canceled by Quit must not present an installation-error alert")
+let packageAfterQuitRace = try Data(contentsOf: installed.appendingPathComponent("main.js"))
+expect(packageAfterQuitRace == packageBeforeQuitRace,
+       "Quit racing a late stop must leave the installed package unchanged")
+expect(!FileManager.default.fileExists(atPath: quitRaceStaged.path),
+       "Quit racing an update must discard its staging directory")
 
 // A shutting-down core is never called, waited out, or counted as a successful stop. The caller
 // must retain the old package/state and let shutdown retire the context; a later retry can then
@@ -607,8 +665,7 @@ if case .failure(let error)? = shuttingResult {
   fatalError("A shutting core must fail closed without invoking its listener")
 }
 
-// If another live core rejects after a stale core shuts down, termination is canceled while the
-// dead core's timers/listeners are still released and the package remains untouched.
+// A failed multi-core plugin update remains fail-closed while the stale core's listeners are retired.
 let retainedDuringCanceledTermination = SimulatedPlayerContext(state: .shutDown,
   controller: makeController(identifier: identifier) { done in
     done(.failure(HarnessError.rejected))
@@ -616,26 +673,26 @@ let retainedDuringCanceledTermination = SimulatedPlayerContext(state: .shutDown,
 let rejectingLiveCore = makeController(identifier: identifier) { done in
   DispatchQueue.global().asyncAfter(deadline: .now() + 0.04) { done(.failure(HarnessError.rejected)) }
 }
-var terminationCanceled = false
-let canceledTermination = awaitResult({ done in
+var updateWasRejected = false
+let rejectedUpdate = awaitResult({ done in
   runPlayerContextUnloadBarrier([retainedDuringCanceledTermination,
                                  SimulatedPlayerContext(state: .live, controller: rejectingLiveCore)],
                                 identifier: identifier,
                                 timeout: 1) { result in
-    if case .failure = result { terminationCanceled = true }
+    if case .failure = result { updateWasRejected = true }
     done(result)
   }
 })
-if case .failure? = canceledTermination {
-  expect(terminationCanceled, "live-core stop rejection must cancel termination")
+if case .failure? = rejectedUpdate {
+  expect(updateWasRejected, "live-core stop rejection must fail the plugin update")
   expect(retainedDuringCanceledTermination.timerCount == 0 &&
          !retainedDuringCanceledTermination.pluginRetained,
-         "canceled termination must not retain the already shut-down core's plugin state")
+         "failed update must not retain the already shut-down core's plugin state")
   let packageAfterCanceledTermination = try Data(contentsOf: installed.appendingPathComponent("main.js"))
   expect(packageAfterCanceledTermination == legacyPackageBytes,
-         "canceled termination must leave the installed package unchanged")
+         "failed update must leave the installed package unchanged")
 } else {
-  fatalError("Live-core rejection must cancel termination")
+  fatalError("Live-core rejection must fail closed for a package update")
 }
 
-print("PASS: plugin unload barrier success/rejection/timeout/live/shutting-down/shut-down contexts, stale retirement, and package sidecars")
+print("PASS: unload barrier and Quit/update race, timeout/retry, shutdown contexts, and package sidecars")

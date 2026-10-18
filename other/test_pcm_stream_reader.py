@@ -5,6 +5,9 @@ any seek, or the speaker and the picture drift apart. The reference is the bundl
 the same file. AirPlayPCMResourceLoader (iina/AirPlayAudioBridge.swift) is then played in a muted
 AVPlayer. Needs the downloaded deps (`other/download_libs.sh`) and an ffmpeg command to make
 test media.
+
+Set `REEL_TEST_AUDIO_UID` to an AVPlayer output-device UID (for example,
+`BuiltInSpeakerDevice`) to keep this muted playback check independent of the Mac's current route.
 """
 
 import os

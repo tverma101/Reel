@@ -92,17 +92,30 @@ final class BoundedProcessOutput {
 final class BoundedProcessExecutionAdmission {
   static let shared = BoundedProcessExecutionAdmission(
     maximumTotalActiveExecutions: 16,
-    maximumActiveExecutionsPerPlugin: 2)
+    maximumActiveExecutionsPerPlugin: 2,
+    // Teardown can arrive concurrently from many PlayerCore plugin contexts. Keep it
+    // independent from long-running serve children, but allow the same bounded global fan-out.
+    maximumTotalActiveControlExecutions: 16,
+    maximumActiveControlExecutionsPerPlugin: 16)
 
   let maximumTotalActiveExecutions: Int
   let maximumActiveExecutionsPerPlugin: Int
+  let maximumTotalActiveControlExecutions: Int
+  let maximumActiveControlExecutionsPerPlugin: Int
   private let lock = NSLock()
   private var activeExecutions = 0
   private var activeExecutionsByPlugin: [String: Int] = [:]
+  private var activeControlExecutions = 0
+  private var activeControlExecutionsByPlugin: [String: Int] = [:]
 
-  init(maximumTotalActiveExecutions: Int, maximumActiveExecutionsPerPlugin: Int) {
+  init(maximumTotalActiveExecutions: Int,
+       maximumActiveExecutionsPerPlugin: Int,
+       maximumTotalActiveControlExecutions: Int = 16,
+       maximumActiveControlExecutionsPerPlugin: Int = 16) {
     self.maximumTotalActiveExecutions = max(1, maximumTotalActiveExecutions)
     self.maximumActiveExecutionsPerPlugin = max(1, maximumActiveExecutionsPerPlugin)
+    self.maximumTotalActiveControlExecutions = max(1, maximumTotalActiveControlExecutions)
+    self.maximumActiveControlExecutionsPerPlugin = max(1, maximumActiveControlExecutionsPerPlugin)
   }
 
   func acquire(forPluginIdentifier pluginIdentifier: String) -> ProcessExecutionPermit? {
@@ -116,18 +129,45 @@ final class BoundedProcessExecutionAdmission {
     activeExecutions += 1
     activeExecutionsByPlugin[pluginIdentifier] = pluginExecutions + 1
     lock.unlock()
-    return ProcessExecutionPermit(admission: self, pluginIdentifier: pluginIdentifier)
+    return ProcessExecutionPermit(admission: self, pluginIdentifier: pluginIdentifier, isControl: false)
   }
 
-  fileprivate func release(forPluginIdentifier pluginIdentifier: String) {
+  /// A separately bounded lane for AirPlay stop commands. Long-lived `serve`
+  /// children must not consume the permits needed to stop those same children.
+  func acquireLifecycleControl(forPluginIdentifier pluginIdentifier: String) -> ProcessExecutionPermit? {
     lock.lock()
-    let pluginExecutions = activeExecutionsByPlugin[pluginIdentifier, default: 0]
-    precondition(activeExecutions > 0 && pluginExecutions > 0)
-    activeExecutions -= 1
-    if pluginExecutions == 1 {
-      activeExecutionsByPlugin.removeValue(forKey: pluginIdentifier)
+    let pluginExecutions = activeControlExecutionsByPlugin[pluginIdentifier, default: 0]
+    guard activeControlExecutions < maximumTotalActiveControlExecutions,
+          pluginExecutions < maximumActiveControlExecutionsPerPlugin else {
+      lock.unlock()
+      return nil
+    }
+    activeControlExecutions += 1
+    activeControlExecutionsByPlugin[pluginIdentifier] = pluginExecutions + 1
+    lock.unlock()
+    return ProcessExecutionPermit(admission: self, pluginIdentifier: pluginIdentifier, isControl: true)
+  }
+
+  fileprivate func release(forPluginIdentifier pluginIdentifier: String, isControl: Bool) {
+    lock.lock()
+    if isControl {
+      let pluginExecutions = activeControlExecutionsByPlugin[pluginIdentifier, default: 0]
+      precondition(activeControlExecutions > 0 && pluginExecutions > 0)
+      activeControlExecutions -= 1
+      if pluginExecutions == 1 {
+        activeControlExecutionsByPlugin.removeValue(forKey: pluginIdentifier)
+      } else {
+        activeControlExecutionsByPlugin[pluginIdentifier] = pluginExecutions - 1
+      }
     } else {
-      activeExecutionsByPlugin[pluginIdentifier] = pluginExecutions - 1
+      let pluginExecutions = activeExecutionsByPlugin[pluginIdentifier, default: 0]
+      precondition(activeExecutions > 0 && pluginExecutions > 0)
+      activeExecutions -= 1
+      if pluginExecutions == 1 {
+        activeExecutionsByPlugin.removeValue(forKey: pluginIdentifier)
+      } else {
+        activeExecutionsByPlugin[pluginIdentifier] = pluginExecutions - 1
+      }
     }
     lock.unlock()
   }
@@ -137,10 +177,14 @@ final class ProcessExecutionPermit {
   private let lock = NSLock()
   private var admission: BoundedProcessExecutionAdmission?
   private let pluginIdentifier: String
+  private let isControl: Bool
 
-  fileprivate init(admission: BoundedProcessExecutionAdmission, pluginIdentifier: String) {
+  fileprivate init(admission: BoundedProcessExecutionAdmission,
+                   pluginIdentifier: String,
+                   isControl: Bool) {
     self.admission = admission
     self.pluginIdentifier = pluginIdentifier
+    self.isControl = isControl
   }
 
   func release() {
@@ -148,7 +192,7 @@ final class ProcessExecutionPermit {
     let admission = self.admission
     self.admission = nil
     lock.unlock()
-    admission?.release(forPluginIdentifier: pluginIdentifier)
+    admission?.release(forPluginIdentifier: pluginIdentifier, isControl: isControl)
   }
 
   deinit {
@@ -161,6 +205,77 @@ enum PluginProcessExecutionQueues {
   /// and Promise settlement. Admission bounds the number of blocking waiters.
   static let processWait = DispatchQueue(
     label: "com.colliderli.iina.plugin-process-wait", qos: .utility, attributes: .concurrent)
+}
+
+/// Stops an individually timed child without affecting its parent app or any
+/// sibling process. Foundation does not provide the child's kernel exit timestamp,
+/// so the deadline work item's `isRunning` observation decides whether timeout wins.
+/// The process waiter continues to reap the child and close its pipes.
+final class BoundedProcessTimeoutToken: @unchecked Sendable {
+  private let lock = NSLock()
+  private let terminationGrace: TimeInterval
+  private var process: Process?
+  private var onTimeout: (() -> Void)?
+  private var workItem: DispatchWorkItem?
+
+  init(process: Process, deadline: DispatchTime, terminationGrace: TimeInterval,
+       onTimeout: @escaping () -> Void) {
+    self.process = process
+    self.terminationGrace = terminationGrace
+    self.onTimeout = onTimeout
+    let work = DispatchWorkItem { [weak self] in self?.fire() }
+    workItem = work
+    DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: deadline, execute: work)
+  }
+
+  func cancel() {
+    lock.lock()
+    let work = workItem
+    workItem = nil
+    process = nil
+    onTimeout = nil
+    lock.unlock()
+    work?.cancel()
+  }
+
+  private func fire() {
+    lock.lock()
+    let process = self.process
+    let onTimeout = self.onTimeout
+    self.process = nil
+    self.onTimeout = nil
+    workItem = nil
+    lock.unlock()
+
+    guard let process, let onTimeout, process.isRunning else { return }
+    onTimeout()
+    process.terminate()
+    let terminationGrace = self.terminationGrace
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + terminationGrace) { [weak process] in
+      guard let process, process.isRunning else { return }
+      _ = Darwin.kill(process.processIdentifier, SIGKILL)
+    }
+  }
+}
+
+enum BoundedProcessTimeout {
+  @discardableResult
+  static func schedule(for process: Process,
+                       after timeout: TimeInterval,
+                       terminationGrace: TimeInterval = 0.5,
+                       onTimeout: @escaping () -> Void) -> BoundedProcessTimeoutToken {
+    schedule(for: process, deadline: .now() + timeout,
+             terminationGrace: terminationGrace, onTimeout: onTimeout)
+  }
+
+  @discardableResult
+  static func schedule(for process: Process,
+                       deadline: DispatchTime,
+                       terminationGrace: TimeInterval = 0.5,
+                       onTimeout: @escaping () -> Void) -> BoundedProcessTimeoutToken {
+    BoundedProcessTimeoutToken(process: process, deadline: deadline,
+                               terminationGrace: terminationGrace, onTimeout: onTimeout)
+  }
 }
 
 /// Owns bounded callback delivery independently from the pipe reader. A timed
