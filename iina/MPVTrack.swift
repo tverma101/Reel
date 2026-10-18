@@ -87,6 +87,8 @@ class MPVTrack: NSObject {
   var demuxChannelCount: Int?
   var demuxChannels: String?
   var demuxSamplerate: Int?
+  /// FFmpeg stream index for tracks demuxed from this media source.
+  var ffIndex: Int?
   var demuxFps: Double?
 
 
@@ -181,6 +183,9 @@ class MPVTrack: NSObject {
     lang = dict["lang"] as? String
     codec = dict["codec"] as? String
     externalFilename = dict["external-filename"] as? String
+    if let value = dict["ff-index"] as? Int64, value >= 0 {
+      ffIndex = Int(exactly: value)
+    }
     isAlbumart = dict["albumart"] as? Bool ?? false
     decoderDesc = dict["decoder-desc"] as? String
     demuxW = MPVController.nodeValueAsInt(dict["demux-w"])

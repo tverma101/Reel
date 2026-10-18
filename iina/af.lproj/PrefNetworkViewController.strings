@@ -23,10 +23,10 @@
 "LNk-io-MM7.title" = "Kasgeheue:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "RwW-JS-iTv"; */
-"RwW-JS-iTv.title" = "IINA moet herbegin word om dit toe te pas.";
+"RwW-JS-iTv.title" = "Reel moet herbegin word om dit toe te pas.";
 
 /* Class = "NSTextFieldCell"; title = "IINA will search youtube-dl in this folder. Restart needed."; ObjectID = "YqE-yV-BvQ"; */
-"YqE-yV-BvQ.title" = "IINA soek youtube-dl in hierdie vouer. Moet herbegin word.";
+"YqE-yV-BvQ.title" = "Reel soek youtube-dl in hierdie vouer. Moet herbegin word.";
 
 /* Class = "NSMenuItem"; title = "Auto"; ObjectID = "aNr-lv-K0r"; */
 "aNr-lv-K0r.title" = "Outomaties";

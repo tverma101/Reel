@@ -560,7 +560,6 @@ fileprivate class SubtitleSourceView: SettingsAccessory.Base {
       try KeychainAccess.write(username: "subdl", password: key, forService: .subDLAPIKey)
       subDLKeyField.stringValue = ""
       Preference.set(OnlineSubtitle.Providers.subDL.id, for: .onlineSubProvider)
-      Preference.set(true, for: .autoSearchOnlineSub)
       refreshSubSources()
       refreshSubSourceAccessoryView()
       updateSubDLStatus()

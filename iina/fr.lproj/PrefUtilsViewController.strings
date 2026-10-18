@@ -17,7 +17,7 @@
 "Fb4-dy-CXX.title" = "Effacé.";
 
 /* Class = "NSTextFieldCell"; title = "Open links or current webpage in IINA with one click. The website must be supported by youtube-dl."; ObjectID = "GAo-fx-NG0"; */
-"GAo-fx-NG0.title" = "Ouvrez des liens (ou la page courante) avec IINA en un clic. Le site internet doit être supporté par youtube-dl.";
+"GAo-fx-NG0.title" = "Ouvrez des liens (ou la page courante) avec Reel en un clic. Le site internet doit être supporté par youtube-dl.";
 
 /* Class = "NSButtonCell"; title = "OK"; ObjectID = "IkF-qG-s4j"; */
 "IkF-qG-s4j.title" = "OK";
@@ -35,7 +35,7 @@
 "QHA-tO-oSn.title" = "Vider le cache";
 
 /* Class = "NSButtonCell"; title = "Set IINA as the Default Application…"; ObjectID = "e1p-Aa-WFG"; */
-"e1p-Aa-WFG.title" = "Définir IINA comme application par défaut…";
+"e1p-Aa-WFG.title" = "Définir Reel comme application par défaut…";
 
 /* Class = "NSButtonCell"; title = "Firefox"; ObjectID = "f9i-sS-MJN"; */
 "f9i-sS-MJN.title" = "Firefox";
@@ -71,10 +71,10 @@
 "uV3-aF-UB7.title" = "Cache des miniatures :";
 
 /* Class = "NSTextFieldCell"; title = "Please select the media types that you want to make IINA as the default Application for."; ObjectID = "uvK-Y1-dZr"; */
-"uvK-Y1-dZr.title" = "Veuillez sélectionner le type de fichiers qui s'ouvriront par défaut avec IINA.";
+"uvK-Y1-dZr.title" = "Veuillez sélectionner le type de fichiers qui s'ouvriront par défaut avec Reel.";
 
 /* Class = "NSButtonCell"; title = "Chrome"; ObjectID = "yuw-2i-ICd"; */
 "yuw-2i-ICd.title" = "Chrome";
 
 /* Class = "NSTextFieldCell"; title = "Get Browser Extensions for IINA"; ObjectID = "zCe-1f-tkF"; */
-"zCe-1f-tkF.title" = "Téléchargez les extensions navigateur pour IINA";
+"zCe-1f-tkF.title" = "Téléchargez les extensions navigateur pour Reel";

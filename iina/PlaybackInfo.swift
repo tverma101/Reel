@@ -8,6 +8,26 @@
 
 import Foundation
 
+struct SubtitleStyleOverrides {
+  var font: String?
+  var size: Double?
+  var textColor: String?
+  var bold: Bool?
+  var borderColor: String?
+  var borderSize: Double?
+  var backgroundColor: String?
+
+  mutating func clear(for key: Preference.Key) {
+    if key == .subTextFont { font = nil }
+    if key == .subTextSize { size = nil }
+    if key == .subTextColorString { textColor = nil }
+    if key == .subBold { bold = nil }
+    if key == .subBorderColorString { borderColor = nil }
+    if key == .subBorderSize { borderSize = nil }
+    if key == .subShadowColorString { backgroundColor = nil }
+  }
+}
+
 class PlaybackInfo {
 
   /// Enumeration representing the status of the [mpv](https://mpv.io/manual/stable/) A-B loop command.
@@ -173,6 +193,7 @@ class PlaybackInfo {
   var subPos: Double = Double(Preference.float(for: .subPos))
   var secondarySubPos: Double = 100
   var subScale: Double = 1
+  var subtitleStyleOverrides = SubtitleStyleOverrides()
 
   // cache related
   var pausedForCache: Bool = false

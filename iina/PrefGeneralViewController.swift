@@ -7,7 +7,6 @@
 //
 
 import Cocoa
-import Sparkle
 
 @objcMembers
 class PrefGeneralViewController: PreferenceViewController, PreferenceWindowEmbeddable {
@@ -57,4 +56,3 @@ class PrefGeneralViewController: PreferenceViewController, PreferenceWindowEmbed
     }
   }
 }
-

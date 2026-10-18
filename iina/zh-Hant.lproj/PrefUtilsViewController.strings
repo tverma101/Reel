@@ -17,7 +17,7 @@
 "Fb4-dy-CXX.title" = "已清除。";
 
 /* Class = "NSTextFieldCell"; title = "Open links or current webpage in IINA with one click. The website must be supported by youtube-dl."; ObjectID = "GAo-fx-NG0"; */
-"GAo-fx-NG0.title" = "在 IINA 中打開連結或目前的網站。網站需要 youtube-dl 的支援。";
+"GAo-fx-NG0.title" = "在 Reel 中打開連結或目前的網站。網站需要 youtube-dl 的支援。";
 
 /* Class = "NSButtonCell"; title = "OK"; ObjectID = "IkF-qG-s4j"; */
 "IkF-qG-s4j.title" = "好";
@@ -35,7 +35,7 @@
 "QHA-tO-oSn.title" = "清除快取";
 
 /* Class = "NSButtonCell"; title = "Set IINA as the Default Application…"; ObjectID = "e1p-Aa-WFG"; */
-"e1p-Aa-WFG.title" = "將 IINA 設為預設應用程式⋯";
+"e1p-Aa-WFG.title" = "將 Reel 設為預設應用程式⋯";
 
 /* Class = "NSButtonCell"; title = "Firefox"; ObjectID = "f9i-sS-MJN"; */
 "f9i-sS-MJN.title" = "Firefox";
@@ -71,10 +71,10 @@
 "uV3-aF-UB7.title" = "目前的縮覽圖快取：";
 
 /* Class = "NSTextFieldCell"; title = "Please select the media types that you want to make IINA as the default Application for."; ObjectID = "uvK-Y1-dZr"; */
-"uvK-Y1-dZr.title" = "請選擇您要將 IINA 設為預設應用程式的媒體類型。";
+"uvK-Y1-dZr.title" = "請選擇您要將 Reel 設為預設應用程式的媒體類型。";
 
 /* Class = "NSButtonCell"; title = "Chrome"; ObjectID = "yuw-2i-ICd"; */
 "yuw-2i-ICd.title" = "Chrome";
 
 /* Class = "NSTextFieldCell"; title = "Get Browser Extensions for IINA"; ObjectID = "zCe-1f-tkF"; */
-"zCe-1f-tkF.title" = "取得 IINA 的瀏覽器擴充功能";
+"zCe-1f-tkF.title" = "取得 Reel 的瀏覽器擴充功能";

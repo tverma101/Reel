@@ -155,6 +155,13 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
         }
       }
 
+      let pluginIdentifier = self.pluginInstance.plugin.identifier
+      guard let executionPermit = BoundedProcessExecutionAdmission.shared.acquire(
+        forPluginIdentifier: pluginIdentifier) else {
+        reject.call(withArguments: [-3, "Too many plugin processes are already active for this plugin or application"])
+        return
+      }
+
       let (stdout, stderr) = (Pipe(), Pipe())
       let process = Process()
       process.environment = ["LC_ALL": "en_US.UTF-8"]
@@ -166,45 +173,74 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
       process.standardOutput = stdout
       process.standardError = stderr
 
-      var stdoutContent = ""
-      var stderrContent = ""
-      var stdoutHook: JSValue?
-      var stderrHook: JSValue?
-      if let hookVal = stdoutHook_, hookVal.isObject {
-        stdoutHook = hookVal
-      }
-      if let hookVal = stderrHook_, hookVal.isObject {
-        stderrHook = hookVal
-      }
-
-      stdout.fileHandleForReading.readabilityHandler = { file in
-        guard let output = String(data: file.availableData, encoding: .utf8) else { return }
-        stdoutContent += output
-        stdoutHook?.call(withArguments: [output])
-      }
-      stderr.fileHandleForReading.readabilityHandler = { file in
-        guard let output = String(data: file.availableData, encoding: .utf8) else { return }
-        stderrContent += output
-        stderrHook?.call(withArguments: [output])
-      }
-      Logger.log("Executing \(path) \(args.joined(separator: " "))", subsystem: pluginInstance.subsystem)
+      let stdoutHook: JSValue? = stdoutHook_.flatMap { $0.isObject ? $0 : nil }
+      let stderrHook: JSValue? = stderrHook_.flatMap { $0.isObject ? $0 : nil }
+      // All JS hooks and Promise callbacks for this plugin share its serial JS
+      // queue. Process waits use a separate bounded-concurrency queue below.
+      let outputCallbackQueue = self.pluginInstance.queue
+      let processWaitQueue = PluginProcessExecutionQueues.processWait
+      let subsystem = self.pluginInstance.subsystem
+      let completionQueue = self.pluginInstance.queue
+      let outputGroup = DispatchGroup()
+      let stdoutReader = ProcessOutputStreamReader(
+        fileHandle: stdout.fileHandleForReading,
+        completionGroup: outputGroup,
+        callbackQueue: outputCallbackQueue) { output in
+          stdoutHook?.call(withArguments: [output])
+        }
+      let stderrReader = ProcessOutputStreamReader(
+        fileHandle: stderr.fileHandleForReading,
+        completionGroup: outputGroup,
+        callbackQueue: outputCallbackQueue) { output in
+          stderrHook?.call(withArguments: [output])
+        }
+      stdoutReader.start()
+      stderrReader.start()
+      Logger.log("Executing \(path) \(args.joined(separator: " "))", subsystem: subsystem)
       do {
         try process.run()
       } catch {
+        stdoutReader.stop(suppressPendingCallbacks: true)
+        stderrReader.stop(suppressPendingCallbacks: true)
+        outputGroup.notify(queue: processWaitQueue) {
+          executionPermit.release()
+        }
         reject.call(withArguments: ["Execution failed reporting: \(error.localizedDescription)"])
         return
       }
 
-      self.pluginInstance.queue.async {
+      processWaitQueue.async {
+        // The current exec contract awaits natural child exit and exposes no
+        // timeout or cancellation input. Keep runtime unlimited here; the
+        // timeout below bounds only post-exit pipe draining.
         process.waitUntilExit()
-        stderr.fileHandleForReading.readabilityHandler = nil
-        stdout.fileHandleForReading.readabilityHandler = nil
-        DispatchQueue.main.async {
-          resolve.call(withArguments: [[
-            "status": process.terminationStatus,
-            "stdout": stdoutContent,
-            "stderr": stderrContent
-          ] as [String: Any]])
+        // Process exit does not guarantee either pipe has delivered EOF. Give
+        // both readers and their hooks a bounded window to drain. Process
+        // completion runs off the plugin JS queue so one long process cannot
+        // block settlement of unrelated calls.
+        let streamsReachedEOF = outputGroup.wait(timeout: .now() + .seconds(2)) == .success
+        stdoutReader.stop(suppressPendingCallbacks: !streamsReachedEOF)
+        stderrReader.stop(suppressPendingCallbacks: !streamsReachedEOF)
+        if !streamsReachedEOF {
+          Logger.log("Timed out draining plugin process output after 2 seconds", subsystem: subsystem)
+          // Suppression makes callback completion independent from a hook
+          // already inside JavaScript. Wait only for the pipe readers to finish
+          // their nonblocking finalization before releasing their state.
+          outputGroup.wait()
+        }
+        let result: [String: Any] = [
+          "status": process.terminationStatus,
+          "stdout": stdoutReader.text,
+          "stderr": stderrReader.text
+        ]
+        // Snapshot output before queuing JS settlement. The resolver closure
+        // retains only the bounded result and admission permit, never Process,
+        // readers, or pipe handles. If an admitted hook never returns, JSCore
+        // cannot safely be re-entered to settle its Promise; the process and
+        // reader lifecycle still completes and total retained calls stay capped.
+        completionQueue.async {
+          defer { executionPermit.release() }
+          resolve.call(withArguments: [result])
         }
       }
     }

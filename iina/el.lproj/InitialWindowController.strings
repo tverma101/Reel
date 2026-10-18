@@ -2,13 +2,13 @@
 "3aN-Hg-GkT.title" = "Αποπλέξτε τη \"Λήψη δοκιμαστικών ενημερώσεων\" στις Προτιμήσεις > Γενικά, και εγκαταστήστε μια σταθερή έκδοση από τη";
 
 /* Class = "NSTextFieldCell"; title = "Report to us via <a href=\"https://github.com/iina/iina/issues\">GitHub issue</a>."; ObjectID = "BIz-NQ-0qD"; */
-"BIz-NQ-0qD.title" = "Report to us via <a href=\"https://github.com/iina/iina/issues\">GitHub issue</a>.";
+"BIz-NQ-0qD.title" = "Report to us via <a href=\"https://github.com/tverma101/Reel/issues\">GitHub issue</a>.";
 
 /* Class = "NSTextFieldCell"; title = "Open URL…"; ObjectID = "FKG-Tz-TCV"; */
 "FKG-Tz-TCV.title" = "Άνοιγμα συνδέσμου URL…";
 
 /* Class = "NSTextFieldCell"; title = "You are using a beta version of IINA"; ObjectID = "H7D-2H-wQn"; */
-"H7D-2H-wQn.title" = "Χρησιμοποιείτε μια δοκιμαστική έκδοση του IINA";
+"H7D-2H-wQn.title" = "Χρησιμοποιείτε μια δοκιμαστική έκδοση του Reel";
 
 /* Class = "NSTextFieldCell"; title = "Found a bug?"; ObjectID = "I6R-Jl-2Jk"; */
 "I6R-Jl-2Jk.title" = "Βρήκατε σφάλμα;";

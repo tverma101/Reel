@@ -8,7 +8,32 @@
 
 import Cocoa
 
+final class PluginUnloadPermit {
+  private let lock = NSLock()
+  private var releaseHandler: ((Bool) -> Void)?
+
+  init(releaseHandler: @escaping (Bool) -> Void) {
+    self.releaseHandler = releaseHandler
+  }
+
+  func release(reloadDeferredContexts: Bool = true) {
+    lock.lock()
+    let handler = releaseHandler
+    releaseHandler = nil
+    lock.unlock()
+    handler?(reloadDeferredContexts)
+  }
+
+  deinit {
+    release()
+  }
+}
+
 class PlayerCore: NSObject {
+
+  /// A queued AirPlay serve can remain cancellable for 20 seconds. Keep its JS context alive
+  /// asynchronously long enough for that finite helper stop window plus process teardown.
+  private static let unexpectedMPVAirPlayStopTimeout: TimeInterval = 40
 
   /// Minimum value to set a mpv loop point to.
   ///
@@ -66,6 +91,167 @@ class PlayerCore: NSObject {
 
   static var playerCores: [PlayerCore] = []
   static private var playerCoreCounter = 0
+  private static let pluginLifecycleCores = NSHashTable<PlayerCore>.weakObjects()
+  private static let pluginLifecycleCoresLock = NSLock()
+  private static var pluginUnloadOperations = Set<String>()
+  private static var deferredPluginLoads: [String: Set<ObjectIdentifier>] = [:]
+
+  private var isPluginRuntimeUnavailable: Bool {
+    info.state == .shuttingDown || info.state == .shutDown
+  }
+
+  private static var pluginLifecycleCoresSnapshot: [PlayerCore] {
+    pluginLifecycleCoresLock.lock()
+    defer { pluginLifecycleCoresLock.unlock() }
+    return pluginLifecycleCores.allObjects
+  }
+
+  private static func finishPluginUnloadOperation(_ identifier: String,
+                                                  reloadDeferredContexts: Bool = true) {
+    _ = pluginUnloadOperations.remove(identifier)
+    let deferred = deferredPluginLoads.removeValue(forKey: identifier) ?? []
+    guard reloadDeferredContexts else { return }
+    guard let plugin = JavascriptPlugin.plugins.first(where: { $0.identifier == identifier }),
+          plugin.enabled else { return }
+    for player in pluginLifecycleCoresSnapshot where deferred.contains(ObjectIdentifier(player)) &&
+        player.info.state != .shuttingDown && player.info.state != .shutDown &&
+        player.pluginMap[identifier] == nil {
+      player.reloadPlugin(plugin)
+    }
+  }
+
+  static func hasLivePluginContext(identifier: String) -> Bool {
+    retireShutDownPluginContexts(identifier: identifier)
+    return pluginLifecycleCoresSnapshot.contains {
+      $0.info.state != .shutDown && $0.pluginMap[identifier] != nil
+    }
+  }
+
+  private static func retireShutDownPluginContexts(identifier: String) {
+    for player in pluginLifecycleCoresSnapshot
+    where player.info.state == .shutDown && player.pluginMap[identifier] != nil {
+      player.retirePluginInstancesAfterMPVShutdown()
+    }
+  }
+
+  static func hasAnyPluginContext(identifier: String) -> Bool {
+    pluginLifecycleCoresSnapshot.contains { $0.pluginMap[identifier] != nil }
+  }
+
+  private enum PluginUnloadError: LocalizedError {
+    case operationInProgress
+    case timedOut
+
+    var errorDescription: String? {
+      switch self {
+      case .operationInProgress:
+        return "Another AirPlay plugin change is already in progress"
+      case .timedOut:
+        return "Timed out waiting for AirPlay to stop. The plugin remains loaded so you can retry."
+      }
+    }
+  }
+
+  /// Reserves the target plugin for an unload-sensitive mutation, then waits for every loaded
+  /// PlayerCore JavaScript context to confirm its asynchronous unload listeners. The returned
+  /// permit must be released after the caller commits or abandons its mutation.
+  static func acquirePluginUnloadPermit(identifier: String,
+                                        timeout: TimeInterval = 45,
+                                        completion: @escaping (Result<PluginUnloadPermit, Error>) -> Void) {
+    let begin = {
+      guard !pluginUnloadOperations.contains(identifier) else {
+        completion(.failure(PluginUnloadError.operationInProgress))
+        return
+      }
+      pluginUnloadOperations.insert(identifier)
+
+      let finishOnce = EventPromiseCompletionOnce { result in
+        switch result {
+        case .success:
+          let permit = PluginUnloadPermit { reloadDeferredContexts in
+            let release: (Bool) -> Void = { reloadDeferredContexts in
+              finishPluginUnloadOperation(identifier,
+                                          reloadDeferredContexts: reloadDeferredContexts)
+            }
+            if Thread.isMainThread {
+              release(reloadDeferredContexts)
+            } else {
+              DispatchQueue.main.async { release(reloadDeferredContexts) }
+            }
+          }
+          completion(.success(permit))
+        case .failure(let error):
+          finishPluginUnloadOperation(identifier)
+          completion(.failure(error))
+        }
+      }
+
+      var didFinish = false
+      var timeoutWork: DispatchWorkItem!
+      var runNextBatch: (() -> Void)?
+      let finishOperation: (Result<Void, Error>) -> Void = { result in
+        guard !didFinish else { return }
+        didFinish = true
+        timeoutWork.cancel()
+        runNextBatch = nil
+        finishOnce.finish(result)
+      }
+      timeoutWork = DispatchWorkItem {
+        finishOperation(.failure(PluginUnloadError.timedOut))
+      }
+      DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: timeoutWork)
+
+      var coveredContexts = Set<ObjectIdentifier>()
+      runNextBatch = {
+        guard !didFinish else { return }
+        // mpv-initiated shutdown can leave a PluginInstance retained in pluginMap. Retire it
+        // without JS or mpv calls. A shutting-down core cannot acknowledge a stop safely, so do
+        // not wait for it to become unreachable and accidentally treat that as proof.
+        retireShutDownPluginContexts(identifier: identifier)
+        let loadedCores = pluginLifecycleCoresSnapshot.filter {
+          $0.pluginMap[identifier] != nil
+        }
+        if loadedCores.contains(where: { $0.info.state == .shuttingDown }) {
+          finishOperation(.failure(EventController.AsyncEventError.playerUnavailable(identifier)))
+          return
+        }
+        let loadedContexts = loadedCores.filter { $0.info.state != .shutDown }
+        let contexts = loadedContexts.filter { !coveredContexts.contains(ObjectIdentifier($0)) }
+        guard !contexts.isEmpty else {
+          finishOperation(.success(()))
+          runNextBatch = nil
+          return
+        }
+        coveredContexts.formUnion(contexts.map(ObjectIdentifier.init))
+
+        let barrier = EventPromiseBarrier(count: contexts.count) { result in
+          DispatchQueue.main.async {
+            guard !didFinish else { return }
+            if case .failure = result {
+              finishOperation(result)
+              runNextBatch = nil
+            } else {
+              runNextBatch?()
+            }
+          }
+        }
+        for player in contexts {
+          player.events.emitAndWaitForPluginPromises(.pluginWillUnload,
+                                                     pluginIdentifier: identifier,
+                                                     data: [identifier]) { result in
+            barrier.receive(result)
+          }
+        }
+      }
+      runNextBatch?()
+    }
+
+    if Thread.isMainThread {
+      begin()
+    } else {
+      DispatchQueue.main.async(execute: begin)
+    }
+  }
 
   static private func findIdlePlayerCore() -> PlayerCore? {
     playerCores.first { $0.info.state == .idle && !$0.backgroundTaskInUse }
@@ -81,7 +267,9 @@ class PlayerCore: NSObject {
     return pc
   }
 
+  /// Similar to `activeOrNew`, but supports inverting the action
   static func activeOrNewForMenuAction(isAlternative: Bool) -> PlayerCore {
+    // since it's from a menu item, there is at least one player core
     let useNew = Preference.bool(for: .alwaysOpenInNewWindow) != isAlternative
     return useNew ? newPlayerCore : active
   }
@@ -93,11 +281,14 @@ class PlayerCore: NSObject {
    count of playable files.
    */
   @discardableResult
-  static func openURLs(_ urls: [URL]) -> Int? {
-    let openInCurrentWindow = !Preference.bool(for: .alwaysOpenInNewWindow)
+  static func openURLs(_ urls: [URL], invertOpenInNewWindow: Bool = false) -> Int? {
+    var openInCurrentWindow = !Preference.bool(for: .alwaysOpenInNewWindow)
+    if invertOpenInNewWindow {
+      openInCurrentWindow = !openInCurrentWindow
+    }
     if openInCurrentWindow {
       // open all urls in the active window if any (or, all in one new window)
-      return activeOrNew.openURLs(urls)
+      return active.openURLs(urls)
     } else if
       urls.count > 1,
       Preference.bool(for: .groupSimultaneousOpensInPlaylist)
@@ -265,6 +456,9 @@ class PlayerCore: NSObject {
     // Clear first so the cancel action cannot run twice, and so a re-entrant call is a no-op.
     cancelOnlineSubtitleSearch = nil
     cancel()
+    // A provider can still be awaiting an uncancellable request. Its completion is ignored once
+    // the search ID is cleared, so dismiss the non-auto-hiding progress OSD here as well.
+    if hadSearch { hideOSD() }
   }
 
   /// For supporting mpv `--shuffle` arg, to shuffle playlist when launching from command line
@@ -347,6 +541,9 @@ class PlayerCore: NSObject {
 
   let playerNumber: Int
 
+  /// Sends this player's audio, and only this player's, to the AirPlay speaker chosen in its picker.
+  lazy var airPlayAudio = AirPlayAudioBridge(player: self)
+
   static var keyBindings: [String: KeyMapping] = [:]
 
   override init() {
@@ -363,6 +560,9 @@ class PlayerCore: NSObject {
     TouchBarSettings.shared.addObserver(self, forKey: .PresentationModeFnModes)
     TouchBarSettings.shared.addObserver(self, forKey: .PresentationModeGlobal)
     TouchBarSettings.shared.addObserver(self, forKey: .PresentationModePerApp)
+    Self.pluginLifecycleCoresLock.lock()
+    Self.pluginLifecycleCores.add(self)
+    Self.pluginLifecycleCoresLock.unlock()
   }
 
   func observe(_ name: Notification.Name, block: @escaping (Notification) -> Void) {
@@ -379,19 +579,46 @@ class PlayerCore: NSObject {
   // MARK: - Plugins
 
   static func reloadPluginForAll(_ plugin: JavascriptPlugin, forced: Bool = false) {
-    playerCores.forEach { $0.reloadPlugin(plugin, forced: forced) }
+    let targets = plugin.identifier == BundledAirPlayPluginManager.identifier ? pluginLifecycleCoresSnapshot : playerCores
+    let liveTargets = targets.filter { $0.info.state != .shuttingDown && $0.info.state != .shutDown }
+    liveTargets.forEach { $0.reloadPlugin(plugin, forced: forced) }
     AppDelegate.shared.menuController?.updatePluginMenu()
   }
 
+  private func notifyLoadedPluginsWillUnload() {
+    guard !isPluginRuntimeUnavailable else { return }
+    // Emit while each JavaScript context and its registered event listeners are still alive.
+    // Plugins can use this synchronous notification to restore player state and start bounded
+    // cleanup for helpers they own before their context is released.
+    for identifier in pluginMap.keys.sorted() {
+      emitPluginWillUnload(identifier)
+    }
+  }
+
+  private func emitPluginWillUnload(_ identifier: String) {
+    // An unload permit already awaited this plugin's Promise listeners. Do not dispatch the same
+    // stop callback again while the caller commits its disable, reload, replacement, or removal.
+    guard !Self.pluginUnloadOperations.contains(identifier) else { return }
+    events.emit(.pluginWillUnload, data: identifier)
+  }
+
   func clearPlugins() {
+    guard !isPluginRuntimeUnavailable else { return }
+    notifyLoadedPluginsWillUnload()
     pluginMap.removeAll()
     plugins.removeAll()
   }
 
   func loadPlugins() {
+    guard !isPluginRuntimeUnavailable else { return }
+    notifyLoadedPluginsWillUnload()
     pluginMap.removeAll()
     plugins = JavascriptPlugin.plugins.compactMap { plugin in
       guard plugin.enabled else { return nil }
+      guard !Self.pluginUnloadOperations.contains(plugin.identifier) else {
+        Self.deferredPluginLoads[plugin.identifier, default: []].insert(ObjectIdentifier(self))
+        return nil
+      }
       let instance = JavascriptPluginInstance(player: self, plugin: plugin)
       pluginMap[plugin.identifier] = instance
       return instance
@@ -399,13 +626,20 @@ class PlayerCore: NSObject {
   }
 
   func reloadPlugin(_ plugin: JavascriptPlugin, forced: Bool = false) {
+    guard !isPluginRuntimeUnavailable else { return }
     let id = plugin.identifier
+    if pluginMap[id] == nil, Self.pluginUnloadOperations.contains(id) {
+      Self.deferredPluginLoads[id, default: []].insert(ObjectIdentifier(self))
+      return
+    }
     if let _ = pluginMap[id] {
       if plugin.enabled {
         // no need to reload, unless forced
         guard forced else { return }
+        emitPluginWillUnload(id)
         pluginMap[id] = JavascriptPluginInstance(player: self, plugin: plugin)
       } else {
+        emitPluginWillUnload(id)
         pluginMap.removeValue(forKey: id)
       }
     } else {
@@ -735,6 +969,13 @@ class PlayerCore: NSObject {
   ///     task is still running this method only changes the player state. When the background task ends it will notice that shutting
   ///     down was in progress and will call this method again to continue the process of shutting down..
   func shutdown() {
+    // mpv writes its watch-later file on quit, so give it the user's own speed and audio delay.
+    airPlayAudio.stopPlayback()
+    if !isPluginRuntimeUnavailable {
+      // Quiesce plugin timers, event listeners, and hooks while the mpv APIs are still valid.
+      // In particular, do not wait until the SHUTDOWN event to call JavascriptAPIMpv cleanup.
+      pluginMap.values.forEach { $0.prepareForPlayerShutdown() }
+    }
     info.state = .shuttingDown
     guard !backgroundTaskInUse else { return }
     log("Shutting down")
@@ -761,6 +1002,7 @@ class PlayerCore: NSObject {
   ///     windows of vulnerability that can not be fully closed. IINA has no choice but to support a mpv initiated shutdown as best it
   ///     can.
   func mpvHasShutdown() {
+    guard info.state != .shutDown else { return }
     let isMPVInitiated = info.state != .shuttingDown
     let suffix = isMPVInitiated ? " (initiated by mpv)" : ""
     log("Player has shutdown\(suffix)")
@@ -771,19 +1013,68 @@ class PlayerCore: NSObject {
       if backgroundTaskInUse {
         stopBackgroundTask()
       }
-      mpv.removeObservers()
-      savePlayerState()
+      // MPV_SHUTDOWN arrives after mpv has destroyed its core. Observer removal and watch-later
+      // queries use that core, so they cannot be performed safely on this path.
     }
+    if isMPVInitiated {
+      // Stop only Reel's managed bundled AirPlay helper. The mpv core is already gone, so generic
+      // plugin listeners and mpv APIs are unsafe here. Keep the matching JS context alive for its
+      // helper-only Promise, but never block this main-thread shutdown callback.
+      pluginMap.values.forEach { $0.quiesceAfterUnexpectedPlayerShutdown() }
+      uninitVideo()
+      postNotification(.iinaPlayerShutdown)
+      stopBundledAirPlayAfterUnexpectedMPVShutdown { [self] result in
+        if case .failure(let error) = result {
+          Logger.log("Unable to confirm bundled AirPlay helper shutdown after mpv quit: \(error.localizedDescription)",
+                     level: .error)
+        }
+        retirePluginInstancesAfterMPVShutdown()
+        // AppKit requires termination from the main thread. Keep it in the run loop rather than
+        // synchronously waiting for helper work while mpvHasShutdown is on the main thread.
+        RunLoop.main.perform(inModes: [.common]) {
+          NSApp.terminate(nil)
+        }
+      }
+      return
+    }
+
+    retirePluginInstancesAfterMPVShutdown()
     uninitVideo()
     postNotification(.iinaPlayerShutdown)
-    if isMPVInitiated {
-      // Initiate application termination. AppKit requires this be done from the main thread,
-      // however the main dispatch queue must not be used to avoid blocking the queue as per
-      // instructions from Apple.
-      RunLoop.main.perform(inModes: [.common]) {
-        NSApp.terminate(nil)
+  }
+
+  private func stopBundledAirPlayAfterUnexpectedMPVShutdown(
+    completion: @escaping (Result<Void, Error>) -> Void
+  ) {
+    let identifier = "dev.faruk.iina-airplay"
+    guard let instance = pluginMap[identifier] else {
+      completion(.success(()))
+      return
+    }
+    guard instance.isManagedBundledAirPlayPlugin else {
+      completion(.failure(EventController.AsyncEventError.listenerRejected(
+        "A non-managed AirPlay plugin context was not called after mpv shutdown")))
+      return
+    }
+
+    _ = events.emitAndWaitForBundledAirPlayShutdown(
+      timeout: Self.unexpectedMPVAirPlayStopTimeout
+    ) { result in
+      if Thread.isMainThread {
+        completion(result)
+      } else {
+        DispatchQueue.main.async { completion(result) }
       }
     }
+  }
+
+  /// Releases plugin state after mpv is gone without invoking JavaScript or the mpv API.
+  private func retirePluginInstancesAfterMPVShutdown() {
+    guard info.state == .shutDown else { return }
+    pluginMap.values.forEach { $0.retireAfterPlayerShutdown() }
+    pluginMap.removeAll()
+    plugins.removeAll()
+    events.removeAllListeners()
   }
 
   /// Switch the current player to mini player from the main window.
@@ -976,6 +1267,7 @@ class PlayerCore: NSObject {
   func stop() {
     guard info.state != .shutDown else { return }
     savePlaybackPosition()
+    airPlayAudio.stopPlayback()
     if mainWindow.loaded { mainWindow.liveCaptions.stop() }
 
     // Any online subtitle search still waiting on the user is abandoned: the media it applies to is
@@ -1530,7 +1822,8 @@ class PlayerCore: NSObject {
   }
 
   func setAudioDelay(_ delay: Double) {
-    mpv.setDouble(MPVOption.Audio.audioDelay, delay)
+    // While the AirPlay bridge carries the audio, mpv's delay also holds its sync correction.
+    mpv.setDouble(MPVOption.Audio.audioDelay, delay + airPlayAudio.audioDelayCorrection)
   }
 
   func setSubDelay(_ delay: Double, forPrimary: Bool = true) {
@@ -1686,9 +1979,12 @@ class PlayerCore: NSObject {
   }
 
   func setCrop(fromString str: String) {
-    let vwidth = info.videoWidth!
-    let vheight = info.videoHeight!
     if let aspect = Aspect(string: str) {
+      guard let vwidth = info.videoWidth, vwidth > 0,
+            let vheight = info.videoHeight, vheight > 0 else {
+        log("Ignoring crop request before valid video dimensions are available", level: .warning)
+        return
+      }
       let cropped = NSMakeSize(CGFloat(vwidth), CGFloat(vheight)).crop(withAspect: aspect)
       let vf = MPVFilter.crop(w: Int(cropped.width), h: Int(cropped.height), x: nil, y: nil)
       vf.label = Constants.FilterName.crop
@@ -1979,8 +2275,14 @@ class PlayerCore: NSObject {
     return result
   }
 
-  func setAudioDevice(_ name: String) {
-    mpv.setString(MPVProperty.audioDevice, name)
+  @discardableResult
+  func setAudioDevice(_ name: String) -> Bool {
+    return mpv.setString(MPVProperty.audioDevice, name) >= 0
+  }
+
+  func stepChapter(by delta: Int) {
+    guard delta != 0 else { return }
+    mpv.command(.add, args: ["chapter", String(delta)], checkError: false)
   }
 
   /** Scale is a double value in [-100, -1] + [1, 100] */
@@ -1999,26 +2301,38 @@ class PlayerCore: NSObject {
 
   func setSubTextColor(_ colorString: String) {
     mpv.setString("options/" + MPVOption.Subtitles.subColor, colorString)
+    info.subtitleStyleOverrides.textColor = colorString
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextSize(_ size: Double) {
     mpv.setDouble("options/" + MPVOption.Subtitles.subFontSize, size)
+    info.subtitleStyleOverrides.size = size
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBold(_ bold: Bool) {
     mpv.setFlag("options/" + MPVOption.Subtitles.subBold, bold)
+    info.subtitleStyleOverrides.bold = bold
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBorderColor(_ colorString: String) {
     mpv.setString("options/" + MPVOption.Subtitles.subOutlineColor, colorString)
+    info.subtitleStyleOverrides.borderColor = colorString
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBorderSize(_ size: Double) {
     mpv.setDouble("options/" + MPVOption.Subtitles.subOutlineSize, size)
+    info.subtitleStyleOverrides.borderSize = size
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubTextBgColor(_ colorString: String) {
     mpv.setString("options/" + MPVOption.Subtitles.subBackColor, colorString)
+    info.subtitleStyleOverrides.backgroundColor = colorString
+    postNotification(.iinaSubStyleChanged)
   }
 
   func setSubEncoding(_ encoding: String) {
@@ -2028,6 +2342,8 @@ class PlayerCore: NSObject {
 
   func setSubFont(_ font: String) {
     mpv.setString(MPVOption.Subtitles.subFont, font)
+    info.subtitleStyleOverrides.font = font
+    postNotification(.iinaSubStyleChanged)
   }
 
   func savePlaybackPosition() {
@@ -2036,7 +2352,10 @@ class PlayerCore: NSObject {
     // The player must be active to be able to save the watch later configuration.
     if info.state.active {
       log("Write watch later config")
-      mpv.command(.writeWatchLaterConfig, level: .verbose)
+      // The AirPlay bridge briefly owns mpv's speed and audio delay; save the user's values instead.
+      airPlayAudio.withUserTiming {
+        mpv.command(.writeWatchLaterConfig, level: .verbose)
+      }
     }
     if let url = info.currentURL {
       Preference.set(url, for: .iinaLastPlayedFilePath)
@@ -2107,6 +2426,7 @@ class PlayerCore: NSObject {
   func fileStarted(path: String) {
     guard info.state.active else { return }
     log("File started")
+    airPlayAudio.fileStarted()
 
     // Opening another file in the same window does not necessarily go through `stop()`, so abandon
     // a search that was waiting on the chooser for the previous file — its chooser is stale now.
@@ -2251,6 +2571,13 @@ class PlayerCore: NSObject {
     trackListChanged()
     getPlaylist()
     getChapters()
+    // These property notifications can be delivered while an mpv loading hook is still running.
+    // Their handlers intentionally avoid synchronous mpv reads during that phase, so resync their
+    // current values now that FILE_LOADED makes those reads safe. This also catches a selected
+    // CoreAudio/AirPlay device that disappeared during loading.
+    chapterChanged()
+    currentAoChanged()
+    audioDeviceListChanged()
     syncAbLoop()
     refreshSyncUITimer()
     touchBarSupport.setupTouchBarUI()
@@ -2296,6 +2623,7 @@ class PlayerCore: NSObject {
   }
 
   func fileEnded(_ dueToStopCommand: Bool) {
+    airPlayAudio.fileEnded()
     // if receive end-file when loading file, might be error
     // wait for idle
     if info.state == .loading || info.state == .starting {
@@ -2316,6 +2644,7 @@ class PlayerCore: NSObject {
   func aidChanged(_ id: Int) {
     guard info.state.active else { return }
     info.aid = id
+    airPlayAudio.audioTrackChanged()
     guard mainWindow.loaded else { return }
     mainWindow?.muteButton.isHidden = (info.aid == 0)
     mainWindow?.volumeSlider.isHidden = (info.aid == 0)
@@ -2336,7 +2665,8 @@ class PlayerCore: NSObject {
   func audioDeviceListChanged() {
     // The initial notification can arrive during an mpv loading hook. Do not synchronously query
     // mpv from the main thread until the file has finished loading.
-    guard info.state.loaded else { return }
+    // mpv's own output is switched off while the AirPlay bridge carries the audio.
+    guard info.state.loaded, !airPlayAudio.isEngaged else { return }
     let devices = getAudioDevices()
     let device = mpv.getString(MPVProperty.audioDevice)
     guard !devices.contains(where: {$0.name == device}) else { return }
@@ -2357,7 +2687,7 @@ class PlayerCore: NSObject {
   /// When the audio output driver changes it may cause the currently selected audio device to be invalid because a mpv audio device
   /// is tied to a specific audio output driver. Attempt to find and configure the same audio device with the current audio output driver.
   func currentAoChanged() {
-    guard info.state.loaded else { return }
+    guard info.state.loaded, !airPlayAudio.isEngaged else { return }
     guard let currentAo = mpv.getString(MPVProperty.currentAo),
           let audioDevice = mpv.getString(MPVProperty.audioDevice) else { return }
     let device = MPVAudioDevice(desc: "", name: audioDevice)
@@ -2437,6 +2767,7 @@ class PlayerCore: NSObject {
 
   func pauseChanged(_ paused: Bool) {
     guard mainWindow.loaded, info.state.loaded else { return }
+    airPlayAudio.pauseChanged(paused)
     if (info.state == .paused) != paused {
       sendOSD(paused ? .pause : .resume)
       // The NowPlayingInfoManager is notified when playback is paused or resumed. The video
@@ -2474,6 +2805,7 @@ class PlayerCore: NSObject {
     // Important to synchronize the time as mpv may slightly alter the playback position during a
     // restart even while paused. See issue #5337.
     syncUI(.time)
+    airPlayAudio.playbackRestarted()
     reloadSavedIINAfilters()
 
     // The new video's size is guaranteed to be available. Reset the flags used for window resizing.
@@ -2661,6 +2993,7 @@ class PlayerCore: NSObject {
     info.vid = id
     postNotification(.iinaVIDChanged)
     sendOSD(.track(info.currentTrack(.video) ?? .noneVideoTrack))
+    if mainWindow.loaded { mainWindow.liveCaptions.updateEligibility() }
     if isInMiniPlayer {
       miniPlayer.refreshArtworkVisibility()
       miniPlayer.handleVideoSizeChange()
@@ -2834,6 +3167,7 @@ class PlayerCore: NSObject {
         mainWindow.toggleWindowFullScreen()
       }
     }
+    airPlayAudio.fileLoaded()
   }
 
   /// Synchronize the video position cached in the `info.videoPosition` property.
@@ -2932,21 +3266,34 @@ class PlayerCore: NSObject {
     }
   }
 
-  func sendOSD(_ osd: OSDMessage, autoHide: Bool = true, forcedTimeout: Float? = nil, accessoryView: NSView? = nil, context: Any? = nil, external: Bool = false) {
+  func sendOSD(_ osd: OSDMessage, autoHide: Bool = true, forcedTimeout: Float? = nil, accessoryView: NSView? = nil, context: Any? = nil, external: Bool = false, presentationCheck: (() -> Bool)? = nil, onDisplayed: ((Bool) -> Void)? = nil) {
     // querying `mainWindow.isWindowLoaded` will initialize mainWindow unexpectedly
     guard !isInMiniPlayer, mainWindow.loaded, info.state.loaded,
-          Preference.bool(for: .enableOSD) || osd.alwaysEnabled, !osd.isDisabled else { return }
+          Preference.bool(for: .enableOSD) || osd.alwaysEnabled, !osd.isDisabled else {
+      if let onDisplayed {
+        DispatchQueue.main.async { onDisplayed(false) }
+      }
+      return
+    }
     if info.disableOSDForFileLoading && !external {
       guard case .fileStart = osd else {
+        if let onDisplayed {
+          DispatchQueue.main.async { onDisplayed(false) }
+        }
         return
       }
     }
     DispatchQueue.main.async {
-      self.mainWindow.displayOSD(osd,
-                                 autoHide: autoHide,
-                                 forcedTimeout: forcedTimeout,
-                                 accessoryView: accessoryView,
-                                 context: context)
+      guard presentationCheck?() ?? true else {
+        onDisplayed?(false)
+        return
+      }
+      let displayed = self.mainWindow.displayOSD(osd,
+                                                 autoHide: autoHide,
+                                                 forcedTimeout: forcedTimeout,
+                                                 accessoryView: accessoryView,
+                                                 context: context)
+      onDisplayed?(displayed)
     }
   }
 

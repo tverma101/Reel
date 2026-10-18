@@ -40,6 +40,14 @@ class Utility {
 
   // MARK: - Logs, alerts
   static func showAlert(_ key: String, comment: String? = nil, arguments: [CVarArg]? = nil, style: NSAlert.Style = .critical, sheetWindow: NSWindow? = nil, suppressionKey: PK? = nil, disableMenus: Bool = false) {
+    guard Thread.isMainThread else {
+      DispatchQueue.main.async {
+        showAlert(key, comment: comment, arguments: arguments, style: style,
+                  sheetWindow: sheetWindow, suppressionKey: suppressionKey, disableMenus: disableMenus)
+      }
+      return
+    }
+
     let alert = NSAlert()
     if let suppressionKey {
       // This alert includes a suppression button that allows the user to suppress the alert.

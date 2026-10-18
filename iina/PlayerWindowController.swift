@@ -104,8 +104,8 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
     case PK.maxVolume.rawValue:
       if let newValue = change[.newKey] as? Int {
         volumeSlider.maxValue = Double(newValue)
-        if player.mpv.getDouble(MPVOption.Audio.volume) > Double(newValue) {
-          player.mpv.setDouble(MPVOption.Audio.volume, Double(newValue))
+        if player.info.volume > Double(newValue) {
+          player.setVolume(Double(newValue))
         }
       }
     case PK.useExactSeek.rawValue:
