@@ -717,6 +717,8 @@ final class AirPlayAudioBridge: NSObject {
   /// A speaker that claims to play but never advances the item clock is not a usable route.
   private static let speakerClockStartupTimeout: TimeInterval = 4
   private static let speakerClockStallTimeout: TimeInterval = 1
+  /// Refresh the routed item after a long pause, when AirPlay may have discarded its buffered stream.
+  private static let longPauseStreamRefreshThreshold: TimeInterval = 30
   private static let correctionThreshold = 0.075
   private static let resyncThreshold = 1.0
   /// How long mpv's audio clock may stay still before the bridge pauses the speaker.
@@ -907,6 +909,8 @@ final class AirPlayAudioBridge: NSObject {
   private var pendingUserAudioDelayTargets = AirPlayUserAudioDelayTargets()
   private var mappedAudioDelayTarget: AirPlayUserAudioDelayTarget?
   private var routeDescription = ""
+  /// The current pause's start time, retained even if the bridge fails while paused.
+  private var pauseStartedAt: Date?
   /// This file's audio could not be bridged, so mpv plays it on the Mac until the next file.
   private var bridgeFailedForFile = false
   /// Whether Reel currently owns audio through the AVPlayer bridge.
@@ -1830,14 +1834,57 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   func pauseChanged(_ paused: Bool) {
-    guard isCarrying else { return }
     if paused {
+      if pauseStartedAt == nil { pauseStartedAt = Date() }
+      guard isCarrying else { return }
       if waitingForMPVAudio { audioStartupClock.markBlocked() }
       cancelHold()
       avPlayer?.pause()
     } else {
+      let pausedFor = pauseStartedAt.map { Date().timeIntervalSince($0) }
+      pauseStartedAt = nil
+      if let pausedFor { recoverAfterPause(pausedFor) }
+      guard isCarrying else { return }
       if waitingForMPVAudio { audioStartupClock.markCanProgress() }
       requestHold("resume", realign: true)
+    }
+  }
+
+  /// A paused AirPlay item can outlive the receiver's buffered stream. Refresh it on resume after
+  /// a long pause, and retry a failure that happened while paused after checking the route again.
+  private func recoverAfterPause(_ duration: TimeInterval) {
+    let failedItem = avPlayer?.currentItem?.status == .failed
+    guard duration >= Self.longPauseStreamRefreshThreshold || bridgeFailedForFile || failedItem else {
+      return
+    }
+    let itemGenerationBeforeRouteCheck = itemGeneration
+    routeMayHaveChanged()
+    guard routeActive else { return }
+    if bridgeFailedForFile || avPlayer?.currentItem?.status == .failed {
+      retryFailedBridgeIfNeeded(trigger: "resume")
+      return
+    }
+    guard itemGeneration == itemGenerationBeforeRouteCheck,
+          duration >= Self.longPauseStreamRefreshThreshold, isCarrying,
+          case .supported(let selection) = audioSelection() else { return }
+    log("refreshing AirPlay audio after a \(Int(duration))s pause")
+    replaceItem(with: selection)
+  }
+
+  /// Retries only after a failure, so ordinary picker dismissals do not rebuild the audio stream.
+  private func retryFailedBridgeIfNeeded(trigger: String) {
+    let failedItem = avPlayer?.currentItem?.status == .failed
+    guard (bridgeFailedForFile || failedItem), routeActive, !stoppingOrQuitting,
+          let player, player.info.state.loaded,
+          case .supported(let selection) = audioSelection() else { return }
+    log("retrying AirPlay audio after \(trigger)")
+    if bridgeFailedForFile {
+      bridgeFailedForFile = false
+      reconcile()
+    } else if isEngaged, itemSelection == selection {
+      replaceItem(with: selection)
+    } else {
+      reconcile()
     }
   }
 
@@ -2044,6 +2091,7 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   func fileStarted(fileTransitionGeneration: UInt64? = nil, playlistEntryID: Int64? = nil) {
+    pauseStartedAt = nil
     let transitionUserSpeed = userSpeed
     let transitionUserAudioDelay = userAudioDelay
     let snapshot = player?.mpv?.airPlayPlaybackSnapshot
@@ -2110,6 +2158,7 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   func fileEnded(fileTransitionGeneration: UInt64?, playlistEntryID: Int64?) {
+    pauseStartedAt = nil
     let endedGeneration = fileTransitionGeneration ?? currentFileTransitionGeneration
     let endedPlaylistEntryID = playlistEntryID ?? currentPlaylistEntryID
     if let endedGeneration { currentFileTransitionGeneration = endedGeneration }
@@ -2122,6 +2171,7 @@ final class AirPlayAudioBridge: NSObject {
 
   /// The player is stopping or quitting; mpv may write a watch-later file with its timing.
   func stopPlayback() {
+    pauseStartedAt = nil
     stoppingOrQuitting = true
     _ = routeAudioOwnershipNow()
     if !currentFileTimingReleaseStarted {
@@ -2190,6 +2240,7 @@ final class AirPlayAudioBridge: NSObject {
 
   /// Releases pending drain callbacks when mpv shuts down outside Reel's normal sequence.
   func playerDidShutDown() {
+    pauseStartedAt = nil
     holdGeneration += 1
     holding = false
     stopHoldTimer()
@@ -3162,8 +3213,11 @@ extension AirPlayAudioBridge: AVRoutePickerViewDelegate {
     // back into AVPlayer here can deadlock the main thread against its media queue.
     DispatchQueue.main.async { [weak self] in self?.routeMayHaveChanged() }
     // The route can settle a moment after the list closes.
-    for delay in [0.5, 1.5] {
-      DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.routeMayHaveChanged() }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.routeMayHaveChanged() }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+      guard let self else { return }
+      self.routeMayHaveChanged()
+      self.retryFailedBridgeIfNeeded(trigger: "route picker close")
     }
   }
 }
