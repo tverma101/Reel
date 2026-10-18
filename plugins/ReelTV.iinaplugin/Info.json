@@ -1,0 +1,26 @@
+{
+  "name": "Reel TV",
+  "identifier": "com.tverma101.reel.tv",
+  "version": "1.0.0",
+  "description": "A Netflix-style local TV library: point it at a folder of shows, browse posters and episodes in the sidebar, and play with resume — no media server required.",
+  "author": { "name": "Tejas Verma" },
+  "entry": "main.js",
+  "sidebarTab": {
+    "name": "TV Library"
+  },
+  "preferenceDefaults": {
+    "tvFolder": "",
+    "tmdbKey": "",
+    "tmdbLanguage": "en-US"
+  },
+  "preferencesPage": "pref.html",
+  "permissions": [
+    "file-system",
+    "network-request",
+    "show-osd"
+  ],
+  "allowedDomains": [
+    "api.themoviedb.org",
+    "image.tmdb.org"
+  ]
+}
