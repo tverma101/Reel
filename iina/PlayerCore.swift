@@ -218,11 +218,14 @@ class PlayerCore: NSObject {
   private var pluginMap: [String: JavascriptPluginInstance] = [:]
   var events = EventController()
 
-  lazy var ffmpegController: FFmpegController = {
+  private var instantiatedFFmpegController: FFmpegController?
+  var ffmpegController: FFmpegController {
+    if let controller = instantiatedFFmpegController { return controller }
     let controller = FFmpegController()
     controller.delegate = self
+    instantiatedFFmpegController = controller
     return controller
-  }()
+  }
 
   lazy var info: PlaybackInfo = PlaybackInfo(self)
 
@@ -975,7 +978,7 @@ class PlayerCore: NSObject {
   ///     running when the mpv core is shutdown it may call into mpv triggering a crash.
   func stop() {
     guard info.state != .shutDown else { return }
-    ffmpegController.cancelThumbnailGeneration()
+    instantiatedFFmpegController?.cancelThumbnailGeneration()
     info.$thumbnails.withLock { $0.removeAll(keepingCapacity: false) }
     info.thumbnailsReady = false
     savePlaybackPosition()
@@ -2112,7 +2115,7 @@ class PlayerCore: NSObject {
     log("File started")
 
     // Replacing media does not necessarily call stop(); cancel all previous preview work.
-    ffmpegController.cancelThumbnailGeneration()
+    instantiatedFFmpegController?.cancelThumbnailGeneration()
 
     // Opening another file in the same window does not necessarily go through `stop()`, so abandon
     // a search that was waiting on the chooser for the previous file — its chooser is stale now.
