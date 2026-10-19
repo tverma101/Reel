@@ -7,12 +7,15 @@ const root = path.resolve(__dirname, "..");
 const source = fs.readFileSync(path.join(root, "plugins/ReelTV.iinaplugin/main.js"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "plugins/ReelTV.iinaplugin/Info.json"), "utf8"));
 const hostFileSource = fs.readFileSync(path.join(root, "iina/JavascriptAPIFile.swift"), "utf8");
+assert.ok(hostFileSource.includes("private static let sharedDataAccessLock = NSRecursiveLock()") &&
+  hostFileSource.includes("func withDataLock(_ callback: JSValue)"),
+  "plugin contexts share a reentrant host lock for synchronous @data transactions");
 assert.ok(hostFileSource.includes("errorHandler: { _, _ in") &&
   hostFileSource.includes("enumerationFailed = true") && hostFileSource.includes("return enumerationFailed ? nil : entries"),
   "a capped host listing reports filesystem enumeration failures instead of returning partial results");
 
 function runPlugin({ tree, savedData = null, savedDataFiles = {}, sharedLibraryStore = null,
-  preferences = {}, httpGet = null }) {
+  preferences = {}, httpGet = null, sharedDataLock = null }) {
   const handlers = {};
   const events = {};
   const messages = [];
@@ -22,6 +25,12 @@ function runPlugin({ tree, savedData = null, savedDataFiles = {}, sharedLibraryS
   const tmdbCalls = [];
   const listCalls = [];
   const clock = { now: 1000000 };
+  const dataLock = sharedDataLock || { depth: 0, maxDepth: 0, calls: 0, beforeNextAcquire: null };
+  function assertDataLock(filePath) {
+    if (String(filePath).startsWith("@data/")) {
+      assert.ok(dataLock.depth > 0, "@data access is covered by file.withDataLock: " + filePath);
+    }
+  }
   class TestDate extends Date {
     static now() { return clock.now; }
   }
@@ -45,7 +54,19 @@ function runPlugin({ tree, savedData = null, savedDataFiles = {}, sharedLibraryS
     },
     event: { on(name, callback) { events[name] = callback; } },
     file: {
+      withDataLock(callback) {
+        assert.equal(typeof callback, "function");
+        const beforeNextAcquire = dataLock.beforeNextAcquire;
+        dataLock.beforeNextAcquire = null;
+        if (beforeNextAcquire) beforeNextAcquire();
+        dataLock.depth += 1;
+        dataLock.calls += 1;
+        dataLock.maxDepth = Math.max(dataLock.maxDepth, dataLock.depth);
+        try { return callback(); }
+        finally { dataLock.depth -= 1; }
+      },
       exists(filePath) {
+        assertDataLock(filePath);
         return filePath === "/Shows" ||
           (filePath === "@data/library.json" && output.data !== null) ||
           Object.hasOwn(output.dataFiles, filePath);
@@ -64,11 +85,13 @@ function runPlugin({ tree, savedData = null, savedDataFiles = {}, sharedLibraryS
         return Number.isInteger(options.limit) ? entries.slice(0, options.limit) : entries;
       },
       read(filePath, options) {
+        assertDataLock(filePath);
         assert.equal(Object.keys(options).length, 0);
         if (filePath === "@data/library.json") return output.data;
         return output.dataFiles[filePath];
       },
       write(filePath, data) {
+        assertDataLock(filePath);
         if (filePath === "@data/library.json") output.data = data;
         else output.dataFiles[filePath] = data;
         writes.push(data);
@@ -105,7 +128,7 @@ function runPlugin({ tree, savedData = null, savedDataFiles = {}, sharedLibraryS
   };
   vm.runInNewContext(source, sandbox, { filename: "ReelTV/main.js" });
   return { handlers, events, messages, timers, writes, clearedIntervals, tmdbCalls, listCalls, output, state,
-    clock, preferenceValues, libraryStore };
+    clock, preferenceValues, libraryStore, dataLock };
 }
 
 function journalFor(plugin, episodePath) {
@@ -170,6 +193,8 @@ const savedBeforeResume = JSON.parse(plugin.output.data);
 assert.equal(savedBeforeResume.shows[0].episodes[0].progress, 0.4,
   "file-loaded at time zero does not erase the saved resume position");
 assert.equal(plugin.state.mpvSets.length, 0, "resume waits until duration is available");
+assert.ok(plugin.dataLock.maxDepth >= 2, "nested library and journal reads use a reentrant data transaction");
+assert.equal(plugin.dataLock.depth, 0, "data transactions release their lock after each callback");
 plugin.state.duration = 100;
 plugin.timers[0]();
 assert.deepEqual(plugin.state.mpvSets, [["time-pos", 40]], "resume uses the supported mpv.set API");
@@ -224,6 +249,53 @@ expiringResume.events["iina.file-loaded"]();
 assert.equal(expiringResume.state.mpvSets.length, 0, "a resume that expires cannot seek much later");
 assert.equal(journalFor(expiringResume, firstPath).progress, 0.35,
   "progress recording resumes when duration becomes available after resume expiry");
+
+const seekOverridesResume = runPlugin({ tree: folderTree, savedData: saved });
+await new Promise(setImmediate);
+seekOverridesResume.handlers.play({ key: "Series", path: firstPath });
+seekOverridesResume.state.duration = 0;
+seekOverridesResume.events["iina.file-loaded"]();
+seekOverridesResume.events["mpv.seek"]();
+seekOverridesResume.state.duration = 100;
+seekOverridesResume.timers[0]();
+assert.equal(seekOverridesResume.state.mpvSets.length, 0,
+  "a user seek while duration resolves cancels the saved resume retry");
+
+const otherFileSeekKeepsResume = runPlugin({ tree: folderTree, savedData: saved });
+await new Promise(setImmediate);
+otherFileSeekKeepsResume.handlers.play({ key: "Series", path: firstPath });
+otherFileSeekKeepsResume.state.duration = 0;
+otherFileSeekKeepsResume.events["iina.file-loaded"]();
+otherFileSeekKeepsResume.state.url = "file:///Shows/Other/Unrelated S01E01.mp4";
+otherFileSeekKeepsResume.events["mpv.seek"]();
+otherFileSeekKeepsResume.state.url = "file://" + firstPath;
+otherFileSeekKeepsResume.state.duration = 100;
+otherFileSeekKeepsResume.timers[0]();
+assert.deepEqual(otherFileSeekKeepsResume.state.mpvSets, [["time-pos", 40]],
+  "a seek on another file does not cancel this episode's delayed resume");
+
+const racingLibraryStore = { data: saved };
+const racingProgressFiles = {};
+const racingDataLock = { depth: 0, maxDepth: 0, calls: 0, beforeNextAcquire: null };
+const newerProgressWindow = runPlugin({ tree: folderTree, sharedLibraryStore: racingLibraryStore,
+  savedDataFiles: racingProgressFiles, sharedDataLock: racingDataLock });
+const staleProgressWindow = runPlugin({ tree: folderTree, sharedLibraryStore: racingLibraryStore,
+  savedDataFiles: racingProgressFiles, sharedDataLock: racingDataLock });
+await new Promise(setImmediate);
+staleProgressWindow.handlers.playFromStart({ key: "Series", path: firstPath });
+newerProgressWindow.handlers.playFromStart({ key: "Series", path: firstPath });
+staleProgressWindow.state.duration = 100;
+newerProgressWindow.state.duration = 100;
+staleProgressWindow.state.position = 30;
+staleProgressWindow.clock.now = 1000050;
+newerProgressWindow.state.position = 70;
+newerProgressWindow.clock.now = 1000100;
+racingDataLock.beforeNextAcquire = () => newerProgressWindow.events["mpv.end-file"]();
+staleProgressWindow.events["mpv.end-file"]();
+assert.equal(journalFor(staleProgressWindow, firstPath).progress, 0.7,
+  "a stale window cannot overwrite a newer episode progress journal");
+assert.equal(journalFor(staleProgressWindow, firstPath).lastPlayed, 1000100,
+  "progress conflict resolution retains the newer measurement timestamp");
 
 const percentPath = "/Shows/Series/Literal%20Title S01E02.mp4";
 plugin.state.url = "file://" + percentPath;

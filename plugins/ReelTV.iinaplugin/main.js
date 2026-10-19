@@ -111,16 +111,20 @@ function tmdbKey() {
 }
 
 function loadData() {
-  try {
-    if (file.exists(DATA_LIBRARY)) {
-      library = normalizeLibrary(JSON.parse(file.read(DATA_LIBRARY, {})));
+  const messages = [];
+  file.withDataLock(() => {
+    try {
+      if (file.exists(DATA_LIBRARY)) {
+        library = normalizeLibrary(JSON.parse(file.read(DATA_LIBRARY, {})));
+      }
+    } catch (e) {
+      messages.push("Reel TV: could not read library data: " + e);
+      library = { shows: [], root: "", scannedAt: 0 };
     }
-  } catch (e) {
-    console.log("Reel TV: could not read library data: " + e);
-    library = { shows: [], root: "", scannedAt: 0 };
-  }
-  loadProgressJournal();
-  applyProgressJournal();
+    loadProgressJournal();
+    applyProgressJournal();
+  });
+  messages.forEach((message) => console.log(message));
 }
 
 function applyProgressJournal(target = library) {
@@ -145,102 +149,115 @@ function loadProgressJournal() {
 }
 
 function readEpisodeProgress(path) {
-  const storagePath = progressFilePath(path);
-  try {
-    if (!file.exists(storagePath)) return progressJournal.get(path) || null;
-    const saved = JSON.parse(file.read(storagePath, {}));
-    if (!saved || saved.path !== path || !Number.isFinite(saved.progress) ||
-        !Number.isFinite(saved.lastPlayed)) return null;
-    const record = {
-      progress: Math.max(0, Math.min(1, saved.progress)),
-      lastPlayed: Math.max(0, saved.lastPlayed),
-      watched: saved.watched === true,
-    };
-    progressJournal.set(path, record);
-    return record;
-  } catch (e) {
-    return progressJournal.get(path) || null;
-  }
+  return file.withDataLock(() => {
+    const storagePath = progressFilePath(path);
+    try {
+      if (!file.exists(storagePath)) return progressJournal.get(path) || null;
+      const saved = JSON.parse(file.read(storagePath, {}));
+      if (!saved || saved.path !== path || !Number.isFinite(saved.progress) ||
+          !Number.isFinite(saved.lastPlayed)) return null;
+      const record = {
+        progress: Math.max(0, Math.min(1, saved.progress)),
+        lastPlayed: Math.max(0, saved.lastPlayed),
+        watched: saved.watched === true,
+      };
+      progressJournal.set(path, record);
+      return record;
+    } catch (e) {
+      return progressJournal.get(path) || null;
+    }
+  });
 }
 
 function saveData({ snapshot = true } = {}) {
-  try {
-    for (const path of dirtyProgressPaths) {
-      const found = findEpisode(path);
-      if (!found) continue;
-      const record = {
-        path,
-        progress: found.ep.progress,
-        lastPlayed: found.ep.lastPlayed,
-        watched: found.ep.watched,
-      };
-      file.write(progressFilePath(path), JSON.stringify(record));
-      progressJournal.set(path, record);
-    }
-    if (!snapshot) {
-      dirtyProgressPaths.clear();
-      return;
-    }
+  const messages = [];
+  file.withDataLock(() => {
+    try {
+      for (const path of dirtyProgressPaths) {
+        const found = findEpisode(path);
+        if (!found) continue;
+        const record = {
+          path,
+          progress: found.ep.progress,
+          lastPlayed: found.ep.lastPlayed,
+          watched: found.ep.watched,
+        };
+        const latest = readEpisodeProgress(path);
+        if (latest && latest.lastPlayed >= record.lastPlayed) {
+          found.ep.progress = latest.progress;
+          found.ep.lastPlayed = latest.lastPlayed;
+          found.ep.watched = latest.watched;
+          progressJournal.set(path, latest);
+        } else {
+          file.write(progressFilePath(path), JSON.stringify(record));
+          progressJournal.set(path, record);
+        }
+      }
+      if (!snapshot) {
+        dirtyProgressPaths.clear();
+        return;
+      }
 
-    // Other player windows share the plugin's @data folder. Refresh persisted progress before
-    // writing this window's snapshot so a scan in one window doesn't erase progress recorded by
-    // another. The scan start timestamp prevents a slow stale window from replacing a newer scan.
-    let saved = null;
-    if (file.exists(DATA_LIBRARY)) {
-      try {
-        saved = normalizeLibrary(JSON.parse(file.read(DATA_LIBRARY, {})));
-      } catch (e) {
-        // loadData recovers to an empty library. Let the next complete save repair malformed JSON
-        // instead of failing while trying to merge the same unreadable file.
-        console.log("Reel TV: repairing unreadable library data: " + e);
-      }
-    }
-    let writeSnapshot = true;
-    if (saved && saved.scannedAt > library.scannedAt) {
-      library = saved;
-      applyProgressJournal();
-      writeSnapshot = false;
-    } else if (saved) {
-      const savedEpisodes = new Map();
-      const savedShows = new Map();
-      for (const show of saved.shows) {
-        savedShows.set(show.key, show);
-        for (const episode of show.episodes) savedEpisodes.set(episode.path, episode);
-      }
-      for (const show of library.shows) {
-        const savedShow = savedShows.get(show.key);
-        if (savedShow) {
-          show.tmdbId = show.tmdbId || savedShow.tmdbId;
-          show.poster = show.poster || savedShow.poster;
-          show.overview = show.overview || savedShow.overview;
-          show.year = show.year || savedShow.year;
-        }
-        for (const episode of show.episodes) {
-          const previous = savedEpisodes.get(episode.path);
-          if (previous && !dirtyProgressPaths.has(episode.path)) {
-            episode.progress = previous.progress;
-            episode.lastPlayed = previous.lastPlayed;
-            episode.watched = previous.watched;
-          }
-          const journal = progressJournal.get(episode.path);
-          if (journal && (!previous || journal.lastPlayed >= previous.lastPlayed) &&
-              !dirtyProgressPaths.has(episode.path)) {
-            episode.progress = journal.progress;
-            episode.lastPlayed = journal.lastPlayed;
-            episode.watched = journal.watched;
-          }
-          if (previous && episode.title === episode.file.replace(/\.[^.]+$/, "")) {
-            episode.title = previous.title;
-          }
+      // Player contexts share @data. Keep the read, merge and write in one host-side transaction
+      // so another window cannot publish a stale snapshot between these steps.
+      let saved = null;
+      if (file.exists(DATA_LIBRARY)) {
+        try {
+          saved = normalizeLibrary(JSON.parse(file.read(DATA_LIBRARY, {})));
+        } catch (e) {
+          // loadData recovers to an empty library. Let the next complete save repair malformed JSON
+          // instead of failing while trying to merge the same unreadable file.
+          messages.push("Reel TV: repairing unreadable library data: " + e);
         }
       }
-      library.scannedAt = Math.max(library.scannedAt, saved.scannedAt);
+      let writeSnapshot = true;
+      if (saved && saved.scannedAt > library.scannedAt) {
+        library = saved;
+        applyProgressJournal();
+        writeSnapshot = false;
+      } else if (saved) {
+        const savedEpisodes = new Map();
+        const savedShows = new Map();
+        for (const show of saved.shows) {
+          savedShows.set(show.key, show);
+          for (const episode of show.episodes) savedEpisodes.set(episode.path, episode);
+        }
+        for (const show of library.shows) {
+          const savedShow = savedShows.get(show.key);
+          if (savedShow) {
+            show.tmdbId = show.tmdbId || savedShow.tmdbId;
+            show.poster = show.poster || savedShow.poster;
+            show.overview = show.overview || savedShow.overview;
+            show.year = show.year || savedShow.year;
+          }
+          for (const episode of show.episodes) {
+            const previous = savedEpisodes.get(episode.path);
+            if (previous && !dirtyProgressPaths.has(episode.path)) {
+              episode.progress = previous.progress;
+              episode.lastPlayed = previous.lastPlayed;
+              episode.watched = previous.watched;
+            }
+            const journal = progressJournal.get(episode.path);
+            if (journal && (!previous || journal.lastPlayed >= previous.lastPlayed) &&
+                !dirtyProgressPaths.has(episode.path)) {
+              episode.progress = journal.progress;
+              episode.lastPlayed = journal.lastPlayed;
+              episode.watched = journal.watched;
+            }
+            if (previous && episode.title === episode.file.replace(/\.[^.]+$/, "")) {
+              episode.title = previous.title;
+            }
+          }
+        }
+        library.scannedAt = Math.max(library.scannedAt, saved.scannedAt);
+      }
+      if (writeSnapshot) file.write(DATA_LIBRARY, JSON.stringify(library));
+      dirtyProgressPaths.clear();
+    } catch (e) {
+      messages.push("Reel TV: could not save library data: " + e);
     }
-    if (writeSnapshot) file.write(DATA_LIBRARY, JSON.stringify(library));
-    dirtyProgressPaths.clear();
-  } catch (e) {
-    console.log("Reel TV: could not save library data: " + e);
-  }
+  });
+  messages.forEach((message) => console.log(message));
 }
 
 // --- Episode name parsing ----------------------------------------------------
@@ -498,7 +515,7 @@ function recordProgress(path = currentEpisodePath()) {
   const ratio = position / duration;
   const { show, ep } = found;
   ep.progress = ratio;
-  ep.lastPlayed = Date.now();
+  ep.lastPlayed = Math.max(Date.now(), ep.lastPlayed + 1);
   dirtyProgressPaths.add(path);
   const justFinished = !ep.watched && ratio >= WATCHED_RATIO;
   if (justFinished) ep.watched = true;
@@ -535,8 +552,9 @@ function applyPendingResume(path) {
   try {
     const duration = mpv.getNumber("duration") || 0;
     if (Number.isFinite(duration) && duration > 0) {
-      mpv.set("time-pos", resume.progress * duration);
+      // Clear first because setting time-pos may itself produce mpv.seek.
       pendingResume = null;
+      mpv.set("time-pos", resume.progress * duration);
       return true;
     }
   } catch (e) {}
@@ -552,6 +570,7 @@ function applyPendingResume(path) {
     remaining
   );
   resume.attempts += 1;
+  resume.waitingForDuration = true;
   resume.retryScheduled = true;
   setTimeout(() => {
     if (pendingResume !== resume) return;
@@ -646,6 +665,13 @@ event.on("iina.file-loaded", (url) => {
     recordProgress(path);
   }
   startPolling();
+});
+
+event.on("mpv.seek", () => {
+  // A user seek while duration is still resolving takes precedence over the saved resume point.
+  if (pendingResume && pendingResume.waitingForDuration && currentEpisodePath() === pendingResume.path) {
+    pendingResume = null;
+  }
 });
 
 event.on("mpv.end-file", () => {

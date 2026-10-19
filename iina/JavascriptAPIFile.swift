@@ -10,6 +10,7 @@ import Foundation
 import JavaScriptCore
 
 @objc protocol JavascriptAPIFileExportable: JSExport {
+  func withDataLock(_ callback: JSValue) -> JSValue?
   func list(_ path: String, _ options: [String: Any]) -> [[String: Any]]?
   func exists(_ path: String) -> Bool
   func write(_ path: String, _ content: String)
@@ -22,6 +23,21 @@ import JavaScriptCore
 
 class JavascriptAPIFile: JavascriptAPI, JavascriptAPIFileExportable {
   private static let maximumRequestedDirectoryEntries = 20_001
+  /// Shared by per-player plugin contexts so synchronous @data read/modify/write transactions cannot interleave.
+  private static let sharedDataAccessLock = NSRecursiveLock()
+
+  /// Runs a synchronous JavaScript callback while other plugin contexts are excluded from the same transaction.
+  /// Keep callbacks short and limited to storage logic; never call APIs that synchronously dispatch to the main queue.
+  /// Returned Promises are not awaited, so asynchronous callbacks are not protected after they return.
+  func withDataLock(_ callback: JSValue) -> JSValue? {
+    guard callback.context === context else {
+      throwError(withMessage: "file.withDataLock requires a callback from this plugin context.")
+      return nil
+    }
+    Self.sharedDataAccessLock.lock()
+    defer { Self.sharedDataAccessLock.unlock() }
+    return callback.call(withArguments: [])
+  }
 
   func exists(_ path: String) -> Bool {
     guard let filePath = parsePath(path).path else { return false }

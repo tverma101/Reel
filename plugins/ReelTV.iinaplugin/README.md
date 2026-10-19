@@ -17,7 +17,8 @@ library inside the player's sidebar.
   with watched/progress badges.
 - **Play** — click any episode to open it in the player; resuming jumps back to
   where you stopped. If mpv does not expose duration yet, the plugin retries
-  for up to two minutes and then gives up instead of making a late seek. The
+  for up to two minutes and then gives up instead of making a late seek. A
+  seek made while duration is resolving cancels the pending resume. The
   plugin menu adds **Reel TV: Rescan Library** and
   **Reel TV: Play Next Unwatched**.
 - **Decorate (optional)** — with a TMDB API key, posters, overviews, and official
@@ -46,5 +47,6 @@ send parsed show names to TMDB; poster images can also be fetched from TMDB usin
 saved metadata after the key is removed. Library state lives in the plugin's
 own data folder shared by player windows. Progress is journaled per episode so
 updates to different episodes do not replace one another across player windows.
-Progress is written every 15 seconds; a direct mpv IPC quit can lose the most
-recent interval.
+Reel serializes shared data transactions, and an older progress measurement
+cannot replace a newer journal from another player window. Progress is written
+every 15 seconds; a direct mpv IPC quit can lose the most recent interval.
