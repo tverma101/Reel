@@ -14,7 +14,8 @@
 * Based on [mpv](https://github.com/mpv-player/mpv), which provides the best decoding capacity on macOS
 * Designed with modern versions of macOS (11.0+) in mind
 * All the features you need for video and music: subtitles, playlists, chapters…and much, much more!
-* Force Touch, picture-in-picture and advanced Touch Bar support
+* Force Touch, advanced Touch Bar support, and picture-in-picture that stays visible
+  over other apps' full-screen spaces on macOS 13+
 * Customizable user interface including multiple color schemes and on screen controller (OSC) layout positioning
 * Standalone Music Mode designed for audio files
 * Video thumbnails
