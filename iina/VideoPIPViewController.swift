@@ -36,7 +36,20 @@ class VideoPIPViewController: PIPViewController, NSWindowDelegate {
       Logger.log("VideoPIPViewController.viewDidLayout window is nil", level: .error)
       return
     }
+    configureWindowForPictureInPicture(window)
     window.delegate = self
+  }
+
+  /// Keep Reel's PiP window available in other apps' full-screen spaces.
+  private func configureWindowForPictureInPicture(_ window: NSWindow) {
+    var behavior = window.collectionBehavior
+    behavior.insert(.canJoinAllSpaces)
+    behavior.insert(.fullScreenAuxiliary)
+    if #available(macOS 13.0, *) {
+      // On newer systems this explicitly allows floating overlays to join other apps' full-screen spaces.
+      behavior.insert(.canJoinAllApplications)
+    }
+    window.collectionBehavior = behavior
   }
 
   /// Force a draw after exiting PiP.
