@@ -56,8 +56,8 @@ return -1;\
   double _timestamp;
 }
 
-- (int)getPeeksForFile:(NSString *)file thumbnailsWidth:(int)thumbnailsWidth;
-- (void)saveThumbnail:(AVFrame *)pFrame width:(int)width height:(int)height index:(int)index realTime:(int)second forFile:(NSString *)file;
+- (int)getPeeksForFile:(NSString *)file thumbnailsWidth:(int)thumbnailsWidth operation:(NSOperation *)operation;
+- (void)saveThumbnail:(AVFrame *)pFrame width:(int)width height:(int)height index:(int)index realTime:(int)second forFile:(NSString *)file operation:(NSOperation *)operation;
 
 @end
 
@@ -80,30 +80,42 @@ return -1;\
 
 // MARK: - Generating Thumbnails
 
+- (void)cancelThumbnailGeneration
+{
+  [_queue cancelAllOperations];
+}
+
 - (void)generateThumbnailForFile:(NSString *)file
                       thumbWidth:(int)thumbWidth
 {
-  [_queue cancelAllOperations];
+  [self cancelThumbnailGeneration];
   NSBlockOperation *op = [[NSBlockOperation alloc] init];
   __weak NSBlockOperation *weakOp = op;
   [op addExecutionBlock:^(){
-    if ([weakOp isCancelled]) {
-      return;
-    }
+    NSBlockOperation *activeOp = weakOp;
+    if (!activeOp || activeOp.isCancelled) return;
     self->_timestamp = CACurrentMediaTime();
-    int success = [self getPeeksForFile:file thumbnailsWidth:thumbWidth];
-    if (self.delegate) {
+    int result = [self getPeeksForFile:file thumbnailsWidth:thumbWidth operation:activeOp];
+    // Never publish a stale result after the user switches media.
+    if (!activeOp.isCancelled && self.delegate) {
       [self.delegate didGenerateThumbnails:[NSArray arrayWithArray:self->_thumbnails]
-                                   forFile: file
-                                 succeeded:(success < 0 ? NO : YES)];
+                                   forFile:file
+                                 succeeded:(result >= 0)];
     }
+    // PlayerCore retains any successfully published preview images.
+    // The decoder itself should not retain another full set between videos.
+    [self->_thumbnails removeAllObjects];
+    [self->_thumbnailPartialResult removeAllObjects];
+    [self->_addedTimestamps removeAllObjects];
   }];
   [_queue addOperation:op];
 }
 
 - (int)getPeeksForFile:(NSString *)file
        thumbnailsWidth:(int)thumbnailsWidth
+            operation:(NSOperation *)operation
 {
+  if (operation.isCancelled) return -1;
   int i, ret;
 
   char *cFilename = strdup(file.fileSystemRepresentation);
@@ -209,6 +221,7 @@ return -1;\
 
   // For each preview point
   for (i = 0; i <= self.thumbnailCount; i++) {
+    if (operation.isCancelled) break;
     int64_t seek_pos = interval * i + pVideoStream->start_time;
 
     avcodec_flush_buffers(pCodecCtx);
@@ -223,6 +236,7 @@ return -1;\
     // Read and decode frame
     while(av_read_frame(pFormatCtx, &packet) >= 0) {
       @try {
+        if (operation.isCancelled) break;
         // Make sure it's video stream
         if (packet.stream_index == videoStream) {
 
@@ -243,7 +257,7 @@ return -1;\
           if ([_addedTimestamps containsObject:currentTimeStamp]) {
             double currentTime = CACurrentMediaTime();
             if (currentTime - _timestamp > 1) {
-              if (self.delegate) {
+              if (!operation.isCancelled && self.delegate) {
                 [self.delegate didUpdateThumbnails:NULL forFile: file withProgress: i];
                 _timestamp = currentTime;
               }
@@ -263,13 +277,15 @@ return -1;\
                           pFrameRGB->linesize);
           CHECK_SUCCESS(ret, @"Cannot convert frame")
 
-          // Save the frame to disk
+          if (operation.isCancelled) break;
+          // Save the decoded preview
           [self saveThumbnail:pFrameRGB
                         width:pFrameRGB->width
                        height:pFrameRGB->height
                         index:i
                      realTime:(pFrame->best_effort_timestamp * timebaseDouble)
-                      forFile:file];
+                      forFile:file
+                    operation:operation];
           break;
         }
       } @finally {
@@ -277,6 +293,7 @@ return -1;\
         av_packet_unref(&packet);
       }
     }
+    if (operation.isCancelled) break;
   }
   // Free the scaler
   sws_freeContext(sws_ctx);
@@ -293,7 +310,7 @@ return -1;\
   avformat_close_input(&pFormatCtx);
 
   // LOG_DEBUG(@"Thumbnails generated.");
-  return 0;
+  return operation.isCancelled ? -1 : 0;
 }
 
 
@@ -302,7 +319,8 @@ return -1;\
                      :(int)height index
                      :(int)index realTime
                      :(int)second forFile
-                     :(NSString *)file
+                     :(NSString *)file operation
+                     :(NSOperation *)operation
 {
   // Create CGImage
   CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
@@ -333,7 +351,7 @@ return -1;\
   double currentTime = CACurrentMediaTime();
   if (currentTime - _timestamp >= 0.2) {  // min notification interval: 0.2s
     if (_thumbnailPartialResult.count >= 10 || (currentTime - _timestamp >= 1 && _thumbnailPartialResult.count > 0)) {
-      if (self.delegate) {
+      if (!operation.isCancelled && self.delegate) {
         [self.delegate didUpdateThumbnails:[NSArray arrayWithArray:_thumbnailPartialResult]
                                    forFile: file
                               withProgress: index];
