@@ -218,11 +218,14 @@ class PlayerCore: NSObject {
   private var pluginMap: [String: JavascriptPluginInstance] = [:]
   var events = EventController()
 
-  lazy var ffmpegController: FFmpegController = {
+  private var instantiatedFFmpegController: FFmpegController?
+  var ffmpegController: FFmpegController {
+    if let controller = instantiatedFFmpegController { return controller }
     let controller = FFmpegController()
     controller.delegate = self
+    instantiatedFFmpegController = controller
     return controller
-  }()
+  }
 
   lazy var info: PlaybackInfo = PlaybackInfo(self)
 
@@ -975,6 +978,9 @@ class PlayerCore: NSObject {
   ///     running when the mpv core is shutdown it may call into mpv triggering a crash.
   func stop() {
     guard info.state != .shutDown else { return }
+    instantiatedFFmpegController?.cancelThumbnailGeneration()
+    info.$thumbnails.withLock { $0.removeAll(keepingCapacity: false) }
+    info.thumbnailsReady = false
     savePlaybackPosition()
     if mainWindow.loaded { mainWindow.liveCaptions.stop() }
 
@@ -2108,6 +2114,9 @@ class PlayerCore: NSObject {
     guard info.state.active else { return }
     log("File started")
 
+    // Replacing media does not necessarily call stop(); cancel all previous preview work.
+    instantiatedFFmpegController?.cancelThumbnailGeneration()
+
     // Opening another file in the same window does not necessarily go through `stop()`, so abandon
     // a search that was waiting on the chooser for the previous file — its chooser is stale now.
     cancelOnlineSubtitleSearchIfNeeded()
@@ -2959,7 +2968,7 @@ class PlayerCore: NSObject {
   func generateThumbnails() {
     log("Getting thumbnails")
     info.thumbnailsReady = false
-    info.$thumbnails.withLock { $0.removeAll(keepingCapacity: true) }
+    info.$thumbnails.withLock { $0.removeAll(keepingCapacity: false) }
     info.thumbnailsProgress = 0
     DispatchQueue.main.async {
       self.touchBarSupport.touchBarPlaySlider?.resetCachedThumbnails()
@@ -2977,15 +2986,18 @@ class PlayerCore: NSObject {
     if Preference.bool(for: .enableThumbnailPreview) {
       if let cacheName = info.mpvMd5, ThumbnailCache.fileIsCached(forName: cacheName, forVideo: info.currentURL) {
         log("Found thumbnail cache")
-        thumbnailQueue.async {
+        thumbnailQueue.async { [weak self] in
+          guard let self else { return }
           if let thumbnails = ThumbnailCache.read(forName: cacheName) {
-            self.info.thumbnails = thumbnails
-            self.info.thumbnailsReady = true
-            self.info.thumbnailsProgress = 1
-            self.refreshTouchBarSlider()
-            // OSC thumbnails may be used in Now Playing. Notify the manager thumbnails are now
-            // available.
-            DispatchQueue.main.async { NowPlayingInfoManager.shared.updateInfo() }
+            DispatchQueue.main.async { [weak self] in
+              guard let self, self.info.currentURL == url,
+                    self.info.mpvMd5 == cacheName, self.info.state.active else { return }
+              self.info.thumbnails = thumbnails
+              self.info.thumbnailsReady = true
+              self.info.thumbnailsProgress = 1
+              self.refreshTouchBarSlider()
+              NowPlayingInfoManager.shared.updateInfo()
+            }
           } else {
             self.log("Cannot read thumbnail from cache", level: .error)
           }
@@ -3272,31 +3284,35 @@ class PlayerCore: NSObject {
 extension PlayerCore: FFmpegControllerDelegate {
 
   func didUpdate(_ thumbnails: [FFThumbnail]?, forFile filename: String, withProgress progress: Int) {
-    guard let currentFilePath = info.currentURL?.path, currentFilePath == filename else { return }
-    log("Got new thumbnails, progress \(progress)")
-    if let thumbnails {
-      info.$thumbnails.withLock { $0.append(contentsOf: thumbnails) }
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.info.currentURL?.path == filename, self.info.state.active else { return }
+      self.log("Got new thumbnails, progress \(progress)")
+      if let thumbnails {
+        self.info.$thumbnails.withLock { $0.append(contentsOf: thumbnails) }
+      }
+      self.info.thumbnailsProgress = Double(progress) / Double(self.ffmpegController.thumbnailCount)
+      self.refreshTouchBarSlider()
     }
-    info.thumbnailsProgress = Double(progress) / Double(ffmpegController.thumbnailCount)
-    refreshTouchBarSlider()
   }
 
   func didGenerate(_ thumbnails: [FFThumbnail], forFile filename: String, succeeded: Bool) {
-    guard let currentFilePath = info.currentURL?.path, currentFilePath == filename else { return }
-    log("Got all thumbnails, succeeded=\(succeeded)")
-    if succeeded {
-      info.thumbnails = thumbnails
-      info.thumbnailsReady = true
-      info.thumbnailsProgress = 1
-      refreshTouchBarSlider()
-      // OSC thumbnails may be used in Now Playing. Notify the manager thumbnails are now available.
-      DispatchQueue.main.async { NowPlayingInfoManager.shared.updateInfo() }
-      if let cacheName = info.mpvMd5 {
-        backgroundQueue.async {
-          ThumbnailCache.write(self.info.thumbnails, forName: cacheName, forVideo: self.info.currentURL)
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.info.currentURL?.path == filename, self.info.state.active else { return }
+      self.log("Got all thumbnails, succeeded=\(succeeded)")
+      guard succeeded else { return }
+      self.info.thumbnails = thumbnails
+      self.info.thumbnailsReady = true
+      self.info.thumbnailsProgress = 1
+      self.refreshTouchBarSlider()
+      NowPlayingInfoManager.shared.updateInfo()
+      // Snapshot metadata and images now: the next video can start before the disk write.
+      if let cacheName = self.info.mpvMd5 {
+        let videoURL = self.info.currentURL
+        self.backgroundQueue.async {
+          ThumbnailCache.write(thumbnails, forName: cacheName, forVideo: videoURL)
         }
       }
-      events.emit(.thumbnailsReady)
+      self.events.emit(.thumbnailsReady)
     }
   }
 }

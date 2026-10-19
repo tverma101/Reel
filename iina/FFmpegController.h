@@ -56,6 +56,9 @@
 - (void)generateThumbnailForFile:(nonnull NSString *)file
                       thumbWidth:(int)thumbWidth;
 
+/// Cancel queued and in-progress timeline preview decoding.
+- (void)cancelThumbnailGeneration;
+
 /// Read artwork from the file with the given URL.
 ///
 /// This method will open the file and search the streams for one that contains front cover artwork. If found the image data will be read
