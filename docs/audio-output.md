@@ -31,7 +31,9 @@ selected, Reel engages the bridge again when the next supported file loads.
 - **Long pauses and recovery.** While an AirPlay route remains selected, Reel rebuilds the routed
   audio item after a pause of at least 30 seconds. If the item failed while paused, Reel checks the
   current route and makes a fresh attempt on resume. Closing the receiver picker also retries after
-  a failure. A repeated failure falls back to the Mac without requiring Reel to restart.
+  a failure. A repeated failure falls back to the Mac without requiring Reel to restart. To verify
+  recovery, leave the receiver selected, pause for at least 30 seconds, then resume without quitting
+  Reel; also test disconnecting and reconnecting from the picker while Reel stays open.
 - **Keeping sync.** Four times a second Reel compares the picture with AVPlayer's clock. It allows
   timing writes to settle before collecting a fresh drift window, ignores differences under 75 ms,
   and limits each correction to 250 ms. Internal corrections remain silent; manual Audio Delay
