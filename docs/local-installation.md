@@ -21,7 +21,10 @@ Build from a committed, canonical Reel checkout, increasing `CURRENT_PROJECT_VER
 published build and keeping it monotonic across marketing-version changes. The app embeds the
 checked-out commit, version, build number, and Xcode configuration; the installer
 rejects stale metadata, non-Release products, downgrades, reused build numbers for a new commit,
-and commits that are not descendants of the installed build. Close every Reel copy before
+and commits that are not descendants of the installed build. Use this installer for every update;
+manually copying a Debug product from an older branch bypasses those checks and can remove
+already-installed AirPlay fixes. Check the installed build's embedded commit before selecting a
+source branch, and keep all of its fixes in the replacement. Close every Reel copy before
 installing. Install and repair serialize through a private lock next to `/Applications/Reel.app`;
 after exchanging the app, a root-directory timestamp update by macOS permits one fresh signature
 check and full inventory scan. Changes to identity, content metadata, descendants, or a second

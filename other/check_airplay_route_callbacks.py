@@ -52,7 +52,9 @@ final class Bridge {
   var observedContext: NSObject?
   var routeObservers: [NSObjectProtocol] = []
   var changes = 0
+  var retryTriggers: [String] = []
   func routeMayHaveChanged() { changes += 1 }
+  func retryFailedBridgeIfNeeded(trigger: String) { retryTriggers.append(trigger) }
   func observe() { observeOutputContext() }
   deinit { routeObservers.forEach { NotificationCenter.default.removeObserver($0) } }
   __OBSERVE__
@@ -92,11 +94,6 @@ bridge.observe()
 bridge.observe()
 check(bridge.avPlayer!.contextReads == 1, "output context was queried again")
 
-bridge.routePickerViewDidEndPresentingRoutes(AVRoutePickerView())
-check(bridge.changes == 0, "picker close re-entered route handling synchronously")
-RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-check(bridge.changes == 1, "deferred picker close did not reconcile the route")
-
 let posted = DispatchSemaphore(value: 0)
 let context = bridge.observedContext!
 DispatchQueue.global().async {
@@ -106,9 +103,18 @@ DispatchQueue.global().async {
 }
 // Deliberately keep AppKit busy. The posting media queue must still be able to return.
 check(posted.wait(timeout: .now() + 0.3) == .success, "AVFoundation notification waited for the main queue")
-check(bridge.changes == 1, "notification handled route state away from the main queue")
+check(bridge.changes == 0, "notification handled route state away from the main queue")
 RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-check(bridge.changes == 2, "deferred notification did not reconcile the route")
+check(bridge.changes == 1, "deferred notification did not reconcile the route")
+
+bridge.routePickerViewDidEndPresentingRoutes(AVRoutePickerView())
+check(bridge.changes == 1, "picker close re-entered route handling synchronously")
+check(bridge.retryTriggers.isEmpty, "picker close retried synchronously")
+RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+check(bridge.changes == 2, "deferred picker close did not reconcile the route")
+RunLoop.main.run(until: Date().addingTimeInterval(1.6))
+check(bridge.changes == 4, "picker close did not resample the settled route")
+check(bridge.retryTriggers == ["route picker close"], "picker close did not retry once after route settling")
 print("AirPlay route callback checks passed")
 '''
 
@@ -139,8 +145,10 @@ mutations = [
         "routeMayHaveChanged()", 1), "picker close re-entered"),
     (OBSERVE.replace("queue: nil)", "queue: .main)"), CLOSE,
      "notification waited for the main queue"),
+    (OBSERVE, CLOSE.replace('self.retryFailedBridgeIfNeeded(trigger: "route picker close")', ''),
+     "picker close did not retry once"),
 ]
 for observe, close, expected in mutations:
     negative = run(observe, close)
     assert negative.returncode != 0 and expected in negative.stdout, negative.stdout + negative.stderr
-print("All three deadlock regression negative controls failed as expected")
+print("All four route callback negative controls failed as expected")
