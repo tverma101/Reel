@@ -43,6 +43,12 @@ class NowPlayingInfoManager {
   /// Kind of artwork being shown in Now Playing.
   @Atomic private var artworkKind: ArtworkKind = .none
 
+  /// The current image. Artwork handlers read this value instead of capturing each file's image.
+  @Atomic private var currentArtwork: CGImage? = nil
+
+  /// Reuse a bounded set of handlers because MediaPlayer may retain artwork objects after updates.
+  private var artworkProviders: [ArtworkAspect: MPMediaItemArtwork] = [:]
+
   /// The number of video tracks the last time the tracks were searched for artwork.
   private var artworkLastTrackCount = 0
 
@@ -75,11 +81,11 @@ class NowPlayingInfoManager {
   /// [QuickLook Video](https://github.com/Marginal/QLVideo/tree/master) for creating thumbnails.
   private let oscThumbnailPosition = 60.0
 
-  /// Size of thumbnail to request [QLThumbnailGenerator](https://developer.apple.com/documentation/quicklookthumbnailing/qlthumbnailgenerator)
-  /// generate.
-  ///
-  /// This matches the size mpv uses. Using sizes larger than this can cause `QLThumbnailGenerator` to fail.
-  private let qlThumbnailSize = CGSize(width: 2000, height: 2000)
+  /// Request only the maximum size displayed by Now Playing instead of mpv's larger thumbnail size.
+  private var qlThumbnailSize: CGSize {
+    let size = CGFloat(artworkDesiredSize)
+    return CGSize(width: size, height: size)
+  }
 
   /// The URL of the media item in the Now Playing session.
   private var url: URL?
@@ -149,15 +155,7 @@ class NowPlayingInfoManager {
     }
 
     info[MPNowPlayingInfoPropertyAssetURL] = url
-    player.info.$playlist.withLock { playlist in
-      info[MPNowPlayingInfoPropertyPlaybackQueueCount] = playlist.count
-      if let index = playlist.firstIndex(where: { $0.filename == currentURL.mpvStr }) {
-        info[MPNowPlayingInfoPropertyPlaybackQueueIndex] = index
-      } else {
-        // This can occur when the playlist is still being populated.
-        info.removeValue(forKey: MPNowPlayingInfoPropertyPlaybackQueueIndex)
-      }
-    }
+    updateQueueFields(in: &info, player: player, currentURL: currentURL)
     if player.info.chapters.isEmpty {
       info.removeValue(forKey: MPNowPlayingInfoPropertyChapterCount)
       info.removeValue(forKey: MPNowPlayingInfoPropertyChapterNumber)
@@ -200,6 +198,10 @@ class NowPlayingInfoManager {
         updateArtwork(player, currentURL, player.info.videoTracks)
       }
     } else {
+      if artworkKind != .none || currentArtwork != nil ||
+          center.nowPlayingInfo?[MPMediaItemPropertyArtwork] != nil {
+        discardArtwork(currentURL)
+      }
       log("Showing cover artwork is disabled", level: .verbose)
     }
 
@@ -213,6 +215,27 @@ class NowPlayingInfoManager {
       log("Started Now Playing session, \(suffix)", currentURL)
     }
     RemoteCommandController.shared.enable()
+  }
+
+  private func updatePlaylistQueueInfo(for player: PlayerCore) {
+    guard RemoteCommandController.useSystemMediaControl, isActive,
+          player == PlayerCore.lastActive, let currentURL = player.info.currentURL else { return }
+    let center = MPNowPlayingInfoCenter.default()
+    var info = center.nowPlayingInfo ?? [:]
+    updateQueueFields(in: &info, player: player, currentURL: currentURL)
+    center.nowPlayingInfo = info
+  }
+
+  private func updateQueueFields(in info: inout [String: Any], player: PlayerCore, currentURL: URL) {
+    player.info.$playlist.withLock { playlist in
+      info[MPNowPlayingInfoPropertyPlaybackQueueCount] = playlist.count
+      if let index = MPVPlaylistItem.nowPlayingQueueIndex(in: playlist, currentPath: currentURL.mpvStr) {
+        info[MPNowPlayingInfoPropertyPlaybackQueueIndex] = index
+      } else {
+        // This can occur when the playlist is still being populated.
+        info.removeValue(forKey: MPNowPlayingInfoPropertyPlaybackQueueIndex)
+      }
+    }
   }
 
   // MARK: - Artwork
@@ -335,70 +358,63 @@ class NowPlayingInfoManager {
   /// - Important: This method **must** be run on the main thread to avoid data races.
   /// - Parameter url: The URL of the media item.
   private func discardArtwork(_ url: URL) {
-    // Because showing artwork is a complex operation there is an internal setting that can be
-    // changed to disable this feature should any problems with it be discovered.
-    guard Preference.bool(for: .enableNowPlayingArtwork) else { return }
-    // Changing artworkTicket will cause any background task to discard its work when it finishes.
+    // Invalidate any background decode and release the previous image regardless of the display
+    // preference. Disabling artwork must not retain it or allow an old decode to restore it.
     artworkTicket += 1
+    currentArtwork = nil
     artworkKind = .none
     artworkQLGenerationRetries = 0
     artworkUpdatePending = false
     artworkLastTrackCount = 0
     MPNowPlayingInfoCenter.default().nowPlayingInfo?.removeValue(
       forKey: MPMediaItemPropertyArtwork)
+    // Because showing artwork is a complex operation there is an internal setting that can be
+    // changed to disable this feature should any problems with it be discovered.
+    guard Preference.bool(for: .enableNowPlayingArtwork) else { return }
     guard artworkUpdateInProgress else { return }
     log("Will discard the results of the current in progress artwork update", url, level: .verbose)
   }
 
   /// Constructs a
   /// [MPMediaItemArtwork](https://developer.apple.com/documentation/mediaplayer/mpmediaitemartwork)
-  /// object for the given image.
+  /// object for the given image. Providers are reused by aspect ratio and read the current image
+  /// instead of capturing it, so retained handlers cannot pin thumbnails from previous items.
   /// - Parameters:
-  ///   - player: The `PlayerCore` for which to find artwork for.
   ///   - image: Artwork image for the media item.
-  /// - Returns: The constructed `MPMediaItemArtwork` object.
-  private func formMPMediaItemArtwork(_ player: PlayerCore, _ image: CGImage) -> MPMediaItemArtwork {
-    // If available, use the video size for the bounds size. Otherwise fall back to the image size.
-    let size = image.size
-    let boundsSize: CGSize = {
-      guard size.width < artworkDesiredSize || size.height < artworkDesiredSize else {
-        // The image size is equal to or larger than size of the area the Now Playing module
-        // provides for artwork.
-        return size
-      }
-      // The image is smaller than the size desired by the Now Playing module. If the image's size
-      // is used for boundsSize then the Now Playing module will specify a small size for the new
-      // size of the image and will then add grey bars around the image when displaying the artwork.
-      // To avoid the grey bars our request handler below will crop and resize the image as needed,
-      // but to get Now Playing to request the full size it can handle boundsSize must be large
-      // enough. Scale up the image size.
-      let width: Double
-      let height: Double
-      if size.width > size.height {
-        height = artworkDesiredSize
-        width = height * size.aspect
-      } else {
-        width = artworkDesiredSize
-        height = width / size.aspect
-      }
-      log("Artwork scaled up bounds size: \(width)x\(height)", level: .verbose)
-      return CGSize(width: width, height: height)
-    }()
-    return MPMediaItemArtwork(boundsSize: boundsSize) { [self] size in
-      // Crop to aspect ratio of requested size, rather than stretching/squeezing. Then resize.
-      let cropRect = image.size.getCropRect(withAspect: size.aspect)
-      let suffix = """
-        \(Int(image.width))x\(Int(image.height)) artwork image \
-        to \(Int(size.width))x\(Int(size.height))
-        """
-      if let artwork = image.cropping(to: cropRect)?.resized(newWidth: size.widthInt,
-                                                             newHeight: size.heightInt).nsImage {
-        log("Cropped and resized \(suffix)", level: .verbose)
-        return artwork
-      }
-      log("Unable to crop \(suffix)", level: .warning)
-      return image.nsImage.resized(newWidth: size.widthInt, newHeight: size.heightInt)
+  /// - Returns: The constructed MPMediaItemArtwork object.
+  private func formMPMediaItemArtwork(_ image: CGImage) -> MPMediaItemArtwork {
+    currentArtwork = image
+    let aspect = ArtworkAspect.closest(to: image.size.aspect)
+    if let provider = artworkProviders[aspect] {
+      return provider
     }
+    let shortEdge = CGFloat(artworkDesiredSize) + 1
+    let boundsSize = aspect.boundsSize(shortEdge: shortEdge)
+    let provider = MPMediaItemArtwork(boundsSize: boundsSize) { [weak self] requestedSize in
+      guard let self, let currentImage = self.currentArtwork else {
+        return NSImage(size: requestedSize)
+      }
+      return self.resizedArtwork(currentImage, to: requestedSize)
+    }
+    artworkProviders[aspect] = provider
+    return provider
+  }
+
+  /// Crop and resize the current artwork to the size requested by MediaPlayer.
+  private func resizedArtwork(_ image: CGImage, to size: CGSize) -> NSImage {
+    // Crop to aspect ratio of requested size, rather than stretching/squeezing. Then resize.
+    let cropRect = image.size.getCropRect(withAspect: size.aspect)
+    let suffix = """
+      \(Int(image.width))x\(Int(image.height)) artwork image \
+      to \(Int(size.width))x\(Int(size.height))
+      """
+    if let artwork = image.cropping(to: cropRect)?.resized(newWidth: size.widthInt,
+                                                           newHeight: size.heightInt).nsImage {
+      log("Cropped and resized \(suffix)", level: .verbose)
+      return artwork
+    }
+    log("Unable to crop \(suffix)", level: .warning)
+    return image.nsImage.resized(newWidth: size.widthInt, newHeight: size.heightInt)
   }
 
   /// Display the given artwork image in Now Playing.
@@ -412,7 +428,11 @@ class NowPlayingInfoManager {
   ///   - image: The artwork image.
   ///   - artworkKind: The kind of artwork being displayed (front cover, Quick Look thumbnail, etc.).
   private func foundArtwork(_ player: PlayerCore, _ url: URL, _ image: NSImage,
-                            _ artworkKind: ArtworkKind) {
+                            _ artworkKind: ArtworkKind, ticket: Int) {
+    guard artworkTicket == ticket else {
+      log("Discarded stale \(artworkKind)", url, level: .verbose)
+      return
+    }
     let center = MPNowPlayingInfoCenter.default()
     guard center.nowPlayingInfo != nil else {
       // This is an internal error. The artworkTicket should be checked before calling this method.
@@ -426,7 +446,7 @@ class NowPlayingInfoManager {
       return
     }
     log("Found \(artworkKind)", url)
-    center.nowPlayingInfo?[MPMediaItemPropertyArtwork] = formMPMediaItemArtwork(player, cgImage)
+    center.nowPlayingInfo?[MPMediaItemPropertyArtwork] = formMPMediaItemArtwork(cgImage)
     self.artworkKind = artworkKind
   }
 
@@ -448,7 +468,7 @@ class NowPlayingInfoManager {
         log("Discarded stale \(ArtworkKind.frontCover)", url, level: .verbose)
         return
       }
-      foundArtwork(player, url, image, .frontCover)
+      foundArtwork(player, url, image, .frontCover, ticket: ticket)
     }
   }
 
@@ -484,10 +504,10 @@ class NowPlayingInfoManager {
         guard let image = thumbnail?.nsImage else {
           log("QLThumbnailGenerator did not generate a thumbnail", url, level: .verbose)
           // Fall back to using an OSC thumbnail for the artwork.
-          useOSCThumbnail(player, url)
+          useOSCThumbnail(player, url, ticket: ticket)
           return
         }
-        foundArtwork(player, url, image, .qlThumbnail)
+        foundArtwork(player, url, image, .qlThumbnail, ticket: ticket)
       }
     }
   }
@@ -601,7 +621,7 @@ class NowPlayingInfoManager {
         DispatchQueue.main.async { [self] in
           defer { artworkUpdateComplete() }
           guard artworkTicket == ticket else { return }
-          useOSCThumbnail(player, url)
+          useOSCThumbnail(player, url, ticket: ticket)
         }
         return
       }
@@ -617,7 +637,7 @@ class NowPlayingInfoManager {
   /// - Parameters:
   ///   - player: The `PlayerCore` that is playing the media item.
   ///   - url: The URL of the media item.
-  private func useOSCThumbnail(_ player: PlayerCore, _ url: URL) {
+  private func useOSCThumbnail(_ player: PlayerCore, _ url: URL, ticket: Int) {
     guard artworkKind.need(.oscThumbnail) else {
       log("Already using an OSC thumbnail for artwork", url, level: .verbose)
        return
@@ -641,7 +661,7 @@ class NowPlayingInfoManager {
       log("Did not find an OSC thumbnail at \(position)", url, level: .verbose)
       return
     }
-    foundArtwork(player, url, thumbnail, .oscThumbnail)
+    foundArtwork(player, url, thumbnail, .oscThumbnail, ticket: ticket)
   }
 
   // MARK: - Utils
@@ -660,6 +680,70 @@ class NowPlayingInfoManager {
   }
 
   // MARK: - Artwork Kinds
+
+  /// Common artwork aspect ratios. Keeping a finite set of providers bounds MediaPlayer-owned art.
+  private enum ArtworkAspect: CaseIterable, Hashable {
+    case oneToTwo
+    case nineToSixteen
+    case twoToThree
+    case threeToFour
+    case fourToFive
+    case square
+    case fiveToFour
+    case fourToThree
+    case threeToTwo
+    case sixteenToTen
+    case fiveToThree
+    case sixteenToNine
+    case cinema185
+    case twoToOne
+    case cinema22
+    case cinema235
+    case cinema239
+
+    var value: CGFloat {
+      switch self {
+      case .oneToTwo: return 1.0 / 2.0
+      case .nineToSixteen: return 9.0 / 16.0
+      case .twoToThree: return 2.0 / 3.0
+      case .threeToFour: return 3.0 / 4.0
+      case .fourToFive: return 4.0 / 5.0
+      case .square: return 1
+      case .fiveToFour: return 5.0 / 4.0
+      case .fourToThree: return 4.0 / 3.0
+      case .threeToTwo: return 3.0 / 2.0
+      case .sixteenToTen: return 16.0 / 10.0
+      case .fiveToThree: return 5.0 / 3.0
+      case .sixteenToNine: return 16.0 / 9.0
+      case .cinema185: return 1.85
+      case .twoToOne: return 2
+      case .cinema22: return 2.2
+      case .cinema235: return 2.35
+      case .cinema239: return 2.39
+      }
+    }
+
+    func boundsSize(shortEdge: CGFloat) -> CGSize {
+      if value >= 1 {
+        return CGSize(width: shortEdge * value, height: shortEdge)
+      }
+      return CGSize(width: shortEdge, height: shortEdge / value)
+    }
+
+    static func closest(to aspect: CGFloat) -> ArtworkAspect {
+      let safeAspect = aspect.isFinite && aspect > 0 ? aspect : 1
+      var closest = ArtworkAspect.square
+      var smallestDistance = CGFloat.greatestFiniteMagnitude
+      for candidate in allCases {
+        let distance = abs(candidate.value - safeAspect)
+        if distance < smallestDistance {
+          closest = candidate
+          smallestDistance = distance
+        }
+      }
+      return closest
+    }
+  }
 
   /// The various kinds  of artwork for a media item.
   ///
@@ -692,6 +776,14 @@ class NowPlayingInfoManager {
   // MARK: - Initializer
 
   private init() {
+    let updateQueueInfo: (Notification) -> Void = { [unowned self] notification in
+      guard let player = notification.object as? PlayerCore else { return }
+      updatePlaylistQueueInfo(for: player)
+    }
+    observe(.iinaPlaylistChanged, block: updateQueueInfo)
+    observe(.iinaPlaylistPlaybackStatusChanged, block: updateQueueInfo)
+    observe(.iinaFileLoaded, block: updateQueueInfo)
+
     // Because showing artwork is a complex operation there is an internal setting that can be
     // changed to disable this feature should any problems with it be discovered. No need to listen
     // for changes to the track list if we are not searching tracks for artwork.

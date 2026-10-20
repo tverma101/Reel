@@ -8,6 +8,8 @@
 
 fileprivate let ui = UIHelper.shared
 
+private let airPlayVideoPluginIdentifier = "dev.faruk.iina-airplay"
+
 
 extension SidebarViewController.TabType {
   static let pluginPlaceholder = SidebarViewController.TabType(
@@ -15,6 +17,26 @@ extension SidebarViewController.TabType {
 }
 
 class PluginViewController: SidebarViewController {
+  private struct AirPlayVideoPluginIdentity: Equatable {
+    let object: ObjectIdentifier
+    let rootPath: String
+    let version: String
+
+    init(_ plugin: JavascriptPlugin) {
+      object = ObjectIdentifier(plugin)
+      rootPath = plugin.root.standardizedFileURL.path
+      version = plugin.version
+    }
+  }
+
+  private enum AirPlayVideoUpdateCheckState: Equatable {
+    case checking
+    case current
+    case updateAvailable
+    case retry
+    case unavailable
+  }
+
   override var sidebarType: SidebarController.ViewType {
     .plugins
   }
@@ -34,6 +56,12 @@ class PluginViewController: SidebarViewController {
 
   private var pluginContentContainerView: NSView!
   private var placeholderView: NSView!
+  private var airPlayVideoActionButton: NSButton!
+  private var airPlayVideoStatusLabel: NSTextField!
+  private var airPlayVideoUpdateInProgress = false
+  private let airPlayVideoCheckGeneration = AirPlayPackageCheckGeneration()
+  private var airPlayVideoCheckedIdentity: AirPlayVideoPluginIdentity?
+  private var airPlayVideoUpdateCheckState: AirPlayVideoUpdateCheckState?
 
   private var pluginMenu = NSMenu()
 
@@ -55,14 +83,58 @@ class PluginViewController: SidebarViewController {
 
     self.placeholderView = NSView()
     placeholderView.translatesAutoresizingMaskIntoConstraints = false
+
+    let airPlayVideoTitle = ui.label(
+      "sidebar.plugins_airplay_video_title",
+      font: .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold),
+      canCompress: false
+    )
+    let airPlayVideoDescription = ui.label(
+      "sidebar.plugins_airplay_video_description",
+      wrapping: true,
+      isSmall: true,
+      isSecondary: true,
+      canCompress: false
+    )
+    let airPlayVideoIcon = NSImageView()
+    airPlayVideoIcon.image = NSImage.sf("airplayvideo", "airplay", withConfiguration: .sidebarIconConfig)
+    airPlayVideoIcon.contentTintColor = .controlAccentColor
+    airPlayVideoIcon.imageScaling = .scaleProportionallyDown
+    airPlayVideoIcon.size(width: 20, height: 20)
+
+    airPlayVideoActionButton = NSButton()
+    airPlayVideoActionButton.bezelStyle = .rounded
+    airPlayVideoActionButton.target = self
+    airPlayVideoActionButton.action = #selector(airPlayVideoCardAction(_:))
+    airPlayVideoStatusLabel = ui.label(
+      "sidebar.plugins_airplay_video_status_empty",
+      wrapping: true,
+      isSmall: true,
+      isSecondary: true,
+      canCompress: false
+    )
+    airPlayVideoStatusLabel.isHidden = true
+
+    let airPlayVideoCardContent = ui.vStack(
+      spacing: .sidebarItemSpacing,
+      ui.hStack(align: .top, spacing: 10, airPlayVideoIcon,
+                ui.vStack(spacing: 4, airPlayVideoTitle, airPlayVideoDescription)),
+      ui.hStack(ui.flexibleSpace(), airPlayVideoActionButton),
+      airPlayVideoStatusLabel
+    )
+    let airPlayVideoCard = SidebarScrollView.Container(airPlayVideoCardContent) {
+      $0.padding(.all(.sidebarContainerPadding))
+    }
+
     let message = SidebarScrollView.Container(
       ui.label("sidebar.plugins_placeholder",
                wrapping: true, isSmall: true, isSecondary: true, canCompress: false)
     ) {
       $0.padding(.all(.sidebarContainerPadding))
     }
-    placeholderView.addSubview(message)
-    message.padding(.top(.sidebarMargin), .horizontal(.sidebarMargin), .bottom(greaterThan: .sidebarMargin))
+    let placeholderStack = ui.vStack(spacing: .sidebarStackViewSpacing, airPlayVideoCard, message)
+    placeholderView.addSubview(placeholderStack)
+    placeholderStack.padding(.horizontal(.sidebarMargin), .vertical(.sidebarMargin))
 
     let bottomBorder = ui.separator()
     view.addSubview(bottomBorder)
@@ -89,8 +161,21 @@ class PluginViewController: SidebarViewController {
   func updatePluginTabs() {
     guard isViewLoaded else { return }
     allTabs_ = getAllTabs()
+    updateAirPlayVideoAction()
 
     pluginMenu.removeAllItems()
+    // Keep the built-in setup card reachable after opening a plugin sidebar tab.
+    // Its name is also the placeholder TabType's name, so menuItemAction can use
+    // the same tab lookup as it does for plugin identifiers.
+    pluginMenu.addItem(
+      withTitle: TabType.pluginPlaceholder.name,
+      action: #selector(menuItemAction),
+      target: self,
+      obj: TabType.pluginPlaceholder.name
+    )
+    if !allTabs_.isEmpty {
+      pluginMenu.addItem(.separator())
+    }
     allTabs_.forEach { tab in
       pluginMenu.addItem(
         withTitle: tab.name,
@@ -98,6 +183,131 @@ class PluginViewController: SidebarViewController {
         target: self,
         obj: tab.id
       )
+    }
+  }
+
+  private func updateAirPlayVideoAction(forceCheck: Bool = false) {
+    guard airPlayVideoActionButton != nil else { return }
+    let installedPlugin = JavascriptPlugin.plugins.first { $0.identifier == airPlayVideoPluginIdentifier }
+    let pluginIsEnabled = allTabs_.contains { $0.id == airPlayVideoPluginIdentifier }
+    let updateState: AirPlayVideoUpdateCheckState
+    if let installedPlugin {
+      let identity = AirPlayVideoPluginIdentity(installedPlugin)
+      if forceCheck || airPlayVideoCheckedIdentity != identity {
+        airPlayVideoCheckedIdentity = identity
+        airPlayVideoUpdateCheckState = .checking
+        let generation = airPlayVideoCheckGeneration.begin()
+        BundledAirPlayPluginManager.checkUpdateAvailability(for: installedPlugin) { [weak self] result in
+          guard let self,
+                self.airPlayVideoCheckGeneration.isCurrent(generation),
+                self.airPlayVideoCheckedIdentity == identity else { return }
+          switch result {
+          case .current, .notManaged, .newerThanBundle:
+            self.airPlayVideoUpdateCheckState = .current
+          case .updateAvailable:
+            self.airPlayVideoUpdateCheckState = .updateAvailable
+          case .unavailable, .unrepairableNewer:
+            self.airPlayVideoUpdateCheckState = .unavailable
+            self.showAirPlayVideoStatus("sidebar.plugins_airplay_video_update_unavailable")
+          case .stale:
+            self.airPlayVideoUpdateCheckState = .retry
+          }
+          self.updateAirPlayVideoAction()
+        }
+      }
+      updateState = airPlayVideoUpdateCheckState ?? .checking
+    } else {
+      _ = airPlayVideoCheckGeneration.begin()
+      airPlayVideoCheckedIdentity = nil
+      airPlayVideoUpdateCheckState = nil
+      updateState = .current
+    }
+    let canRepair = updateState == .updateAvailable || updateState == .retry
+    let titleKey: String
+    if airPlayVideoUpdateInProgress {
+      titleKey = "sidebar.plugins_airplay_video_updating"
+    } else if canRepair {
+      titleKey = "sidebar.plugins_airplay_video_update"
+    } else {
+      titleKey = pluginIsEnabled
+        ? "sidebar.plugins_airplay_video_open"
+        : "sidebar.plugins_airplay_video_setup"
+    }
+    airPlayVideoActionButton.title = ui.localized(titleKey)
+    airPlayVideoActionButton.setAccessibilityLabel(airPlayVideoActionButton.title)
+    airPlayVideoActionButton.isEnabled = !airPlayVideoUpdateInProgress
+    airPlayVideoActionButton.toolTip = ui.localized(
+      canRepair
+        ? "sidebar.plugins_airplay_video_update_help"
+        : pluginIsEnabled
+          ? "sidebar.plugins_airplay_video_open_help"
+          : "sidebar.plugins_airplay_video_setup_help"
+    )
+    switch BundledAirPlayPluginManager.legacyMigrationIssue {
+    case .helperMayBeRunning:
+      showAirPlayVideoStatus("sidebar.plugins_airplay_video_legacy_helper_running")
+    case .updateUnavailable:
+      showAirPlayVideoStatus("sidebar.plugins_airplay_video_legacy_update_unavailable")
+    case nil:
+      break
+    }
+  }
+
+  @objc private func airPlayVideoCardAction(_ sender: NSButton) {
+    allTabs_ = getAllTabs()
+    let installedPlugin = JavascriptPlugin.plugins.first { $0.identifier == airPlayVideoPluginIdentifier }
+    if let installedPlugin,
+       airPlayVideoUpdateCheckState == .updateAvailable || airPlayVideoUpdateCheckState == .retry {
+      airPlayVideoUpdateInProgress = true
+      _ = airPlayVideoCheckGeneration.begin()
+      airPlayVideoStatusLabel.isHidden = true
+      updateAirPlayVideoAction()
+      BundledAirPlayPluginManager.update(installedPlugin) { [weak self] result in
+        guard let self else { return }
+        self.airPlayVideoUpdateInProgress = false
+        self.airPlayVideoCheckedIdentity = nil
+        self.airPlayVideoUpdateCheckState = nil
+        switch result {
+        case .updated(let permissionsChanged):
+          self.showAirPlayVideoStatus(
+            permissionsChanged
+              ? "sidebar.plugins_airplay_video_updated_permissions_changed"
+              : "sidebar.plugins_airplay_video_updated"
+          )
+        case .unavailable:
+          self.showAirPlayVideoStatus("sidebar.plugins_airplay_video_update_unavailable")
+        case .failed:
+          self.showAirPlayVideoStatus("sidebar.plugins_airplay_video_update_failed")
+        }
+        self.allTabs_ = self.getAllTabs()
+        self.updateAirPlayVideoAction(forceCheck: true)
+      }
+      return
+    }
+
+    guard allTabs_.contains(where: { $0.id == airPlayVideoPluginIdentifier }) else {
+      openAirPlayPluginSettings()
+      return
+    }
+    updateAirPlayVideoAction()
+    mainWindow.sidebars.show(sidebar: .plugins, tab: airPlayVideoPluginIdentifier,
+                             force: true, hideIfAlreadyShown: false)
+  }
+
+  private func showAirPlayVideoStatus(_ key: String) {
+    let status = ui.localized(key)
+    airPlayVideoStatusLabel.stringValue = status
+    airPlayVideoStatusLabel.setAccessibilityLabel(status)
+    airPlayVideoStatusLabel.isHidden = false
+  }
+
+  private func openAirPlayPluginSettings() {
+    if Preference.enableNewSettings {
+      SettingsWindow.default.show()
+      SettingsWindow.default.navigateTo(page: "plugin")
+    } else {
+      AppDelegate.shared.preferenceWindowController
+        .openPreferenceView(withNibName: "PrefPluginViewController")
     }
   }
 

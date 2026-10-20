@@ -16,26 +16,19 @@
             <connections>
                 <outlet property="dockMenu" destination="fxS-xv-Jb2" id="YdT-kw-qmk"/>
                 <outlet property="menuController" destination="cyK-tE-xgA" id="6U6-oJ-g0G"/>
-                <outlet property="updaterController" destination="wTK-gz-aTs" id="pWT-ES-mjo"/>
             </connections>
         </customObject>
         <customObject id="YLy-65-1bz" customClass="NSFontManager"/>
         <menu title="Main Menu" systemMenu="main" id="AYu-sK-qS6">
             <items>
-                <menuItem title="IINA" id="1Xt-HY-uBw">
+                <menuItem title="Reel" id="1Xt-HY-uBw">
                     <modifierMask key="keyEquivalentModifierMask"/>
-                    <menu key="submenu" title="IINA" systemMenu="apple" id="uQy-DD-JDr">
+                    <menu key="submenu" title="Reel" systemMenu="apple" id="uQy-DD-JDr">
                         <items>
-                            <menuItem title="About IINA" id="5kV-Vb-QxS">
+                            <menuItem title="About Reel" id="5kV-Vb-QxS">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
                                     <action selector="showAboutWindow:" target="Voe-Tx-rLC" id="HGv-E1-lQH"/>
-                                </connections>
-                            </menuItem>
-                            <menuItem title="Check for Updates..." id="gMo-qL-m08">
-                                <modifierMask key="keyEquivalentModifierMask"/>
-                                <connections>
-                                    <action selector="checkForUpdates:" target="wTK-gz-aTs" id="MFD-wN-SXh"/>
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="VOq-y0-SEH"/>
@@ -50,7 +43,7 @@
                                 <menu key="submenu" title="Services" systemMenu="services" id="hz9-B4-Xy5"/>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="4je-JR-u6R"/>
-                            <menuItem title="Hide IINA" keyEquivalent="h" id="Olw-nP-bQN">
+                            <menuItem title="Hide Reel" keyEquivalent="h" id="Olw-nP-bQN">
                                 <connections>
                                     <action selector="hide:" target="-1" id="PnN-Uc-m68"/>
                                 </connections>
@@ -68,7 +61,7 @@
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="kCx-OE-vgT"/>
-                            <menuItem title="Quit IINA" keyEquivalent="q" id="4sb-4s-VLi">
+                            <menuItem title="Quit Reel" keyEquivalent="q" id="4sb-4s-VLi">
                                 <connections>
                                     <action selector="terminate:" target="-1" id="Te7-pn-YzF"/>
                                 </connections>
@@ -668,7 +661,7 @@ CA
                     <modifierMask key="keyEquivalentModifierMask"/>
                     <menu key="submenu" title="Help" systemMenu="help" id="F2S-fz-NVQ">
                         <items>
-                            <menuItem title="IINA Help" keyEquivalent="?" id="FKE-Sm-Kum">
+                            <menuItem title="Reel Help" keyEquivalent="?" id="FKE-Sm-Kum">
                                 <connections>
                                     <action selector="helpAction:" target="Voe-Tx-rLC" id="aqh-p6-pB4"/>
                                 </connections>
@@ -849,10 +842,5 @@ CA
             </items>
             <point key="canvasLocation" x="18" y="689.5"/>
         </menu>
-        <customObject id="wTK-gz-aTs" customClass="SPUStandardUpdaterController">
-            <connections>
-                <outlet property="updaterDelegate" destination="Voe-Tx-rLC" id="AvP-Na-qhG"/>
-            </connections>
-        </customObject>
     </objects>
 </document>

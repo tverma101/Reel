@@ -8,6 +8,869 @@
 
 import Foundation
 import PromiseKit
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
+
+enum BuiltinSubtitleResponseLimit {
+  static let searchBytes = 2 * 1024 * 1024
+  static let detailBytes = 1 * 1024 * 1024
+  static let subtitleBytes = 10 * 1024 * 1024
+}
+
+/// URL policies for the built-in providers. Provider responses can contain download links, so
+/// every request and redirect must stay within the provider's documented origin.
+enum BuiltinSubtitleProviderURLPolicy {
+  static func allowsAssrtAPI(_ url: URL) -> Bool {
+    guard let components = validatedComponents(url, schemes: ["https"]),
+          components.host?.lowercased() == "api.assrt.net" else { return false }
+    return true
+  }
+
+  /// Assrt documents file0.assrt.net links using HTTP and that host does not negotiate TLS.
+  /// Restrict the legacy cleartext path to Assrt's numbered file servers and same-provider redirects.
+  static func allowsAssrtDownload(_ url: URL) -> Bool {
+    guard let components = validatedComponents(url, schemes: ["http", "https"]),
+          let host = components.host?.lowercased(),
+          host.hasSuffix(".assrt.net") else { return false }
+    let server = host.dropLast(".assrt.net".count)
+    guard server.hasPrefix("file") else { return false }
+    let shard = server.dropFirst("file".count)
+    return !shard.isEmpty && shard.allSatisfy { $0 >= "0" && $0 <= "9" }
+  }
+
+  /// Shooter returns an absolute URL for the same HTTPS API endpoint used for search.
+  static func shooterDownloadURL(_ url: URL) -> URL? {
+    guard var components = validatedComponents(url, schemes: ["http", "https"]),
+          components.host?.lowercased() == "www.shooter.cn",
+          components.path == "/api/subapi.php" else { return nil }
+    components.scheme = "https"
+    components.port = nil
+    return components.url
+  }
+
+  static func allowsShooter(_ url: URL) -> Bool {
+    guard let components = validatedComponents(url, schemes: ["https"]),
+          components.host?.lowercased() == "www.shooter.cn",
+          components.path == "/api/subapi.php" else { return false }
+    return true
+  }
+
+  private static func validatedComponents(_ url: URL, schemes: Set<String>) -> URLComponents? {
+    guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          let scheme = components.scheme?.lowercased(), schemes.contains(scheme),
+          let host = components.host, !host.isEmpty, !host.hasSuffix("."),
+          components.user == nil, components.password == nil else { return nil }
+    let defaultPort = scheme == "https" ? 443 : 80
+    guard components.port == nil || components.port == defaultPort else { return nil }
+    components.host = host.lowercased()
+    return components
+  }
+}
+
+enum BuiltinSubtitleTransferError: Error {
+  case invalidResponse
+  case responseTooLarge(maximumBytes: Int)
+  case untrustedRedirect
+}
+
+/// Streams built-in provider responses into a bounded buffer and registers the concrete URLSession
+/// task with the search token. Plugin providers continue to use their existing protocol defaults.
+final class BuiltinSubtitleHTTPTransfer: NSObject, URLSessionDataDelegate {
+  typealias Completion = (Swift.Result<(Data, HTTPURLResponse), Swift.Error>) -> Void
+
+  private let lock = NSLock()
+  private let request: URLRequest
+  private let maximumBytes: Int
+  private let allowsURL: (URL) -> Bool
+  private let cancellation: SubtitleAudioMatcher.Cancellation
+  private let identifier = UUID()
+  private let configuration: URLSessionConfiguration
+  private let completion: Completion
+  private var session: URLSession?
+  private var task: URLSessionDataTask?
+  private var response: HTTPURLResponse?
+  private var body = Data()
+  private var failure: Swift.Error?
+  private var finished = false
+
+  init(request: URLRequest,
+       maximumBytes: Int,
+       cancellation: SubtitleAudioMatcher.Cancellation,
+       configuration: URLSessionConfiguration = .ephemeral,
+       allowsURL: @escaping (URL) -> Bool = { _ in false },
+       completion: @escaping Completion) {
+    self.request = request
+    self.maximumBytes = maximumBytes
+    self.cancellation = cancellation
+    self.configuration = configuration
+    self.allowsURL = allowsURL
+    self.completion = completion
+  }
+
+  func start() {
+    guard maximumBytes > 0, let url = request.url, allowsURL(url) else {
+      finish(.failure(BuiltinSubtitleTransferError.invalidResponse))
+      return
+    }
+    let activeSession = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    let activeTask = activeSession.dataTask(with: request)
+    lock.lock()
+    session = activeSession
+    task = activeTask
+    lock.unlock()
+    guard cancellation.register(activeTask, identifier: identifier) else {
+      activeTask.cancel()
+      finish(.failure(CancellationError()))
+      return
+    }
+    activeTask.resume()
+  }
+
+  func urlSession(_ session: URLSession,
+                  dataTask: URLSessionDataTask,
+                  didReceive response: URLResponse,
+                  completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+    guard let httpResponse = response as? HTTPURLResponse,
+          let url = response.url, allowsURL(url) else {
+      lock.lock()
+      failure = BuiltinSubtitleTransferError.invalidResponse
+      lock.unlock()
+      completionHandler(.cancel)
+      return
+    }
+    lock.lock()
+    self.response = httpResponse
+    let isFinished = finished
+    if response.expectedContentLength > Int64(maximumBytes) {
+      failure = BuiltinSubtitleTransferError.responseTooLarge(maximumBytes: maximumBytes)
+    }
+    let isTooLarge = failure != nil
+    lock.unlock()
+    completionHandler(!isFinished && !isTooLarge ? .allow : .cancel)
+  }
+
+  func urlSession(_ session: URLSession,
+                  task: URLSessionTask,
+                  willPerformHTTPRedirection response: HTTPURLResponse,
+                  newRequest request: URLRequest,
+                  completionHandler: @escaping (URLRequest?) -> Void) {
+    guard let url = request.url, allowsURL(url) else {
+      lock.lock()
+      failure = BuiltinSubtitleTransferError.untrustedRedirect
+      lock.unlock()
+      completionHandler(nil)
+      finish(.failure(BuiltinSubtitleTransferError.untrustedRedirect))
+      return
+    }
+    completionHandler(request)
+  }
+
+  func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    lock.lock()
+    guard !finished, failure == nil else {
+      lock.unlock()
+      return
+    }
+    guard body.count <= maximumBytes, data.count <= maximumBytes - body.count else {
+      failure = BuiltinSubtitleTransferError.responseTooLarge(maximumBytes: maximumBytes)
+      lock.unlock()
+      dataTask.cancel()
+      return
+    }
+    body.append(data)
+    lock.unlock()
+  }
+
+  func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Swift.Error?) {
+    lock.lock()
+    let transferFailure = failure
+    let transferResponse = response
+    let wasCancelled = cancellation.isCancelled
+    lock.unlock()
+    if let transferFailure {
+      finish(.failure(transferFailure))
+    } else if wasCancelled {
+      finish(.failure(CancellationError()))
+    } else if let error {
+      finish(.failure(error))
+    } else if let transferResponse {
+      lock.lock()
+      let completedBody = body
+      lock.unlock()
+      finish(.success((completedBody, transferResponse)))
+    } else {
+      finish(.failure(BuiltinSubtitleTransferError.invalidResponse))
+    }
+  }
+
+  private func finish(_ result: Swift.Result<(Data, HTTPURLResponse), Swift.Error>) {
+    lock.lock()
+    guard !finished else {
+      lock.unlock()
+      return
+    }
+    finished = true
+    let activeSession = session
+    session = nil
+    task = nil
+    body.removeAll(keepingCapacity: false)
+    lock.unlock()
+    cancellation.finish(identifier)
+    switch result {
+    case .success:
+      activeSession?.finishTasksAndInvalidate()
+    case .failure:
+      activeSession?.invalidateAndCancel()
+    }
+    completion(result)
+  }
+}
+
+/// A per-result directory makes failed/cancelled downloads easy to remove without risking a file
+/// returned to mpv. The root is intentionally app-owned so startup can later sweep only old entries.
+final class BuiltinSubtitleCache {
+  static let rootDirectory = FileManager.default.temporaryDirectory
+    .appendingPathComponent("IINAOnlineSubtitles", isDirectory: true)
+  static let maximumAggregateBytes = 200 * 1024 * 1024
+  /// Limits metadata work as well as bytes: many tiny results must not create an unbounded cache.
+  static let maximumAggregateEntries = 2_048
+  /// Allow room for lock files and session sentinels while bounding every root scan.
+  private static let maximumRootEntriesScanned = maximumAggregateEntries + 1_024
+  /// Assrt may return 20 files for one result; allow those plus lease/lock bookkeeping.
+  static let maximumFilesPerEntryScanned = 32
+  /// Startup cleanup is deliberately a small bounded batch because its caller is app launch.
+  static let maximumStartupCleanupEntries = 256
+  private static let maximumEntryAge: TimeInterval = 30 * 24 * 60 * 60
+  private static let leaseMarkerReservation = 64
+  private static let ownedPrefixes = ["opensub-", "assrt-", "shooter-", "subdl-"]
+  private static let sessionLeasePrefix = ".iina-lease-session-"
+  private static let leaseLock = NSLock()
+  private struct AggregateInventory {
+    var totalBytes: Int
+    var ownedEntryCount: Int
+    var rootModificationDate: Date?
+  }
+  private struct AggregateEntry {
+    let url: URL
+    let size: Int
+    let modified: Date
+  }
+  /// Under the cross-process aggregate lock, writes update this snapshot incrementally. A changed
+  /// root directory date invalidates it so another IINA process's new cache entry is reconciled.
+  private static var aggregateInventories: [String: AggregateInventory] = [:]
+  /// Internal observer lets the extracted-source harness assert scan work without timing tests.
+  private static var aggregateInventoryScanObserver: ((URL, Int) -> Void)?
+  private struct SessionLease {
+    let fileName: String
+    let descriptor: Int32
+  }
+  /// One permanent descriptor per cache root/process protects every marker in that root.
+  private static var sessionLeases: [String: SessionLease] = [:]
+  private static var reservedBytes: [String: Int] = [:]
+
+  enum CacheError: Error {
+    case aggregateLimitReached(maximumBytes: Int)
+    case lockWaitTimedOut
+  }
+
+  private let lock = NSLock()
+  private let directory: URL
+  private let maximumAggregateBytes: Int
+  private var discarded = false
+
+  static func observeAggregateInventoryScansForTesting(_ observer: ((URL, Int) -> Void)?) {
+    leaseLock.lock()
+    aggregateInventoryScanObserver = observer
+    leaseLock.unlock()
+  }
+
+  init(provider: String,
+       rootDirectory: URL = BuiltinSubtitleCache.rootDirectory,
+       maximumAggregateBytes: Int = BuiltinSubtitleCache.maximumAggregateBytes) {
+    directory = rootDirectory.appendingPathComponent("\(provider.lowercased())-\(UUID().uuidString)",
+                                                     isDirectory: true)
+    self.maximumAggregateBytes = maximumAggregateBytes
+  }
+
+  func store(_ data: Data, suggestedFileName: String,
+             cancellation: SubtitleAudioMatcher.Cancellation) throws -> URL {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !discarded, !cancellation.isCancelled else { throw CancellationError() }
+    let root = directory.deletingLastPathComponent()
+    let quotaLock = try Self.lockAggregateRoot(root, cancellation: cancellation)
+    defer { Self.unlockDirectory(quotaLock) }
+    let markerURL = directory.appendingPathComponent(".lease", isDirectory: false)
+    let addsDirectory = !FileManager.default.fileExists(atPath: directory.path)
+    let markerAllowance = addsDirectory && !FileManager.default.fileExists(atPath: markerURL.path)
+      ? Self.leaseMarkerReservation : 0
+    let (reservationBytes, overflow) = data.count.addingReportingOverflow(markerAllowance)
+    guard !overflow else { throw CacheError.aggregateLimitReached(maximumBytes: maximumAggregateBytes) }
+    try Self.reserveSpace(in: root, adding: reservationBytes, addingEntry: addsDirectory,
+                          maximumBytes: maximumAggregateBytes, preserving: directory)
+    var inventoryCommitted = false
+    defer {
+      Self.releaseReservation(in: root, bytes: reservationBytes,
+                              invalidateInventory: !inventoryCommitted)
+    }
+    guard !discarded, !cancellation.isCancelled else { throw CancellationError() }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+    let component = URL(fileURLWithPath: suggestedFileName).lastPathComponent
+    let stem = String(URL(fileURLWithPath: component).deletingPathExtension().lastPathComponent.prefix(100))
+    let rawExtension = URL(fileURLWithPath: component).pathExtension.lowercased()
+    let safeExtension = String(rawExtension.filter { $0.isASCII && ($0.isLetter || $0.isNumber) }.prefix(10))
+    let uniqueName = UUID().uuidString + (safeExtension.isEmpty ? "" : ".\(safeExtension)")
+    let url = directory.appendingPathComponent(uniqueName, isDirectory: false)
+    try data.write(to: url, options: .atomic)
+    guard !discarded, !cancellation.isCancelled else {
+      try? FileManager.default.removeItem(at: url)
+      throw CancellationError()
+    }
+    // Preserve a short provider stem where possible without trusting it as a path component.
+    if !stem.isEmpty {
+      let namedURL = directory.appendingPathComponent("\(stem.prefix(60))-\(uniqueName)", isDirectory: false)
+      do {
+        try FileManager.default.moveItem(at: url, to: namedURL)
+        Self.recordStoredFile(in: root, bytes: data.count,
+                              addedDirectory: addsDirectory)
+        inventoryCommitted = true
+        return namedURL
+      } catch {
+        try? FileManager.default.removeItem(at: url)
+        throw error
+      }
+    }
+    Self.recordStoredFile(in: root, bytes: data.count,
+                          addedDirectory: addsDirectory)
+    inventoryCommitted = true
+    return url
+  }
+
+  func discard() {
+    lock.lock()
+    guard !discarded else {
+      lock.unlock()
+      return
+    }
+    discarded = true
+    let root = directory.deletingLastPathComponent()
+    Self.leaseLock.lock()
+    if let descriptor = Self.lockDirectory(directory) {
+      let isLeased = Self.isDirectoryLeased(directory, in: root)
+      if !isLeased, Self.directoryByteCount(directory) != nil,
+         (try? FileManager.default.removeItem(at: directory)) != nil {
+        Self.aggregateInventories.removeValue(forKey: root.standardizedFileURL.path)
+      }
+      Self.unlockDirectory(descriptor)
+    }
+    Self.leaseLock.unlock()
+    lock.unlock()
+  }
+
+  /// Removes a cached path only while its owned directory is unleased. Callers that cancel after
+  /// handing a subtitle to mpv must preserve the path even if they still hold the provider object.
+  func discardFileIfUnleased(_ file: URL) {
+    guard file.standardizedFileURL.deletingLastPathComponent().path == directory.standardizedFileURL.path else {
+      return
+    }
+    lock.lock()
+    let root = directory.deletingLastPathComponent()
+    Self.leaseLock.lock()
+    if let descriptor = Self.lockDirectory(directory) {
+      if !Self.isDirectoryLeased(directory, in: root) {
+        if (try? FileManager.default.removeItem(at: file)) != nil {
+          Self.aggregateInventories.removeValue(forKey: root.standardizedFileURL.path)
+        }
+      }
+      Self.unlockDirectory(descriptor)
+    }
+    Self.leaseLock.unlock()
+    lock.unlock()
+  }
+
+  /// Marks only provider-owned files returned by a completed search as active. Those directories
+  /// stay leased for this app process because mpv can retain a selected subtitle path independently
+  /// of the result object. A single root-level session descriptor protects all entries, rather than
+  /// retaining one descriptor per selected subtitle. At the aggregate limit, new writes fail rather
+  /// than deleting a path that a player may still have open.
+  @discardableResult
+  static func leaseFiles(_ files: [URL], rootDirectory rootURL: URL = rootDirectory) -> Bool {
+    let root = rootURL.standardizedFileURL
+    let ownedFiles = files.filter { file in
+      let directory = file.standardizedFileURL.deletingLastPathComponent()
+      return directory.deletingLastPathComponent().standardizedFileURL.path == root.path &&
+        ownedPrefixes.contains(where: { directory.lastPathComponent.hasPrefix($0) })
+    }
+    guard !ownedFiles.isEmpty else { return true }
+    leaseLock.lock()
+    defer { leaseLock.unlock() }
+    let session: SessionLease
+    do {
+      session = try currentSessionLease(in: root)
+    } catch {
+      return false
+    }
+    // The root-level session sentinel changes the directory date once per process. Refresh the
+    // snapshot date; the per-directory marker bytes are covered by the conservative reservation.
+    if var inventory = aggregateInventories[root.path] {
+      inventory.rootModificationDate = rootModificationDate(root)
+      aggregateInventories[root.path] = inventory
+    }
+    for file in ownedFiles {
+      let directory = file.standardizedFileURL.deletingLastPathComponent()
+      guard FileManager.default.fileExists(atPath: file.path),
+            let descriptor = lockDirectory(directory) else { return false }
+      do {
+        try Data(session.fileName.utf8).write(to: directory.appendingPathComponent(".lease"), options: .atomic)
+      } catch {
+        unlockDirectory(descriptor)
+        return false
+      }
+      unlockDirectory(descriptor)
+    }
+    return true
+  }
+
+  /// Releases only this process's lease and removes files that were never handed to a chooser or
+  /// player. The stale-search path calls this after a result was leased but its callback declined it.
+  static func discardUnhandedFiles(_ files: [URL], rootDirectory rootURL: URL = rootDirectory) {
+    let root = rootURL.standardizedFileURL
+    let rootPath = root.path
+    let directories = Set(files.compactMap { file -> URL? in
+      let directory = file.standardizedFileURL.deletingLastPathComponent()
+      guard directory.deletingLastPathComponent().standardizedFileURL.path == rootPath,
+            ownedPrefixes.contains(where: { directory.lastPathComponent.hasPrefix($0) }),
+            let values = try? directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
+            values.isDirectory == true, values.isSymbolicLink != true else { return nil }
+      return directory
+    })
+    guard !directories.isEmpty else { return }
+
+    leaseLock.lock()
+    defer { leaseLock.unlock() }
+    guard let session = sessionLeases[rootPath] else { return }
+    let expectedMarker = Data(session.fileName.utf8)
+    for directory in directories {
+      guard let descriptor = lockDirectory(directory) else { continue }
+      let markerURL = directory.appendingPathComponent(".lease", isDirectory: false)
+      let markerValues = try? markerURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+      let marker = markerValues?.isRegularFile == true && markerValues?.isSymbolicLink != true &&
+        (markerValues?.fileSize ?? Int.max) <= 128 ? try? Data(contentsOf: markerURL) : nil
+      if marker == expectedMarker, directoryByteCount(directory) != nil,
+         (try? FileManager.default.removeItem(at: directory)) != nil {
+        aggregateInventories.removeValue(forKey: rootPath)
+      }
+      unlockDirectory(descriptor)
+    }
+  }
+
+  /// The marker names one root-level session file whose exclusive lock is held until process exit.
+  /// Checking that sentinel protects active paths across processes without one open fd per subtitle.
+  private static func currentSessionLease(in root: URL) throws -> SessionLease {
+    let rootPath = root.standardizedFileURL.path
+    if let existing = sessionLeases[rootPath] { return existing }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let fileName = sessionLeasePrefix + UUID().uuidString
+    let sessionURL = root.appendingPathComponent(fileName, isDirectory: false)
+    let descriptor = open(sessionURL.path, O_CREAT | O_EXCL | O_RDWR, mode_t(S_IRUSR | S_IWUSR))
+    guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
+    guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+      _ = close(descriptor)
+      try? FileManager.default.removeItem(at: sessionURL)
+      throw CocoaError(.fileWriteUnknown)
+    }
+    let lease = SessionLease(fileName: fileName, descriptor: descriptor)
+    sessionLeases[rootPath] = lease
+    return lease
+  }
+
+  private static func lockDirectory(_ directory: URL) -> Int32? {
+    let lockURL = directory.appendingPathComponent(".cache-lock", isDirectory: false)
+    let descriptor = open(lockURL.path, O_CREAT | O_RDWR, mode_t(S_IRUSR | S_IWUSR))
+    guard descriptor >= 0 else { return nil }
+    guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+      close(descriptor)
+      return nil
+    }
+    return descriptor
+  }
+
+  /// Requires the directory's short-lived `.cache-lock` to be held. An inaccessible marker is
+  /// treated as active so cleanup never unlinks a path whose owner cannot be established.
+  private static func isDirectoryLeased(_ directory: URL, in root: URL) -> Bool {
+    let markerURL = directory.appendingPathComponent(".lease", isDirectory: false)
+    guard FileManager.default.fileExists(atPath: markerURL.path) else { return false }
+    guard let values = try? markerURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
+          values.isRegularFile == true, values.isSymbolicLink != true,
+          let markerSize = values.fileSize, markerSize >= 0, markerSize <= 128 else { return true }
+    guard let data = try? Data(contentsOf: markerURL) else { return true }
+    if data.isEmpty {
+      // Older builds held an flock directly on an empty `.lease` file. Preserve it while that
+      // process is alive, then retire the legacy marker after its lock becomes available.
+      let descriptor = open(markerURL.path, O_RDWR)
+      if descriptor >= 0 {
+        if flock(descriptor, LOCK_EX | LOCK_NB) == 0 {
+          unlockDirectory(descriptor)
+          return false
+        }
+        _ = close(descriptor)
+        return true
+      }
+      return true
+    }
+    guard let fileName = String(data: data, encoding: .utf8),
+          fileName.hasPrefix(sessionLeasePrefix),
+          fileName == URL(fileURLWithPath: fileName).lastPathComponent else { return true }
+    let sessionURL = root.appendingPathComponent(fileName, isDirectory: false)
+    let descriptor = open(sessionURL.path, O_RDWR)
+    guard descriptor >= 0 else {
+      try? FileManager.default.removeItem(at: markerURL)
+      return false
+    }
+    if flock(descriptor, LOCK_EX | LOCK_NB) == 0 {
+      // The owner process exited. The caller may now remove the directory; leave marker cleanup to
+      // that removal so touching metadata does not make an expired directory look recently used.
+      unlockDirectory(descriptor)
+      return false
+    }
+    _ = close(descriptor)
+    return true
+  }
+
+  /// Serializes aggregate accounting and file creation across IINA processes sharing the temp root.
+  /// Polls nonblocking so cancellation can retire a request waiting behind another cache write.
+  private static func lockAggregateRoot(_ root: URL,
+                                        cancellation: SubtitleAudioMatcher.Cancellation,
+                                        waitTimeout: TimeInterval? = nil) throws -> Int32 {
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let lockURL = root.appendingPathComponent(".aggregate.lock", isDirectory: false)
+    let descriptor = open(lockURL.path, O_CREAT | O_RDWR, mode_t(S_IRUSR | S_IWUSR))
+    guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
+    let startedAt = ProcessInfo.processInfo.systemUptime
+    while true {
+      guard !cancellation.isCancelled else {
+        _ = close(descriptor)
+        throw CancellationError()
+      }
+      if flock(descriptor, LOCK_EX | LOCK_NB) == 0 { return descriptor }
+      guard errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR else {
+        _ = close(descriptor)
+        throw CocoaError(.fileWriteUnknown)
+      }
+      if let waitTimeout, ProcessInfo.processInfo.systemUptime - startedAt >= max(0, waitTimeout) {
+        _ = close(descriptor)
+        throw CacheError.lockWaitTimedOut
+      }
+      let remaining = waitTimeout.map { $0 - (ProcessInfo.processInfo.systemUptime - startedAt) }
+      let delay = remaining.map { min(0.025, max(0, $0)) } ?? 0.025
+      Thread.sleep(forTimeInterval: delay)
+    }
+  }
+
+  /// Visits at most `maximumEntries` values and performs one extra read only to distinguish an
+  /// exactly-full directory from a truncated scan. Both production scans and the focused harness
+  /// use this helper so the work bound is directly testable without timing assertions.
+  @discardableResult
+  static func visitBoundedEntries(maximumEntries: Int,
+                                  next: () -> URL?,
+                                  visit: (URL) throws -> Void) rethrows -> Bool {
+    guard maximumEntries >= 0 else { return false }
+    var visited = 0
+    while let entry = next() {
+      guard visited < maximumEntries else { return false }
+      visited += 1
+      try visit(entry)
+    }
+    return true
+  }
+
+  /// Eviction order is needed only after the aggregate inventory exceeds a quota. Keeping this
+  /// conditional in one helper makes the common under-quota write path avoid an O(n log n) sort
+  /// while retaining deterministic oldest-first pruning when eviction is required.
+  @discardableResult
+  static func sortEvictionCandidatesIfNeeded<T>(_ entries: inout [T], shouldPrune: Bool,
+                                                by areInIncreasingOrder: (T, T) -> Bool) -> Bool {
+    guard shouldPrune else { return false }
+    entries.sort(by: areInIncreasingOrder)
+    return true
+  }
+
+  private static func enumerateEntries(in directory: URL,
+                                       maximumEntries: Int,
+                                       includingPropertiesForKeys keys: [URLResourceKey],
+                                       visit: (URL) throws -> Void) throws -> Bool {
+    guard let enumerator = FileManager.default.enumerator(
+      at: directory, includingPropertiesForKeys: keys, options: [.skipsSubdirectoryDescendants]) else {
+      throw CocoaError(.fileReadNoSuchFile)
+    }
+    return try visitBoundedEntries(maximumEntries: maximumEntries,
+                                   next: { enumerator.nextObject() as? URL }, visit: visit)
+  }
+
+  private static func unlockDirectory(_ descriptor: Int32) {
+    _ = flock(descriptor, LOCK_UN)
+    _ = close(descriptor)
+  }
+
+  private static func reserveSpace(in root: URL, adding bytes: Int, addingEntry: Bool = true,
+                                   maximumBytes: Int, preserving directoryToPreserve: URL) throws {
+    guard bytes >= 0, maximumBytes > 0 else {
+      throw CacheError.aggregateLimitReached(maximumBytes: maximumBytes)
+    }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    leaseLock.lock()
+    defer { leaseLock.unlock() }
+    let rootPath = root.standardizedFileURL.path
+    let reserved = reservedBytes[rootPath] ?? 0
+    var inventory = aggregateInventories[rootPath]
+    var entries: [AggregateEntry]?
+    let currentRootDate = rootModificationDate(root)
+    if inventory == nil || currentRootDate == nil ||
+        inventory?.rootModificationDate != currentRootDate {
+      let scan = try scanAggregateInventory(in: root, maximumBytes: maximumBytes)
+      inventory = scan.inventory
+      entries = scan.entries
+    }
+    guard var current = inventory else {
+      throw CacheError.aggregateLimitReached(maximumBytes: maximumBytes)
+    }
+
+    func needsPruning(total: Int, entryCount: Int) -> Bool {
+      wouldExceed(addingWithSaturation(total, reserved), adding: bytes, limit: maximumBytes) ||
+        (addingEntry && entryCount >= maximumAggregateEntries)
+    }
+    if needsPruning(total: current.totalBytes, entryCount: current.ownedEntryCount), entries == nil {
+      let scan = try scanAggregateInventory(in: root, maximumBytes: maximumBytes)
+      current = scan.inventory
+      entries = scan.entries
+    }
+    if needsPruning(total: current.totalBytes, entryCount: current.ownedEntryCount) {
+      var evictionCandidates = entries ?? []
+      Self.sortEvictionCandidatesIfNeeded(&evictionCandidates, shouldPrune: true,
+                                          by: { $0.modified < $1.modified })
+      for entry in evictionCandidates where
+          needsPruning(total: current.totalBytes, entryCount: current.ownedEntryCount) {
+        guard entry.url.standardizedFileURL != directoryToPreserve.standardizedFileURL else { continue }
+        // A short-lived directory lock serializes discard/lease/prune operations. The marker then
+        // checks the single process-session sentinel, avoiding a permanent descriptor per result.
+        guard let descriptor = lockDirectory(entry.url) else { continue }
+        let isLeased = isDirectoryLeased(entry.url, in: root)
+        let hasBoundedContents = directoryByteCount(entry.url) != nil
+        let removed = !isLeased && hasBoundedContents &&
+          (try? FileManager.default.removeItem(at: entry.url)) != nil
+        unlockDirectory(descriptor)
+        if removed {
+          current.totalBytes = max(0, current.totalBytes - entry.size)
+          current.ownedEntryCount = max(0, current.ownedEntryCount - 1)
+        }
+      }
+    }
+    guard !needsPruning(total: current.totalBytes, entryCount: current.ownedEntryCount) else {
+      throw CacheError.aggregateLimitReached(maximumBytes: maximumBytes)
+    }
+    current.rootModificationDate = rootModificationDate(root)
+    aggregateInventories[rootPath] = current
+    let (newReservation, overflow) = reserved.addingReportingOverflow(bytes)
+    guard !overflow else { throw CacheError.aggregateLimitReached(maximumBytes: maximumBytes) }
+    reservedBytes[rootPath] = newReservation
+  }
+
+  /// Reconciles the bounded filesystem inventory only when the root changed or quota pressure
+  /// requires eviction. Every entry gets a 64-byte lease allowance so later marker creation cannot
+  /// exceed the aggregate limit without changing the root directory date.
+  private static func scanAggregateInventory(in root: URL, maximumBytes: Int)
+    throws -> (inventory: AggregateInventory, entries: [AggregateEntry]) {
+    var total = 0
+    var ownedEntryCount = 0
+    var entries: [AggregateEntry] = []
+    var visited = 0
+    do {
+      let complete = try enumerateEntries(
+        in: root, maximumEntries: maximumRootEntriesScanned,
+        includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey]
+      ) { entry in
+        visited += 1
+        guard ownedPrefixes.contains(where: { entry.lastPathComponent.hasPrefix($0) }) else { return }
+        guard let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey,
+                                                                .contentModificationDateKey]),
+              values.isDirectory == true, values.isSymbolicLink != true,
+              let size = directoryByteCountIncludingLeaseAllowance(entry) else {
+          throw CacheError.aggregateLimitReached(maximumBytes: maximumBytes)
+        }
+        ownedEntryCount += 1
+        // The helper already includes only the missing marker allowance needed to reach 64 bytes.
+        // Adding the full allowance again would double-count existing entries after reconciliation.
+        total = addingWithSaturation(total, size)
+        entries.append(AggregateEntry(url: entry, size: size,
+                                      modified: values.contentModificationDate ?? .distantPast))
+      }
+      guard complete else { throw CacheError.aggregateLimitReached(maximumBytes: maximumBytes) }
+      aggregateInventoryScanObserver?(root, visited)
+    } catch {
+      aggregateInventoryScanObserver?(root, visited)
+      throw CacheError.aggregateLimitReached(maximumBytes: maximumBytes)
+    }
+    return (AggregateInventory(totalBytes: total, ownedEntryCount: ownedEntryCount,
+                               rootModificationDate: rootModificationDate(root)), entries)
+  }
+
+  private static func rootModificationDate(_ root: URL) -> Date? {
+    guard let attributes = try? FileManager.default.attributesOfItem(atPath: root.path) else { return nil }
+    return attributes[.modificationDate] as? Date
+  }
+
+  private static func recordStoredFile(in root: URL, bytes: Int, addedDirectory: Bool) {
+    guard bytes >= 0 else { return }
+    leaseLock.lock()
+    defer { leaseLock.unlock() }
+    let rootPath = root.standardizedFileURL.path
+    guard var inventory = aggregateInventories[rootPath] else { return }
+    inventory.totalBytes = addingWithSaturation(inventory.totalBytes, bytes)
+    if addedDirectory {
+      inventory.totalBytes = addingWithSaturation(inventory.totalBytes, leaseMarkerReservation)
+      inventory.ownedEntryCount += 1
+    }
+    inventory.rootModificationDate = rootModificationDate(root)
+    aggregateInventories[rootPath] = inventory
+  }
+
+  private static func releaseReservation(in root: URL, bytes: Int, invalidateInventory: Bool) {
+    let path = root.standardizedFileURL.path
+    leaseLock.lock()
+    let current = reservedBytes[path] ?? 0
+    let remaining = max(0, current - bytes)
+    if remaining == 0 { reservedBytes.removeValue(forKey: path) }
+    else { reservedBytes[path] = remaining }
+    if invalidateInventory { aggregateInventories.removeValue(forKey: path) }
+    leaseLock.unlock()
+  }
+
+  private static func addingWithSaturation(_ first: Int, _ second: Int) -> Int {
+    let (sum, overflow) = first.addingReportingOverflow(second)
+    return overflow ? Int.max : sum
+  }
+
+  private static func wouldExceed(_ total: Int, adding bytes: Int, limit: Int) -> Bool {
+    total > limit || bytes > limit - min(total, limit)
+  }
+
+  /// Cache directories contain flat subtitle files. Ignore symlinks and nested directories so
+  /// accounting never follows a provider-controlled path outside the cache root.
+  private static func directoryByteCount(_ directory: URL) -> Int? {
+    var total = 0
+    do {
+      let complete = try enumerateEntries(
+        in: directory, maximumEntries: maximumFilesPerEntryScanned,
+        includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+      ) { file in
+        guard let values = try? file.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey,
+                                                              .isSymbolicLinkKey, .fileSizeKey]),
+              let isDirectory = values.isDirectory,
+              let isSymbolicLink = values.isSymbolicLink else {
+          throw CacheError.aggregateLimitReached(maximumBytes: maximumAggregateBytes)
+        }
+        guard !isDirectory || isSymbolicLink else {
+          throw CacheError.aggregateLimitReached(maximumBytes: maximumAggregateBytes)
+        }
+        guard values.isRegularFile == true, values.isSymbolicLink != true,
+              let size = values.fileSize, size >= 0 else { return }
+        let (next, overflow) = total.addingReportingOverflow(size)
+        total = overflow ? Int.max : next
+      }
+      return complete ? total : nil
+    } catch {
+      return nil
+    }
+  }
+
+  /// Includes enough headroom for a session marker without double-counting marker bytes already
+  /// present. This keeps the incremental estimate safe when leaseFiles adds a marker in-place,
+  /// which does not modify the cache root directory date.
+  private static func directoryByteCountIncludingLeaseAllowance(_ directory: URL) -> Int? {
+    guard let bytes = directoryByteCount(directory) else { return nil }
+    let markerURL = directory.appendingPathComponent(".lease", isDirectory: false)
+    guard FileManager.default.fileExists(atPath: markerURL.path) else {
+      return addingWithSaturation(bytes, leaseMarkerReservation)
+    }
+    guard let values = try? markerURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
+          values.isRegularFile == true, values.isSymbolicLink != true,
+          let markerSize = values.fileSize, markerSize >= 0 else { return nil }
+    let missingAllowance = max(0, leaseMarkerReservation - min(markerSize, leaseMarkerReservation))
+    return addingWithSaturation(bytes, missingAllowance)
+  }
+
+  /// Call during startup. The scan and lock wait are capped because application launch is the caller.
+  /// Active paths remain protected by their session lease even when the bounded scan is repeated.
+  @discardableResult
+  static func removeStaleEntries(in root: URL = rootDirectory,
+                                 olderThan age: TimeInterval = 30 * 24 * 60 * 60,
+                                 now: Date = Date()) -> Int {
+    guard FileManager.default.fileExists(atPath: root.path),
+          let quotaLock = try? lockAggregateRoot(root, cancellation: SubtitleAudioMatcher.Cancellation(),
+                                                 waitTimeout: 0.05) else {
+      return 0
+    }
+    defer { unlockDirectory(quotaLock) }
+    let cutoff = now.addingTimeInterval(-max(0, age))
+    var removed = 0
+    leaseLock.lock()
+    defer { leaseLock.unlock() }
+    var inventoryChanged = false
+    _ = try? enumerateEntries(
+      in: root, maximumEntries: maximumStartupCleanupEntries,
+      includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey]
+    ) { entry in
+      if entry.lastPathComponent.hasPrefix(sessionLeasePrefix) {
+        inventoryChanged = removeOrphanSessionFile(entry) || inventoryChanged
+        return
+      }
+      guard Self.ownedPrefixes.contains(where: { entry.lastPathComponent.hasPrefix($0) }),
+            let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey,
+                                                             .contentModificationDateKey]),
+            values.isDirectory == true, values.isSymbolicLink != true,
+            let modified = values.contentModificationDate, modified < cutoff,
+            let descriptor = lockDirectory(entry) else { return }
+      // Refuse recursive deletion unless the owned directory is flat and within the same
+      // per-entry bound used by aggregate accounting. This prevents an unexpected temp-tree from
+      // turning launch-time cleanup into an unbounded recursive walk.
+      guard directoryByteCount(entry) != nil else {
+        unlockDirectory(descriptor)
+        return
+      }
+      let isLeased = isDirectoryLeased(entry, in: root)
+      let currentValues = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey,
+                                                               .contentModificationDateKey])
+      let stillStale = currentValues?.isDirectory == true && currentValues?.isSymbolicLink != true &&
+        (currentValues?.contentModificationDate ?? now) < cutoff
+      if !isLeased, stillStale, (try? FileManager.default.removeItem(at: entry)) != nil {
+        removed += 1
+        inventoryChanged = true
+      }
+      unlockDirectory(descriptor)
+    }
+    if inventoryChanged { aggregateInventories.removeValue(forKey: root.standardizedFileURL.path) }
+    return removed
+  }
+
+  /// Removes an inactive sentinel left by a crash or previous app session.
+  @discardableResult
+  private static func removeOrphanSessionFile(_ entry: URL) -> Bool {
+    let descriptor = open(entry.path, O_RDWR)
+    guard descriptor >= 0 else { return false }
+    if flock(descriptor, LOCK_EX | LOCK_NB) == 0 {
+      let removed = (try? FileManager.default.removeItem(at: entry)) != nil
+      unlockDirectory(descriptor)
+      return removed
+    } else {
+      _ = close(descriptor)
+      return false
+    }
+  }
+}
 
 fileprivate protocol ProviderProtocol {
   associatedtype F: OnlineSubtitleFetcher
@@ -15,14 +878,29 @@ fileprivate protocol ProviderProtocol {
   var name: String { get }
   var origin: OnlineSubtitle.Origin { get }
   func getFetcher() -> F
-  func fetchSubtitles(url: URL, player: PlayerCore) -> Promise<[URL]>
+  func fetchSubtitles(url: URL, player: PlayerCore,
+                      cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<[URL]>
 }
 
 protocol OnlineSubtitleFetcher {
   associatedtype Subtitle: OnlineSubtitle
   var loggedIn: Bool { get }
   func fetch(from url: URL, withProviderID id: String, playerCore player: PlayerCore) -> Promise<[Subtitle]>
+  func fetch(from url: URL, withProviderID id: String, playerCore player: PlayerCore,
+             cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<[Subtitle]>
   func logout(timeout: TimeInterval?) -> Promise<Void>
+}
+
+extension OnlineSubtitleFetcher {
+  /// Providers without cancellable fetch work can keep their existing implementation. The shared
+  /// token still gates the fetch and the selected-download stage.
+  func fetch(from url: URL, withProviderID id: String, playerCore player: PlayerCore,
+             cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<[Subtitle]> {
+    guard !cancellation.isCancelled else {
+      return Promise(error: OnlineSubtitle.CommonError.dismissed)
+    }
+    return fetch(from: url, withProviderID: id, playerCore: player)
+  }
 }
 
 class OnlineSubtitle: NSObject {
@@ -66,9 +944,16 @@ class OnlineSubtitle: NSObject {
    */
   var releaseName: String? { nil }
 
-  /// Whether this provider result has enough content evidence to be selected without review.
-  /// Providers that do not perform content verification keep the historic behavior.
-  var canAutomaticallySelect: Bool { true }
+  /// The language this result is in, as the provider reports it, used only to order and preselect
+  /// results against the *Preferred language* setting. `nil` means the provider cannot describe
+  /// its results; a language that cannot be recognized ranks as unknown rather than as preferred.
+  /// Providers that label their results override this instead of making the caller guess from a
+  /// filename.
+  var languageHint: String? { nil }
+
+  /// Whether this provider result has independent evidence beyond uploader-controlled names.
+  /// Providers must opt in explicitly; exact filename matches alone are not proof of content.
+  var canAutomaticallySelect: Bool { false }
 
   /// Provider-supplied preference for chooser preselection, without changing result ordering.
   var verifiedSelectionBoost: Int { 0 }
@@ -94,6 +979,18 @@ class OnlineSubtitle: NSObject {
   }
 
   func download() -> Promise<[URL]> { return .value([]) }
+
+  /// Entry point used by the shared search pipeline so every selected subtitle is checked against
+  /// the search's cancellation token before its download begins.
+  func download(cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<[URL]> {
+    guard !cancellation.isCancelled else {
+      return Promise(error: CommonError.dismissed)
+    }
+    return download()
+  }
+
+  /// Providers that cache downloaded files can remove them if a later selected download fails.
+  func discardCachedDownload() {}
   func getDescription() -> (name: String, left: String, right: String) { return("", "", "") }
 
   class DefaultFetcher {
@@ -163,16 +1060,76 @@ class OnlineSubtitle: NSObject {
       return F()
     }
 
-    func fetchSubtitles(url: URL, player: PlayerCore) -> Promise<[URL]> {
-      return getFetcher().fetch(from: url, withProviderID: providerID, playerCore: player)
-      .get { [self] subtitles in
+    func fetchSubtitles(url: URL, player: PlayerCore,
+                        cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<[URL]> {
+      let fetcher = getFetcher()
+      var fetchedSubtitles: [F.Subtitle] = []
+      let searchID = player.onlineSubtitleSearchID
+      return fetcher.fetch(from: url, withProviderID: providerID, playerCore: player,
+                           cancellation: cancellation)
+      .then { [self] subtitles -> Promise<[URL]> in
+        fetchedSubtitles = subtitles
+        guard !cancellation.isCancelled else {
+          throw OnlineSubtitle.CommonError.dismissed
+        }
+        // The chooser temporarily owns this callback while it is displayed. Reinstall the search
+        // cancellation after it returns, before the selected-download chain starts.
+        let restoreCancellation = {
+          guard player.onlineSubtitleSearchID == searchID else {
+            cancellation.cancel()
+            return
+          }
+          player.cancelOnlineSubtitleSearch = { cancellation.cancel() }
+        }
+        if Thread.isMainThread {
+          restoreCancellation()
+        } else {
+          DispatchQueue.main.sync(execute: restoreCancellation)
+        }
+        guard !cancellation.isCancelled else {
+          throw OnlineSubtitle.CommonError.dismissed
+        }
         if subtitles.isEmpty {
           throw OnlineSubtitle.CommonError.noResult
         } else {
           player.sendOSD(.downloadingSub(subtitles.count, name))
         }
-      }.thenFlatMap { subtitle in
-        subtitle.download()
+        return self.downloadSelected(subtitles, at: 0, cancellation: cancellation).map { urls in
+          guard !cancellation.isCancelled else {
+            throw OnlineSubtitle.CommonError.dismissed
+          }
+          guard BuiltinSubtitleCache.leaseFiles(urls) else {
+            BuiltinSubtitleCache.discardUnhandedFiles(urls)
+            throw cancellation.isCancelled ? OnlineSubtitle.CommonError.dismissed : OnlineSubtitle.CommonError.fsError
+          }
+          guard !cancellation.isCancelled else {
+            BuiltinSubtitleCache.discardUnhandedFiles(urls)
+            throw OnlineSubtitle.CommonError.dismissed
+          }
+          return urls
+        }
+      }.recover { error -> Promise<[URL]> in
+        fetchedSubtitles.forEach { $0.discardCachedDownload() }
+        if cancellation.isCancelled {
+          throw OnlineSubtitle.CommonError.dismissed
+        }
+        throw error
+      }
+    }
+
+    private func downloadSelected(_ subtitles: [F.Subtitle],
+                                  at index: Int,
+                                  cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<[URL]> {
+      guard !cancellation.isCancelled else {
+        return Promise(error: OnlineSubtitle.CommonError.dismissed)
+      }
+      guard index < subtitles.count else { return .value([]) }
+      return subtitles[index].download(cancellation: cancellation).then { urls -> Promise<[URL]> in
+        guard !cancellation.isCancelled else {
+          throw OnlineSubtitle.CommonError.dismissed
+        }
+        return self.downloadSelected(subtitles, at: index + 1, cancellation: cancellation)
+          .map { urls + $0 }
       }
     }
   }
@@ -242,15 +1199,39 @@ class OnlineSubtitle: NSObject {
     log("Search subtitle from \(provider.name)...")
     player.sendOSD(.startFindingSub(provider.name), autoHide: false)
     let searchID = player.onlineSubtitleSearchID
+    let cancellation = SubtitleAudioMatcher.Cancellation()
+    DispatchQueue.main.async {
+      guard player.onlineSubtitleSearchID == searchID else {
+        cancellation.cancel()
+        return
+      }
+      player.cancelOnlineSubtitleSearch = { cancellation.cancel() }
+    }
 
-    provider.fetchSubtitles(url: url, player: player).done {
-      guard player.onlineSubtitleSearchID == searchID else { return }
-      callback($0)
+    let clearCancellationForCurrentSearch: () -> Bool = {
+      let clear = {
+        guard player.onlineSubtitleSearchID == searchID else { return false }
+        player.cancelOnlineSubtitleSearch = nil
+        return true
+      }
+      return Thread.isMainThread ? clear() : DispatchQueue.main.sync(execute: clear)
+    }
+
+    provider.fetchSubtitles(url: url, player: player, cancellation: cancellation).done { urls in
+      guard clearCancellationForCurrentSearch() else {
+        cancellation.cancel()
+        BuiltinSubtitleCache.discardUnhandedFiles(urls)
+        return
+      }
+      callback(urls)
     }.ensure {
       guard player.onlineSubtitleSearchID == searchID else { return }
       player.hideOSD()
     }.catch { err in
-      guard player.onlineSubtitleSearchID == searchID else { return }
+      guard clearCancellationForCurrentSearch() else {
+        cancellation.cancel()
+        return
+      }
       let osdMessage: OSDMessage
       let prefix = "Failed to obtain subtitles for \(url) from \(provider.name). "
       switch err {
@@ -482,10 +1463,17 @@ enum SubtitleMatchScorer {
   /// - Returns: A score from `0` (no useful resemblance) to `100` (same title, same year or
   ///   episode), where only a `100` may trigger automatic selection.
   static func score(releaseName: String?, mediaName: String) -> Int {
-    guard let releaseName, !releaseName.isEmpty, !mediaName.isEmpty else { return 0 }
+    score(releaseName: releaseName, mediaTokens: prepareMediaName(mediaName))
+  }
 
+  static func prepareMediaName(_ mediaName: String) -> [String] {
+    normalizeEpisodeMarkers(tokenize(clip(mediaName)))
+  }
+
+  static func score(releaseName: String?, mediaTokens: [String]) -> Int {
+    guard let releaseName, !releaseName.isEmpty, !mediaTokens.isEmpty else { return 0 }
     let release = normalizeEpisodeMarkers(tokenize(clip(stripSubtitleExtension(from: releaseName))))
-    let media = normalizeEpisodeMarkers(tokenize(clip(mediaName)))
+    let media = mediaTokens
     guard !release.isEmpty, !media.isEmpty else { return 0 }
 
     if isIdenticalTitleAndAnchor(release, media) { return perfectMatch }
@@ -499,7 +1487,9 @@ enum SubtitleMatchScorer {
     let shared = Set(media).intersection(release).count
     guard shared > 0 else { return 0 }
     var value = Int(((2.0 * Double(shared)) / Double(media.count + release.count) * 100).rounded())
-    if titleTokens(of: release) == titleTokens(of: media), !titleTokens(of: release).isEmpty {
+    let releaseTitle = titleTokens(of: release)
+    let mediaTitle = titleTokens(of: media)
+    if releaseTitle == mediaTitle, !releaseTitle.isEmpty {
       value = max(value, 90)
     }
     return min(95, value)
@@ -515,11 +1505,31 @@ enum SubtitleMatchScorer {
     // Compared as an ordered sequence. Joining the tokens instead would treat "The.Matrix" and
     // "t.hematrix" as equal, which is not a property worth having.
     guard releaseTitle == mediaTitle else { return false }
+    // Release names are uploader-controlled. A real release tail contains technical tags and at
+    // most one arbitrary release-group token; multiple unknown words after the first tag can be a
+    // second title inserted after an otherwise matching filename.
+    guard hasSafeReleaseTail(release) else { return false }
     // Read from the full names, so a release cannot dodge the comparison by leaving its year or
     // episode out, and so a second year or episode cannot be smuggled in after a release tag.
     let releaseAnchors = identityAnchors(in: release)
     let mediaAnchors = identityAnchors(in: media)
     return !mediaAnchors.isEmpty && releaseAnchors == mediaAnchors
+  }
+
+  private static func hasSafeReleaseTail(_ tokens: [String]) -> Bool {
+    guard let firstTag = tokens.firstIndex(where: isReleaseTag) else { return true }
+    var unclassifiedTokens = 0
+    for token in tokens.dropFirst(firstTag + 1) where !isReleaseDetail(token) {
+      unclassifiedTokens += 1
+      if unclassifiedTokens > 1 { return false }
+    }
+    return true
+  }
+
+  private static func isReleaseDetail(_ token: String) -> Bool {
+    if isReleaseTag(token) || ["h", "ddp5", "ddp7"].contains(token) { return true }
+    // Channel-count fragments such as the `1` in `DDP5.1` are split out by `tokenize`.
+    return token.count <= 2 && Int(token) != nil
   }
 
   /// The leading tokens of `tokens` that belong to the title, discarding the token that starts the
@@ -610,5 +1620,270 @@ enum SubtitleMatchScorer {
                                locale: Locale(identifier: "en_US_POSIX"))
     let separated = String(folded.map { $0.isLetter || $0.isNumber ? $0 : " " })
     return separated.split(separator: " ").map(String.init)
+  }
+}
+
+// MARK: - Preferred subtitle language
+
+/// Recognizes the languages used by the *Preferred language* setting and by provider results, and
+/// reduces both to one canonical identity so they can be compared.
+///
+/// The setting is a comma-separated list written by the preferences token field, which stores an
+/// ISO 639 code — `en` or `eng`, depending on which completion the user accepted — and can hold a
+/// name the user typed by hand. Results arrive in whatever spelling each provider uses: assrt.net
+/// describes a file in Chinese (`简体`), SubDL returns a lowercase language name, and OpenSubtitles
+/// returns catalog codes that can carry a region (`pt-br`). Comparing those strings literally
+/// treats one language as several — `spa` is not `es` — and the language asked for is then silently
+/// dropped in favor of a fallback. Every token therefore goes through `canonical(_:)` first.
+enum SubtitleLanguagePreference {
+
+  /// Preferred when the setting is empty. OpenSubtitles and SubDL each already fall back to English
+  /// on their own, so naming it here makes the behavior explicit instead of incidental.
+  static let defaultLanguage = "en"
+
+  /// The user's languages, most preferred first, canonicalized and deduplicated. Never empty: an
+  /// unset setting means `defaultLanguage`.
+  static func preferred(from setting: String?) -> [String] {
+    var languages: [String] = []
+    for token in (setting ?? "").split(separator: ",") {
+      guard let language = canonical(String(token)), !languages.contains(language) else { continue }
+      languages.append(language)
+    }
+    return languages.isEmpty ? [defaultLanguage] : languages
+  }
+
+  /// The chooser keeps explicit regions when available, while names and language-only codes remain
+  /// broad preferences. Chinese scripts map to the provider's commonly reported region tags.
+  static func preferredForSelection(from setting: String?) -> [String] {
+    var languages: [String] = []
+    for token in (setting ?? "").split(separator: ",") {
+      guard let language = providerTag(String(token)), !languages.contains(language) else { continue }
+      languages.append(language)
+    }
+    return languages.isEmpty ? [defaultLanguage] : languages
+  }
+
+  /// Language tags accepted by mpv's `alang` and `slang` options. Resolve language names and
+  /// three-letter ISO codes to a canonical base tag, while preserving explicit region or script
+  /// subtags so a preference such as `pt-BR` can select that track when present.
+  static func preferredTrackTags(from setting: String?) -> [String] {
+    var tags: [String] = []
+    for rawToken in (setting ?? "").split(separator: ",") {
+      guard let tag = trackTag(String(rawToken)), !tags.contains(tag) else { continue }
+      tags.append(tag)
+    }
+    return tags.isEmpty ? [defaultLanguage] : tags
+  }
+
+  private static func trackTag(_ token: String) -> String? {
+    let normalized = token.trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: "_", with: "-")
+    let parts = normalized.split(separator: "-")
+    guard let first = parts.first else { return nil }
+    let rawLanguage = String(first)
+    let language = canonical(rawLanguage) ?? {
+      // Preserve well-formed three-letter codes that CoreFoundation does not currently know.
+      guard (2...3).contains(rawLanguage.count), rawLanguage.allSatisfy(\.isLetter) else { return nil }
+      return rawLanguage.lowercased()
+    }()
+    guard let language else { return nil }
+    let subtags = parts.dropFirst().map(String.init)
+    guard subtags.allSatisfy({
+      ((2...8).contains($0.count) && $0.allSatisfy(\.isLetter)) || $0.allSatisfy(\.isNumber)
+    }) else { return nil }
+    return ([language] + subtags.map { $0.lowercased() }).joined(separator: "-")
+  }
+
+  /// Position of a provider-reported language in `preferred`, or `nil` when the language is
+  /// unknown, unrecognizable, or simply not one the user asked for. A `nil` rank is not a
+  /// rejection: it only means the preference has nothing to say about that result.
+  static func rank(of language: String?, in preferred: [String]) -> Int? {
+    guard let language, let providerLanguage = providerTag(language) else { return nil }
+    for (rank, preference) in preferred.enumerated() {
+      if preference.contains("-") {
+        if preference == providerLanguage { return rank }
+      } else if canonical(language) == preference {
+        return rank
+      }
+    }
+    return nil
+  }
+
+  private static func providerTag(_ token: String) -> String? {
+    let normalized = token.trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: "_", with: "-").lowercased()
+    let parts = normalized.split(separator: "-")
+    guard let first = parts.first, let language = canonical(String(first)) else {
+      return canonical(token)
+    }
+    guard parts.count > 1 else { return language }
+    if language == "zh" {
+      if parts[1] == "hant" { return "zh-tw" }
+      if parts[1] == "hans" { return "zh-cn" }
+    }
+    let subtags = parts.dropFirst().map(String.init)
+    guard subtags.allSatisfy({
+      ((2...8).contains($0.count) && $0.allSatisfy(\.isLetter)) || $0.allSatisfy(\.isNumber)
+    }) else { return language }
+    return ([language] + subtags).joined(separator: "-")
+  }
+
+  /// Preserve an explicit supported region while allowing a language-only token to match every
+  /// regional provider code.
+  static func providerCodes(from setting: String?, supportedCodes: [String]) -> [String] {
+    var result: [String] = []
+    for rawToken in (setting ?? "").split(separator: ",") {
+      let token = String(rawToken).trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !token.isEmpty else { continue }
+      let normalized = token.replacingOccurrences(of: "_", with: "-").lowercased()
+      var matches = supportedCodes.filter {
+        $0.replacingOccurrences(of: "_", with: "-").lowercased() == normalized
+      }
+      if matches.isEmpty {
+        let parts = normalized.split(separator: "-")
+        if parts.count > 1, parts[0] == "zh" {
+          let scriptCode = parts[1] == "hant" ? "zh-tw" : (parts[1] == "hans" ? "zh-cn" : "")
+          if !scriptCode.isEmpty {
+            matches = supportedCodes.filter {
+              $0.replacingOccurrences(of: "_", with: "-").lowercased() == scriptCode
+            }
+          }
+        }
+      }
+      if matches.isEmpty, !normalized.contains("-"), let language = canonical(token) {
+        matches = supportedCodes.filter { canonical($0) == language }
+      }
+      for match in matches where !result.contains(match) {
+        result.append(match)
+      }
+    }
+    return result
+  }
+
+  /// Canonical language subtag for one token: `eng` → `en`, `English` → `en`, `pt-BR` → `pt`,
+  /// `简体` → `zh`. `nil` when the token cannot be recognized as a language. A region or script is
+  /// dropped, so a preference for Portuguese matches the subtitles tagged `pt-br`.
+  static func canonical(_ token: String?) -> String? {
+    guard let token else { return nil }
+    let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    // assrt.net describes its subtitles in Chinese, which is not a language tag at all.
+    if let described = describedLanguages[trimmed.lowercased()] { return described }
+    if let language = canonicalTag(trimmed) { return language }
+    // `CFLocale` accepts a language name only in its documented capitalization; SubDL reports
+    // names in lowercase (`english`), so a single-word token gets one retry in title case.
+    let capitalized = trimmed.capitalized
+    if capitalized != trimmed, !trimmed.contains(" ") { return canonicalTag(capitalized) }
+    return nil
+  }
+
+  /// `CFLocale`'s answer for a single token, validated as a language subtag rather than trusted: it
+  /// echoes anything it cannot identify (`klingon`), and passes through codes that name no language.
+  private static func canonicalTag(_ token: String) -> String? {
+    guard let identifier = CFLocaleCreateCanonicalLanguageIdentifierFromString(
+      kCFAllocatorDefault, token as CFString)?.rawValue as? String else { return nil }
+    let subtag = identifier.split(separator: "-", maxSplits: 1)[0]
+      .split(separator: "_", maxSplits: 1)[0].lowercased()
+    guard (2...3).contains(subtag.count), subtag.allSatisfy({ $0.isLetter }),
+          !unassignedSubtokens.contains(subtag) else { return nil }
+    return subtag
+  }
+
+  /// assrt.net `lang.desc` values that name exactly one language. Bilingual descriptions (`双语`,
+  /// `简英`) are deliberately absent: they name two languages, so reading them as a match for one of
+  /// them would be a guess. An unmapped description simply ranks as unknown, which keeps the result
+  /// in the chooser instead of quietly preferring it.
+  private static let describedLanguages: [String: String] = [
+    "简体": "zh", "簡体": "zh", "简体中文": "zh", "简中": "zh", "中文": "zh",
+    "繁体": "zh", "繁體": "zh", "繁体中文": "zh", "繁中": "zh", "中國台灣": "zh", "繁体中文（台湾）": "zh",
+    "英": "en", "英文": "en", "英语": "en", "英語": "en",
+    "日": "ja", "日文": "ja", "日语": "ja", "日語": "ja",
+    "韩": "ko", "韩文": "ko", "韩语": "ko", "韓": "ko", "韓文": "ko", "韓語": "ko",
+    "法": "fr", "法文": "fr", "法语": "fr", "法語": "fr",
+    "德": "de", "德文": "de", "德语": "de", "德語": "de",
+    "西": "es", "西班牙文": "es", "西班牙语": "es",
+    "俄": "ru", "俄文": "ru", "俄语": "ru",
+    "意": "it", "意大利文": "it", "意大利语": "it",
+    "葡": "pt", "葡萄牙文": "pt", "葡萄牙语": "pt",
+  ]
+
+  /// ISO 639 subtags that identify no language, and that `CFLocale` passes through unchanged.
+  private static let unassignedSubtokens: Set<String> = ["und", "mul", "mis", "zxx", "qaa"]
+}
+
+// MARK: - Deciding what to download and what to preselect
+
+/// What a search's results resolve to: the one result that may be downloaded without asking, and
+/// the result the chooser selects for the user.
+///
+/// This is a pure function of values the caller has already computed, so the rule can be checked
+/// directly (`other/check_subtitle_language_preference.sh`) rather than only through a search
+/// against a live provider.
+struct SubtitleSelectionPlan: Equatable {
+  /// Index of the result to download without asking, or `nil` when the chooser must be shown.
+  var autoSelected: Int?
+  /// Index of the result selected in the chooser, or `nil` when nothing resembles the media.
+  var preselected: Int?
+
+  /// Decide what to download and what to preselect.
+  ///
+  /// **Automatic selection** keeps the existing evidence rule: a result qualifies only when it is an
+  /// exact title and identity-anchor match *and* its provider opted in with evidence beyond a
+  /// filename. The *Preferred language* setting then decides between several qualifying results —
+  /// the first preferred language that any of them is in wins, and only if exactly one result is in
+  /// that language. When no qualifying result is in a preferred language the preference has nothing
+  /// to say, so the evidence rule stands alone and a single exact match is still selected.
+  ///
+  /// **Preselection** considers only results that resemble the media at all (a non-zero score or
+  /// provider boost). The match score plus provider boost decides first; preferred language breaks
+  /// ties, so a weak language preference cannot displace a better title match. Provider order decides
+  /// the rest.
+  ///
+  /// - Parameters:
+  ///   - scores: `SubtitleMatchScorer.score` for each result, in provider order.
+  ///   - languageRanks: `SubtitleLanguagePreference.rank` for each result, `nil` when unknown.
+  ///   - canAutomaticallySelect: Each provider's evidence verdict for its result.
+  ///   - selectionBoosts: `verifiedSelectionBoost` for each result.
+  ///   - autoSelectEnabled: The *Automatically select an exactly matching subtitle* setting.
+  /// - Returns: A plan that decides nothing when the inputs do not describe the same results, which
+  ///   leaves the chooser in charge rather than acting on a partial view of the search.
+  static func decide(scores: [Int], languageRanks: [Int?], canAutomaticallySelect: [Bool],
+                     selectionBoosts: [Int], autoSelectEnabled: Bool) -> SubtitleSelectionPlan {
+    let count = scores.count
+    guard count > 0, languageRanks.count == count, canAutomaticallySelect.count == count,
+          selectionBoosts.count == count else {
+      return SubtitleSelectionPlan(autoSelected: nil, preselected: nil)
+    }
+
+    var autoSelected: Int?
+    if autoSelectEnabled {
+      let perfect = (0..<count).filter {
+        scores[$0] == SubtitleMatchScorer.perfectMatch && canAutomaticallySelect[$0]
+      }
+      let ranked = perfect.compactMap { index -> (index: Int, rank: Int)? in
+        guard let rank = languageRanks[index] else { return nil }
+        return (index, rank)
+      }
+      if let best = ranked.map({ $0.rank }).min() {
+        let bestLanguage = ranked.filter { $0.rank == best }
+        if bestLanguage.count == 1 { autoSelected = bestLanguage[0].index }
+      }
+      if autoSelected == nil, perfect.count == 1 { autoSelected = perfect[0] }
+    }
+
+    var preselected: Int?
+    var best: (index: Int, rank: Int, priority: Int)?
+    for index in 0..<count {
+      let priority = scores[index] + selectionBoosts[index]
+      guard priority > 0 else { continue }
+      let rank = languageRanks[index] ?? Int.max
+      if let current = best {
+        guard priority > current.priority || (priority == current.priority && rank < current.rank) else { continue }
+      }
+      best = (index, rank, priority)
+    }
+    preselected = best?.index
+
+    return SubtitleSelectionPlan(autoSelected: autoSelected, preselected: preselected)
   }
 }

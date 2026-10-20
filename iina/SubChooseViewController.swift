@@ -118,8 +118,12 @@ extension OnlineSubtitle {
   /// the case below it would silently select a file the hash had already ruled out. The score is
   /// used only to identify a single exact match and to choose what to preselect.
   ///
-  /// Auto-selection is skipped when several results tie at a perfect match, because choosing one of
-  /// them automatically would be arbitrary.
+  /// The *Preferred language* setting is applied by `SubtitleSelectionPlan`, which decides both of
+  /// those: automatic selection is skipped when several results tie at a perfect match *unless* one
+  /// of them is in a preferred language and no other candidate is, and the language breaks the tie
+  /// for the preselection. So a search that returns the same release in several languages now loads
+  /// the language asked for, while a result whose language no provider could identify is judged on
+  /// its release name alone, as before.
   ///
   /// - Parameters:
   ///   - subs: The search results, in provider order.
@@ -140,35 +144,40 @@ extension OnlineSubtitle {
     // so from this thread would mean mutating a view controller off the main queue.
     guard !subs.isEmpty else { return .value(subs) }
 
+    let mediaTokens = SubtitleMatchScorer.prepareMediaName(mediaName)
     let scores = subs.map {
-      SubtitleMatchScorer.score(releaseName: $0.releaseName, mediaName: mediaName)
+      SubtitleMatchScorer.score(releaseName: $0.releaseName, mediaTokens: mediaTokens)
     }
-    let perfect = scores.enumerated().filter {
-      $0.element == SubtitleMatchScorer.perfectMatch && subs[$0.offset].canAutomaticallySelect
-    }
-    if Preference.bool(for: .autoSelectMatchingSubtitle), perfect.count == 1 {
-      let best = subs[perfect[0].offset]
+    let preferredLanguages = SubtitleLanguagePreference.preferredForSelection(from: Preference.string(for: .subLang))
+    let plan = SubtitleSelectionPlan.decide(
+      scores: scores,
+      languageRanks: subs.map {
+        SubtitleLanguagePreference.rank(of: $0.languageHint, in: preferredLanguages)
+      },
+      canAutomaticallySelect: subs.map { $0.canAutomaticallySelect },
+      selectionBoosts: subs.map { $0.verifiedSelectionBoost },
+      autoSelectEnabled: Preference.bool(for: .autoSelectMatchingSubtitle))
+
+    if let index = plan.autoSelected {
+      let best = subs[index]
       // A score of 100 requires a release name, so this is never nil on this path.
       let name = best.releaseName ?? best.getDescription().name
-      Logger.log("Auto-selecting subtitle \"\(name)\" for \"\(mediaName)\": exact release match",
+      let language = best.languageHint.map { " in \($0)" } ?? ""
+      Logger.log("Auto-selecting subtitle \"\(name)\"\(language) for \"\(mediaName)\": exact release " +
+                 "match, preferred language \(preferredLanguages.joined(separator: ","))",
                  level: .debug, subsystem: Logger.Sub.onlinesub)
       return .value([best])
     }
 
-    // Preselect the highest-scoring result. `max(by:)` keeps the first maximal element, so a tie is
-    // decided by the provider's own ordering. Nothing is preselected when no result resembles the
-    // media at all.
-    let priorities = scores.enumerated().map { $0.element + subs[$0.offset].verifiedSelectionBoost }
-    let best = priorities.enumerated().max { $0.element < $1.element }
-    let preselected = best.flatMap { priorities[$0.offset] > 0 ? $0.offset : nil }
+    let preselected = plan.preselected
 
     return Promise { resolver in
       // Provider requests complete on a URLSession queue, not the main thread, and everything below
       // is AppKit: loading the nib from `chooser.view` and the table/selection/button updates in
       // `reload()`. Presenting them on the calling thread was already wrong for the table reload,
       // and writing the selection made it worse, so hop to main explicitly.
-      DispatchQueue.main.async {
-        guard player.info.state.active, player.info.currentURL == expectedURL else {
+      DispatchQueue.main.async { [player, chooser] in
+        guard player.info.state.loaded, player.info.currentURL == expectedURL, !player.isInMiniPlayer else {
           resolver.reject(CommonError.dismissed)
           return
         }
@@ -181,15 +190,16 @@ extension OnlineSubtitle {
         // promise cannot be left pending with the chooser destroyed. Rejecting routes through the
         // normal error path, which resets `isSearchingOnlineSubtitle`.
         var settled = false
-        let settle: (Bool) -> Void = { wasCancelled in
+        var wasPresented = false
+        let settle: (Bool) -> Void = { [weak player, weak chooser] wasCancelled in
           guard !settled else { return }
           settled = true
-          player.cancelOnlineSubtitleSearch = nil
+          player?.cancelOnlineSubtitleSearch = nil
           if wasCancelled {
-            chooser.userDoneAction = nil
-            chooser.userCanceledAction = nil
-            chooser.context = nil
-            player.hideOSD()
+            chooser?.userDoneAction = nil
+            chooser?.userCanceledAction = nil
+            chooser?.context = nil
+            if wasPresented { player?.hideOSD() }
             resolver.reject(CommonError.dismissed)
           }
         }
@@ -204,8 +214,23 @@ extension OnlineSubtitle {
           resolver.reject(CommonError.canceled)
         }
 
-        player.sendOSD(.foundSub(subs.count), autoHide: false, accessoryView: chooser.view)
-        chooser.reload()
+        player.sendOSD(.foundSub(subs.count),
+                       autoHide: false,
+                       accessoryView: chooser.view,
+                       presentationCheck: { [weak player] in
+                         guard let player else { return false }
+                         return player.info.state.loaded &&
+                           player.info.currentURL == expectedURL &&
+                           !player.isInMiniPlayer
+                       },
+                       onDisplayed: { displayed in
+                         guard displayed else {
+                           settle(true)
+                           return
+                         }
+                         wasPresented = true
+                         chooser.reload()
+                       })
       }
     }
   }

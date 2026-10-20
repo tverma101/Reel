@@ -23,10 +23,10 @@
 "LNk-io-MM7.title" = "Välimuisti:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "RwW-JS-iTv"; */
-"RwW-JS-iTv.title" = "Edellyttää IINA:n uudelleenkäynnistämistä voimaantullakseen.";
+"RwW-JS-iTv.title" = "Edellyttää Reel:n uudelleenkäynnistämistä voimaantullakseen.";
 
 /* Class = "NSTextFieldCell"; title = "IINA will search youtube-dl in this folder. Restart needed."; ObjectID = "YqE-yV-BvQ"; */
-"YqE-yV-BvQ.title" = "IINA hakee youtube-dl tästä kansiosta. Uudelleenkäynnistys vaaditaan.";
+"YqE-yV-BvQ.title" = "Reel hakee youtube-dl tästä kansiosta. Uudelleenkäynnistys vaaditaan.";
 
 /* Class = "NSMenuItem"; title = "Auto"; ObjectID = "aNr-lv-K0r"; */
 "aNr-lv-K0r.title" = "Automaattinen";

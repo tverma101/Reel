@@ -26,7 +26,7 @@
 "6TV-DG-503.title" = "Daftar Putar:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "8kU-8g-VgX"; */
-"8kU-8g-VgX.title" = "Perlu menjalankan ulang IINA untuk dapat berpengaruh.";
+"8kU-8g-VgX.title" = "Perlu menjalankan ulang Reel untuk dapat berpengaruh.";
 
 /* Class = "NSButtonCell"; title = "Only in \"music mode\""; ObjectID = "AVe-9Z-RgQ"; */
 "AVe-9Z-RgQ.title" = "Hanya pada \"mode musik\"";

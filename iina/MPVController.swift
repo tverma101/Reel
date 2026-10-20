@@ -82,11 +82,146 @@ struct MPVHookValue {
   }
 }
 
+/// Makes an MPV hook continuation safe when callbacks race queue overflow or shutdown teardown.
+private final class MPVHookContinuation {
+  private let lock = NSLock()
+  private var wasCalled = false
+  private let body: () -> Void
+
+  init(_ body: @escaping () -> Void) {
+    self.body = body
+  }
+
+  func call() {
+    lock.lock()
+    let shouldCall = !wasCalled
+    wasCalled = true
+    lock.unlock()
+    if shouldCall { body() }
+  }
+}
+
 // Global functions
+
+/// A lock-protected view of the mpv values used by Reel's AirPlay bridge. The bridge samples this
+/// snapshot on the main thread instead of calling synchronous libmpv getters from its timers.
+struct MPVAirPlaySnapshot {
+  /// Advances as soon as the event reader observes START_FILE, fencing restores from the prior item.
+  var fileTransitionGeneration: UInt64 = 0
+  /// Playlist identity paired with the current START_FILE event.
+  var currentPlaylistEntryID: Int64?
+  var audioOutput: String?
+  /// Advances for event-fed or recovery-read AO observations, independently of snapshot fencing.
+  var audioOutputObservedGeneration: UInt64 = 0
+  /// Literal raw async AO targets remain pending until mpv reports a matching value.
+  var pendingRawAudioOutputIntents: [MPVAirPlayPendingAudioOutputIntent] = []
+  /// Raw async selectors have no literal targets; retain them in command order until each AO
+  /// observation can be distinguished from an in-flight bridge write.
+  var pendingRawAudioOutputCommands: [MPVAirPlayPendingRawAudioOutputCommand] = []
+  /// The newest confirmed direct AO intent, cleared if a newer raw async selector has no known
+  /// target. Retained across older bridge restores while it remains valid.
+  var directAudioOutput: String?
+  /// Increments when the direct AO intent changes or is invalidated.
+  var directAudioOutputGeneration: UInt64 = 0
+  /// Increments for accepted direct AO requests, including raw async requests awaiting an event.
+  var audioOutputIntentGeneration: UInt64 = 0
+  /// Orders direct AO actions by invocation, independent of property event delivery order.
+  var nextDirectAudioOutputIntentSequence: UInt64 = 0
+  var nextRawAudioOutputCommandReplyId: UInt64 = 0
+  var rawAudioOutputResolutionInFlight = false
+  var directAudioOutputIntentSequence: UInt64 = 0
+  /// Fences snapshot readbacks against observed updates and in-flight direct `ao` write attempts.
+  /// Setter-reply confirmation uses the cached value and direct-intent generation instead.
+  var audioOutputGeneration: UInt64 = 0
+  /// Prevents route reconciliation while a synchronous `ao` write has not settled yet.
+  var audioOutputChangesInFlight = 0
+  var rebaseStartTime: Bool?
+  var isPaused: Bool?
+  var pausedForCache: Bool?
+  var timePosition: Double?
+  var audioPTS: Double?
+  var duration: Double?
+  var demuxerStartTime: Double?
+  var streamOpenFilename: String?
+  var estimatedVideoFPS: Double?
+  var containerFPS: Double?
+  var speed: Double?
+  var speedObservationGeneration: UInt64 = 0
+  var audioDelay: Double?
+  var audioDelayObservationGeneration: UInt64 = 0
+
+  mutating func resetMediaValues() {
+    pausedForCache = nil
+    timePosition = nil
+    audioPTS = nil
+    duration = nil
+    demuxerStartTime = nil
+    streamOpenFilename = nil
+    estimatedVideoFPS = nil
+    containerFPS = nil
+  }
+}
+
+struct MPVAirPlayTimingOwnership {
+  let fileTransitionGeneration: UInt64
+  let playlistEntryID: Int64
+  let property: String
+  let expectedValue: Double?
+  let allowsNoActivePlaylistEntry: Bool
+}
+
+struct MPVAirPlayPendingAudioOutputIntent {
+  let output: String
+  let intentSequence: UInt64
+}
+
+struct MPVAirPlayPendingRawAudioOutputCommand {
+  let intentSequence: UInt64
+  let replyUserdata: UInt64?
+  let requestedOutput: String?
+  let fallbackAudioOutput: String?
+  var commandResult: Int32?
+}
+
+private enum RawAudioOutputCommandKind {
+  case set
+  case cycle(canConfirmUnchanged: Bool)
+  case cycleValues(values: [String]?, reversed: Bool)
+}
+
+private struct RawAudioOutputCommand {
+  /// Nil means a selector or expanded target whose result cannot be known from its text.
+  let output: String?
+  let isAsynchronous: Bool
+  let kind: RawAudioOutputCommandKind
+  var intentSequence: UInt64 = 0
+}
+
+private struct MPVAirPlayAudioOutputWriteToken {
+  let outputBeforeWrite: String?
+  let intentGenerationBeforeWrite: UInt64
+  let intentSequences: [UInt64]
+}
+
+private struct MPVAirPlaySnapshotRequestState {
+  var generation: UInt64 = 0
+  var pendingTokens = Set<UInt64>()
+  var isDisabled = false
+  var isRecoveringFromQueueOverflow = false
+}
 
 class MPVController: NSObject {
   struct UserData {
     static let screenshot: UInt64 = 1000000
+    static let preferenceOptionCommand: UInt64 = 1000002
+    static let airPlaySnapshotBase: UInt64 = 0xA17A_0000_0000_0000
+    static let airPlayAudioCommandBase: UInt64 = 0xA17B_0000_0000_0000
+    static let rawAudioOutputCommandBase: UInt64 = 0xA17C_0000_0000_0000
+    private static let airPlayAudioCommandMask: UInt64 = 0xFFFF_0000_0000_0000
+
+    static func isAirPlayAudioCommand(_ token: UInt64) -> Bool {
+      (token & airPlayAudioCommandMask) == airPlayAudioCommandBase
+    }
   }
 
   // The mpv_handle
@@ -107,6 +242,61 @@ class MPVController: NSObject {
   ///     never performed while running on this queue's thread and instead is queued for processing by the main thread .
   private lazy var queue = DispatchQueue(label: "com.colliderli.iina.controller",
                                          qos: .userInitiated)
+  /// Owns the two lifecycle hooks whose delivery must not share the busy UI event queue.
+  private let lifecycleHookQueue = DispatchQueue(label: "com.colliderli.iina.lifecycle-hooks",
+                                                  qos: .userInitiated)
+  private struct LifecycleHookInvocation {
+    let hookID: UInt64
+    let name: String
+    let generation: UInt64
+  }
+  /// Created after `mpv_initialize`; accessed only on `lifecycleHookQueue` after setup.
+  private var lifecycleHookClient: OpaquePointer?
+  /// The lifecycle client's state is independent from the primary handle's shutdown marker.
+  private var lifecycleHookShutdown = false
+  private var lifecycleHookGeneration: UInt64 = 0
+  private var lifecycleHookUserdata = Set<UInt64>()
+  @Atomic private var lifecycleHookSafetyAvailable = false
+  @Atomic private var lifecycleHookSetupComplete = false
+  @Atomic private var lifecycleHookHasEverBeenAvailable = false
+  private struct LifecycleHookRecoveryBoundary {
+    var epoch: UInt64 = 0
+    var fileGeneration: UInt64?
+  }
+  @Atomic private var lifecycleHookRecoveryBoundary = LifecycleHookRecoveryBoundary()
+  /// These fields are confined to `lifecycleHookQueue`.
+  private var activeLifecycleHook: LifecycleHookInvocation?
+  private var lifecycleHookRecoveryPending = false
+  private var lifecycleHookRetryAttempt = 0
+  private var lifecycleHookRetryScheduled = false
+  /// Snapshot queries share libmpv's core lock and must not delay the AppKit event thread.
+  private let airPlaySnapshotQueue = DispatchQueue(label: "com.colliderli.iina.airplay-snapshot",
+                                                    qos: .userInitiated)
+  /// Gates queued AirPlay/snapshot/quit calls against the terminal marker. The event reader never
+  /// takes this lock while polling so it can always dispatch hooks that unblock libmpv calls.
+  private let airPlaySnapshotCallLock = NSLock()
+  /// Serializes synchronous `ao` setters so the retained local-output intent follows libmpv write order.
+  private let airPlayAudioOutputWriteLock = NSLock()
+  /// Fences queued output writes against route changes processed on the main thread.
+  private let airPlayRouteOwnershipLock = NSLock()
+  /// Read and written only while `airPlayRouteOwnershipLock` is held.
+  private var airPlayRouteOwnershipGeneration: UInt64 = 0
+  /// Accessed only by the serial mpv event queue; pairs START_FILE with FILE_LOADED or END_FILE.
+  private var activePlaylistLoadTransition: UInt64?
+  /// Exact AirPlay ownership epoch paired with the current START_FILE event.
+  private var activeFileTransitionGeneration: UInt64?
+  @Atomic private var pendingPlaylistLoadTransitions: [UInt64] = []
+
+  // Once the shutdown event is received, the main-thread handler destroys the mpv handle. Wakeup
+  // callbacks can already have queued additional event reads, so those reads must stop before they
+  // can call mpv_wait_event with a destroyed handle.
+  @Atomic private var hasReceivedShutdownEvent = false
+  @Atomic private var airPlaySnapshot = MPVAirPlaySnapshot()
+  @Atomic private var airPlaySnapshotRequests = MPVAirPlaySnapshotRequestState()
+  @Atomic private var airPlayPreStartBarrierGeneration: UInt64?
+
+  var airPlayPlaybackSnapshot: MPVAirPlaySnapshot { airPlaySnapshot }
+  var hasObservedShutdownEvent: Bool { hasReceivedShutdownEvent }
 
   unowned let player: PlayerCore
 
@@ -119,14 +309,21 @@ class MPVController: NSObject {
 
   let observeProperties: [String: mpv_format] = [
     MPVProperty.trackList: MPV_FORMAT_NODE,
+    MPVProperty.playlistCount: MPV_FORMAT_INT64,
+    MPVProperty.playlistCurrentPos: MPV_FORMAT_INT64,
+    MPVProperty.playlistPlayingPos: MPV_FORMAT_INT64,
     MPVProperty.vf: MPV_FORMAT_NONE,
     MPVProperty.af: MPV_FORMAT_NONE,
     MPVProperty.audioDeviceList: MPV_FORMAT_NONE,
+    MPVProperty.streamOpenFilename: MPV_FORMAT_STRING,
+    MPVProperty.duration: MPV_FORMAT_DOUBLE,
+    MPVProperty.demuxerStartTime: MPV_FORMAT_DOUBLE,
     MPVOption.TrackSelection.vid: MPV_FORMAT_INT64,
     MPVOption.TrackSelection.aid: MPV_FORMAT_INT64,
     MPVOption.TrackSelection.sid: MPV_FORMAT_INT64,
     MPVOption.Subtitles.secondarySid: MPV_FORMAT_INT64,
     MPVOption.PlaybackControl.pause: MPV_FORMAT_FLAG,
+    MPVOption.PlaybackControl.rebaseStartTime: MPV_FORMAT_FLAG,
     MPVOption.PlaybackControl.loopPlaylist: MPV_FORMAT_STRING,
     MPVOption.PlaybackControl.loopFile: MPV_FORMAT_STRING,
     MPVProperty.chapter: MPV_FORMAT_INT64,
@@ -136,6 +333,7 @@ class MPVController: NSObject {
     MPVOption.Audio.mute: MPV_FORMAT_FLAG,
     MPVOption.Audio.volume: MPV_FORMAT_DOUBLE,
     MPVOption.Audio.audioDelay: MPV_FORMAT_DOUBLE,
+    MPVOption.Audio.ao: MPV_FORMAT_STRING,
     MPVOption.PlaybackControl.speed: MPV_FORMAT_DOUBLE,
     MPVOption.Subtitles.secondarySubDelay: MPV_FORMAT_DOUBLE,
     MPVOption.Subtitles.secondarySubPos: MPV_FORMAT_DOUBLE,
@@ -400,8 +598,14 @@ class MPVController: NSObject {
       return String(describing: Preference.enum(for: key) as Preference.HardwareDecoderOption)
     }
 
-    setUserOption(PK.audioLanguage, type: .string, forName: MPVOption.TrackSelection.alang,
-                  level: .verbose)
+    setUserOption(PK.audioLanguage, type: .asyncOther, forName: MPVOption.TrackSelection.alang,
+                  level: .verbose) { [weak self] key in
+      self?.preferredTrackLanguage(for: key)
+    }
+    setUserOption(.autoSelectPreferredTrackLanguages, type: .asyncOther,
+                  forName: MPVOption.TrackSelection.alang, level: .verbose) { [weak self] _ in
+      self?.preferredTrackLanguage(for: .audioLanguage)
+    }
     setUserOption(PK.maxVolume, type: .int, forName: MPVOption.Audio.volumeMax, level: .verbose)
 
     let spdifValue = { (key: Preference.Key) -> String in
@@ -459,6 +663,10 @@ class MPVController: NSObject {
     // - Sub
 
     chkErr(setOptionString(MPVOption.Subtitles.subAuto, "no", level: .verbose))
+    setUserOption(.showSecondSubtitleTrack, type: .asyncOther,
+                  forName: MPVOption.Subtitles.secondarySid, level: .verbose) { key in
+      return Preference.bool(for: key) ? "auto" : "no"
+    }
     chkErr(setOptionalOptionString(MPVOption.Subtitles.subCodepage,
                                    Preference.string(for: .defaultEncoding), verboseIfDefault: true))
     player.info.subEncoding = Preference.string(for: .defaultEncoding)
@@ -522,7 +730,14 @@ class MPVController: NSObject {
 
     setUserOption(PK.subPos, type: .float, forName: MPVOption.Subtitles.subPos, verboseIfDefault: true)
 
-    setUserOption(PK.subLang, type: .string, forName: MPVOption.TrackSelection.slang, level: .verbose)
+    setUserOption(PK.subLang, type: .asyncOther, forName: MPVOption.TrackSelection.slang,
+                  level: .verbose) { [weak self] key in
+      self?.preferredTrackLanguage(for: key)
+    }
+    setUserOption(.autoSelectPreferredTrackLanguages, type: .asyncOther,
+                  forName: MPVOption.TrackSelection.slang, level: .verbose) { [weak self] _ in
+      self?.preferredTrackLanguage(for: .subLang)
+    }
 
     setUserOption(PK.displayInLetterBox, type: .bool, forName: MPVOption.Subtitles.subUseMargins,
                   verboseIfDefault: true)
@@ -641,6 +856,9 @@ class MPVController: NSObject {
 
     // Initialize an uninitialized mpv instance. If the mpv instance is already running, an error is returned.
     chkErr(mpv_initialize(mpv))
+    setupCriticalLifecycleHooks()
+
+    applyPreferredTrackOptions()
 
     // The option watch-later-options is not available until after the mpv instance is initialized.
     // Useful to log the value of this option as users often ask about what the Watch Later feature
@@ -712,12 +930,34 @@ class MPVController: NSObject {
   }
 
   func mpvUninitRendering() {
-    guard let mpvRenderContext else { return }
-    mpv_render_context_set_update_callback(mpvRenderContext, nil, nil)
-    mpv_render_context_free(mpvRenderContext)
-    self.mpvRenderContext = nil
-    mpv_destroy(mpv)
-    mpv = nil
+    stopAirPlaySnapshotRequests()
+    if let mpvRenderContext {
+      mpv_render_context_set_update_callback(mpvRenderContext, nil, nil)
+      mpv_render_context_free(mpvRenderContext)
+      self.mpvRenderContext = nil
+    }
+    // A separate strong client owns the critical hooks. Destroy it after any queued event read
+    // has finished, then release the primary handle. Destroying a handle with a pending hook also
+    // continues that hook, so a late main-queue drain callback cannot strand MPV during shutdown.
+    lifecycleHookQueue.sync {
+      lifecycleHookGeneration &+= 1
+      lifecycleHookShutdown = true
+      activeLifecycleHook = nil
+      lifecycleHookRecoveryPending = false
+      lifecycleHookRetryAttempt = 0
+      lifecycleHookRetryScheduled = false
+      $airPlayPreStartBarrierGeneration.withLock { $0 = nil }
+      if let lifecycleHookClient {
+        mpv_set_wakeup_callback(lifecycleHookClient, nil, nil)
+        mpv_destroy(lifecycleHookClient)
+        self.lifecycleHookClient = nil
+      }
+      removeLifecycleHookValues()
+    }
+    if let mpv {
+      mpv_destroy(mpv)
+      self.mpv = nil
+    }
   }
 
   func mpvReportSwap() {
@@ -755,15 +995,25 @@ class MPVController: NSObject {
 
   /// Shutdown this mpv controller.
   func mpvQuit() {
+    // Stop new snapshots now, then remove observers and quit after any active snapshot call. Keep
+    // this barrier off the AppKit thread: libmpv client calls serialize through the core lock.
+    disableAirPlaySnapshotRequests()
     // Remove observers for IINA preference. Must not attempt to change a mpv setting
     // in response to an IINA preference change while mpv is shutting down.
     removeOptionObservers()
-    // Remove observers for mpv properties. Because 0 was passed for reply_userdata when
-    // registering mpv property observers all observers can be removed in one call.
-    mpv_unobserve_property(mpv, 0)
-    // Start mpv quitting. Even though this command is being sent using the synchronous
-    // command API the quit command is special and will be executed by mpv asynchronously.
-    command(.quit, level: .verbose)
+    airPlaySnapshotQueue.async { [self] in
+      self.airPlaySnapshotCallLock.lock()
+      defer { self.airPlaySnapshotCallLock.unlock() }
+      guard !self.hasReceivedShutdownEvent, self.mpv != nil else {
+        return
+      }
+      // Remove all mpv property observers before quit. Because 0 was passed for reply_userdata
+      // when registering mpv property observers, they can all be removed in one call.
+      mpv_unobserve_property(self.mpv, 0)
+      // The quit command is special and mpv executes it asynchronously. Do not hold the gate while
+      // polling events; the sole reader does not take the gate in its poll or hook path.
+      self.command(.quit, level: .verbose)
+    }
   }
 
   // MARK: - Command & property
@@ -783,6 +1033,15 @@ class MPVController: NSObject {
                level: Logger.Level = .debug, returnValueCallback: ((Int32) -> Void)? = nil) {
     guard mpv != nil else { return }
     log("Run command: \(command.rawValue) \(args.compactMap{$0}.joined(separator: " "))", level: level)
+    let directAudioOutput: String?
+    if command.rawValue == "set", args.count >= 2, args[0] == MPVOption.Audio.ao {
+      directAudioOutput = args[1]
+    } else {
+      directAudioOutput = nil
+    }
+    let audioOutputWrite = directAudioOutput.map { _ in
+      beginSynchronousAudioOutputWrite()
+    }
     var cargs = makeCArgs(command, args).map { $0.flatMap { UnsafePointer<CChar>(strdup($0)) } }
     defer {
       for ptr in cargs {
@@ -791,7 +1050,20 @@ class MPVController: NSObject {
         }
       }
     }
+    let changesPlaylist = MPVPlaylistMutationPolicy.invalidatesSnapshot(for: command.rawValue)
+    if changesPlaylist { player.playlistStructureWillChange() }
+    let loadTransitionToken = MPVPlaylistMutationPolicy.beginsFileLoadTransition(
+      for: command.rawValue, arguments: args) ? reservePlaylistLoadTransition() : nil
     let returnValue = mpv_command(self.mpv, &cargs)
+    if changesPlaylist { player.playlistStructureDidChange() }
+    if returnValue < 0, let loadTransitionToken {
+      cancelPendingPlaylistLoadTransition(loadTransitionToken)
+    }
+    if let directAudioOutput, let audioOutputWrite {
+      finishSynchronousAudioOutputWrite(directAudioOutput, result: returnValue,
+                                        writeToken: audioOutputWrite,
+                                        intentSequence: audioOutputWrite.intentSequences.first)
+    }
     if checkError {
       chkErr(returnValue)
     } else if let cb = returnValueCallback {
@@ -799,14 +1071,886 @@ class MPVController: NSObject {
     }
   }
 
-  func command(rawString: String, level: Logger.Level = .debug) -> Int32 {
-    log("Run command: \(rawString)", level: level)
-    return mpv_command_string(mpv, rawString)
+  /// Runs a shutdown-sensitive state save under the client-call gate if shutdown is not observed.
+  /// The event reader waits for this transaction before it proceeds to shutdown cleanup.
+  @discardableResult
+  func performIfNotShutdown(_ body: () -> Void) -> Bool {
+    airPlaySnapshotCallLock.lock()
+    defer { airPlaySnapshotCallLock.unlock() }
+    guard !hasReceivedShutdownEvent, mpv != nil else { return false }
+    body()
+    return true
   }
 
+  /// Submits a lifecycle command only if shutdown has not already been observed. The event reader
+  /// does not hold the client-call gate while polling, so synchronous stop can service unload hooks.
+  @discardableResult
+  func commandIfNotShutdown(_ command: MPVCommand, args: [String?] = [],
+                            level: Logger.Level = .debug) -> Bool {
+    airPlaySnapshotCallLock.lock()
+    defer { airPlaySnapshotCallLock.unlock() }
+    guard !hasReceivedShutdownEvent, mpv != nil else { return false }
+    self.command(command, args: args, level: level)
+    return true
+  }
+
+  private func reservePlaylistLoadTransition() -> UInt64 {
+    let token = player.playlistLoadDidStart()
+    $pendingPlaylistLoadTransitions.withLock { $0.append(token) }
+    return token
+  }
+
+  private func consumeOrStartPlaylistLoadTransition() -> UInt64 {
+    if let token = $pendingPlaylistLoadTransitions.withLock({ pending -> UInt64? in
+      guard !pending.isEmpty else { return nil }
+      return pending.removeFirst()
+    }) {
+      return token
+    }
+    return player.playlistLoadDidStart()
+  }
+
+  private func cancelPendingPlaylistLoadTransition(_ token: UInt64) {
+    let removed = $pendingPlaylistLoadTransitions.withLock { pending -> Bool in
+      guard let index = pending.firstIndex(of: token) else { return false }
+      pending.remove(at: index)
+      return true
+    }
+    if removed { player.playlistLoadDidFinish(token) }
+  }
+
+  func command(rawString: String, level: Logger.Level = .debug) -> Int32 {
+    log("Run command: \(rawString)", level: level)
+    // Key-binding actions enter through mpv_command_string instead of command(_:args:). Track
+    // direct AO changes in single or semicolon-separated raw actions, including `async` prefixes.
+    let parsedAudioOutputCommands = Self.rawCommandAudioOutputs(rawString)
+    let audioOutputWrite: MPVAirPlayAudioOutputWriteToken?
+    if parsedAudioOutputCommands.isEmpty {
+      audioOutputWrite = nil
+    } else {
+      audioOutputWrite = beginSynchronousAudioOutputWrite(intentCount: parsedAudioOutputCommands.count)
+    }
+    let audioOutputCommands: [RawAudioOutputCommand]
+    if let audioOutputWrite {
+      audioOutputCommands = zip(parsedAudioOutputCommands, audioOutputWrite.intentSequences).map {
+        pair in
+        var command = pair.0
+        command.intentSequence = pair.1
+        return command
+      }
+    } else {
+      audioOutputCommands = []
+    }
+    let lastSynchronousAudioOutputCommand = audioOutputCommands.last { !$0.isAsynchronous }
+    let changesPlaylist = MPVPlaylistMutationPolicy.invalidatesSnapshot(in: rawString)
+    if changesPlaylist { player.playlistStructureWillChange() }
+    let hasAsyncAudioOutputCommand = audioOutputCommands.contains(where: \.isAsynchronous)
+    let commandSegments = Self.rawCommandSegments(rawString)
+    let hasMultipleCommands = commandSegments.filter {
+      !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }.count > 1
+    let usesWholeListAudioOutputPath = hasMultipleCommands && !audioOutputCommands.isEmpty
+    let nonemptyCommandSegments = commandSegments.filter {
+      !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    let audioOutputBeforeWholeList = usesWholeListAudioOutputPath
+      ? getString(MPVOption.Audio.ao) : nil
+    let result: Int32
+    let acceptedAsyncAudioOutputCommands: [RawAudioOutputCommand]
+    let completionTrackedSequences: Set<UInt64>
+    var synchronouslyResolvedAudioOutput: (intentSequence: UInt64, output: String?)?
+    if usesWholeListAudioOutputPath {
+      // mpv validates a complete semicolon list before running it. Keep its list execution
+      // semantics, including for sync-only AO lists. `cmd_list` does not propagate child command
+      // failures to this API result, so unchanged readback is accepted only for a literal target or
+      // a selector chain whose result can be simulated without relying on child status.
+      result = mpv_command_string(mpv, rawString)
+      acceptedAsyncAudioOutputCommands = []
+      completionTrackedSequences = []
+      if result >= 0, let finalAudioOutputCommand = audioOutputCommands.last {
+        let output = getString(MPVOption.Audio.ao)
+        if let output {
+          if Self.rawAudioOutputReadbackConfirmsCommands(
+            audioOutputCommands,
+            commandSegments: nonemptyCommandSegments,
+            previousOutput: audioOutputBeforeWholeList, sampledOutput: output) {
+            synchronouslyResolvedAudioOutput = (finalAudioOutputCommand.intentSequence, output)
+          }
+        } else {
+          synchronouslyResolvedAudioOutput = (finalAudioOutputCommand.intentSequence, nil)
+        }
+      }
+    } else if hasAsyncAudioOutputCommand {
+      let execution = executeRawCommandSegments(
+        commandSegments, audioOutputCommands: audioOutputCommands)
+      result = execution.result
+      acceptedAsyncAudioOutputCommands = execution.acceptedAsyncAudioOutputCommands
+      completionTrackedSequences = execution.completionTrackedSequences
+      synchronouslyResolvedAudioOutput = execution.synchronouslyCompletedAudioOutputCommands.last
+    } else {
+      result = mpv_command_string(mpv, rawString)
+      acceptedAsyncAudioOutputCommands = result >= 0
+        ? audioOutputCommands.filter(\.isAsynchronous) : []
+      completionTrackedSequences = []
+    }
+    if usesWholeListAudioOutputPath, result >= 0,
+       let synchronouslyResolvedAudioOutput,
+       synchronouslyResolvedAudioOutput.output == nil {
+      invalidateDirectAudioOutputIntent(
+        intentSequence: synchronouslyResolvedAudioOutput.intentSequence)
+    }
+    if let newestAcceptedAsyncIntent = acceptedAsyncAudioOutputCommands
+      .map(\.intentSequence).max() {
+      // Fence a waiting synchronous restore before releasing the setter lock. Detailed targets
+      // and completion-tracked selectors are registered below while this write lock is held.
+      $airPlaySnapshot.withLock { snapshot in
+        if newestAcceptedAsyncIntent > snapshot.directAudioOutputIntentSequence,
+           !completionTrackedSequences.contains(newestAcceptedAsyncIntent) {
+          snapshot.audioOutputIntentGeneration &+= 1
+        }
+      }
+    }
+    if audioOutputWrite != nil {
+      for command in acceptedAsyncAudioOutputCommands {
+        if completionTrackedSequences.contains(command.intentSequence) {
+          continue
+        } else if synchronouslyResolvedAudioOutput?.intentSequence == command.intentSequence {
+          if synchronouslyResolvedAudioOutput?.output == nil {
+            invalidateDirectAudioOutputIntent(intentSequence: command.intentSequence)
+          }
+          continue
+        } else if let output = command.output {
+          recordAcceptedRawAsyncAudioOutputIntent(output, intentSequence: command.intentSequence)
+        } else if !completionTrackedSequences.contains(command.intentSequence) {
+          // Keep compatibility for a syntactically valid but unsupported expanded raw target.
+          // The completion-tracked path handles standard async selectors and expanded AO writes.
+          invalidateDirectAudioOutputIntent(intentSequence: command.intentSequence)
+        }
+      }
+    }
+    if let audioOutputWrite {
+      // Never publish raw command text as current AO state. Async selectors and expanded values
+      // use the output observed after command completion.
+      let output: String?
+      let intentSequence: UInt64?
+      let recordsDirectAudioOutputIntent: Bool
+      if let synchronouslyResolvedAudioOutput {
+        output = synchronouslyResolvedAudioOutput.output
+        intentSequence = synchronouslyResolvedAudioOutput.intentSequence
+        recordsDirectAudioOutputIntent = true
+      } else if result >= 0, !usesWholeListAudioOutputPath,
+                let command = lastSynchronousAudioOutputCommand {
+        output = command.output ?? getString(MPVOption.Audio.ao)
+        intentSequence = command.intentSequence
+        recordsDirectAudioOutputIntent = true
+      } else {
+        output = nil
+        intentSequence = nil
+        recordsDirectAudioOutputIntent = false
+      }
+      finishSynchronousAudioOutputWrite(output, result: result,
+                                        writeToken: audioOutputWrite,
+                                        intentSequence: intentSequence,
+                                        recordsDirectAudioOutputIntent:
+                                          recordsDirectAudioOutputIntent)
+    }
+    if changesPlaylist { player.playlistStructureDidChange() }
+    return result
+  }
+
+  /// Splits key-binding commands at unquoted semicolons. mpv treats an unquoted `;` as a command
+  /// separator even when preceded by a backslash, and quoted arguments may contain semicolons.
+  static func rawCommandSegments(_ rawString: String) -> [String] {
+    let characters = Array(rawString)
+    var segments: [String] = []
+    var segment = ""
+    var quote: Character?
+    var customQuoteDelimiter: Character?
+    var index = 0
+
+    while index < characters.count {
+      let character = characters[index]
+      if let delimiter = customQuoteDelimiter {
+        if character == delimiter, index + 1 < characters.count, characters[index + 1] == "`" {
+          segment.append(character)
+          segment.append("`")
+          customQuoteDelimiter = nil
+          index += 2
+        } else {
+          segment.append(character)
+          index += 1
+        }
+        continue
+      }
+
+      if let currentQuote = quote {
+        segment.append(character)
+        if currentQuote == "\"", character == "\\", index + 1 < characters.count {
+          segment.append(characters[index + 1])
+          index += 2
+        } else {
+          if character == currentQuote { quote = nil }
+          index += 1
+        }
+        continue
+      }
+
+      if character == "\\", index + 1 < characters.count,
+         characters[index + 1] != ";" {
+        segment.append(character)
+        segment.append(characters[index + 1])
+        index += 2
+      } else if character == "\"" || character == "'" {
+        quote = character
+        segment.append(character)
+        index += 1
+      } else if character == "`", index + 1 < characters.count {
+        segment.append(character)
+        segment.append(characters[index + 1])
+        customQuoteDelimiter = characters[index + 1]
+        index += 2
+      } else if character == ";" {
+        segments.append(segment)
+        segment = ""
+        index += 1
+      } else {
+        segment.append(character)
+        index += 1
+      }
+    }
+    segments.append(segment)
+    return segments
+  }
+
+  /// Preserves quoted whitespace while splitting one already-delimited mpv command into tokens.
+  static func rawCommandTokens(_ command: String) -> [String] {
+    let characters = Array(command)
+    var tokens: [String] = []
+    var token = ""
+    var quote: Character?
+    var customQuoteDelimiter: Character?
+    var index = 0
+
+    func finishToken() {
+      if !token.isEmpty {
+        tokens.append(token)
+        token = ""
+      }
+    }
+
+    while index < characters.count {
+      let character = characters[index]
+      if let delimiter = customQuoteDelimiter {
+        token.append(character)
+        if character == delimiter, index + 1 < characters.count, characters[index + 1] == "`" {
+          token.append("`")
+          customQuoteDelimiter = nil
+          index += 2
+        } else {
+          index += 1
+        }
+        continue
+      }
+
+      if let currentQuote = quote {
+        token.append(character)
+        if currentQuote == "\"", character == "\\", index + 1 < characters.count {
+          token.append(characters[index + 1])
+          index += 2
+        } else {
+          if character == currentQuote { quote = nil }
+          index += 1
+        }
+        continue
+      }
+
+      if character == "\\", index + 1 < characters.count {
+        token.append(character)
+        token.append(characters[index + 1])
+        index += 2
+      } else if character == "\"" || character == "'" {
+        quote = character
+        token.append(character)
+        index += 1
+      } else if character == "`", index + 1 < characters.count {
+        customQuoteDelimiter = characters[index + 1]
+        token.append(character)
+        token.append(characters[index + 1])
+        index += 2
+      } else if character.isWhitespace {
+        finishToken()
+        index += 1
+      } else {
+        token.append(character)
+        index += 1
+      }
+    }
+    finishToken()
+    return tokens
+  }
+
+  /// Decodes only literal tokens we can restore exactly. Expansion and escape syntax is deferred
+  /// to mpv and therefore cannot safely be recorded as the requested AO string.
+  static func literalRawCommandToken(_ token: String) -> String? {
+    guard !token.contains("\\"), !token.contains("$") else { return nil }
+    if token.count >= 2, let first = token.first, (first == "\"" || first == "'"), token.last == first {
+      let value = String(token.dropFirst().dropLast())
+      guard !value.contains(first) else { return nil }
+      return value
+    }
+    if token.first == "`" {
+      let characters = Array(token)
+      guard characters.count >= 4 else { return nil }
+      let delimiter = characters[1]
+      guard characters[characters.count - 2] == delimiter,
+            characters[characters.count - 1] == "`" else { return nil }
+      let value = String(characters[2..<(characters.count - 2)])
+      guard !value.contains(String([delimiter, "`"])) else { return nil }
+      return value
+    }
+    guard !token.contains("\""), !token.contains("'"), !token.contains("`") else { return nil }
+    return token
+  }
+
+  /// Decodes one input.conf token for the libmpv array API. The selector path is used only for
+  /// accepted async AO writes, so preserve mpv's quoting and property-expansion behavior.
+  static func rawCommandArgumentToken(_ token: String) -> String? {
+    if token.count >= 2, token.first == "'", token.last == "'" {
+      let value = String(token.dropFirst().dropLast())
+      return value.contains("'") ? nil : value
+    }
+    if token.count >= 2, token.first == "\"", token.last == "\"" {
+      return try? JSONDecoder().decode(String.self, from: Data(token.utf8))
+    }
+    if token.first == "`" {
+      let characters = Array(token)
+      guard characters.count >= 4 else { return nil }
+      let delimiter = characters[1]
+      guard characters[characters.count - 2] == delimiter,
+            characters[characters.count - 1] == "`" else { return nil }
+      let value = String(characters[2..<(characters.count - 2)])
+      guard !value.contains(String([delimiter, "`"])) else { return nil }
+      return value
+    }
+    guard !token.contains("\"") && !token.contains("'") && !token.contains("`") else {
+      return nil
+    }
+    let characters = Array(token)
+    var value = ""
+    var index = 0
+    while index < characters.count {
+      if characters[index] == "\\" {
+        guard index + 1 < characters.count else { return nil }
+        value.append(characters[index + 1])
+        index += 2
+      } else {
+        value.append(characters[index])
+        index += 1
+      }
+    }
+    return value
+  }
+
+  /// Converts an explicit async AO command to libmpv's reply-bearing async API. That gives Reel a
+  /// completion point even when the selector leaves `ao` unchanged and emits no property event.
+  private static func asyncRawAudioOutputCommandArguments(_ segment: String) -> [String]? {
+    let encodedTokens = rawCommandTokens(segment)
+    var commandIndex = 0
+    var asyncPrefixIndex: Int?
+    var prefixes: [String] = []
+    while commandIndex < encodedTokens.count,
+          let prefix = literalRawCommandToken(encodedTokens[commandIndex]),
+          MPVPlaylistMutationPolicy.commandPrefixes.contains(prefix) {
+      prefixes.append(prefix)
+      if prefix == "async" { asyncPrefixIndex = commandIndex }
+      commandIndex += 1
+    }
+    guard asyncPrefixIndex != nil, commandIndex < encodedTokens.count,
+          let command = literalRawCommandToken(encodedTokens[commandIndex]),
+          command == "set" || command == "cycle" || command == "cycle-values" else {
+      return nil
+    }
+    var propertyIndex = commandIndex + 1
+    if command == "cycle-values", propertyIndex < encodedTokens.count,
+       literalRawCommandToken(encodedTokens[propertyIndex]) == "!reverse" {
+      propertyIndex += 1
+    }
+    guard propertyIndex < encodedTokens.count,
+          literalRawCommandToken(encodedTokens[propertyIndex]) == MPVOption.Audio.ao else {
+      return nil
+    }
+    let decoded = encodedTokens.compactMap(rawCommandArgumentToken)
+    guard decoded.count == encodedTokens.count else { return nil }
+    var arguments = decoded.enumerated().compactMap { index, value in
+      index == asyncPrefixIndex ? nil : value
+    }
+    let osdPrefixes: Set<String> = ["osd-auto", "no-osd", "osd-bar", "osd-msg", "osd-msg-bar"]
+    if prefixes.allSatisfy({ !osdPrefixes.contains($0) }) {
+      arguments.insert("osd-auto", at: 0)
+    }
+    if prefixes.contains("raw") {
+      if !arguments.contains("raw") { arguments.insert("raw", at: 0) }
+    } else if !prefixes.contains("expand-properties") {
+      arguments.insert("expand-properties", at: 0)
+    }
+    return arguments
+  }
+
+  private func executeRawCommandSegments(
+    _ segments: [String], audioOutputCommands: [RawAudioOutputCommand]
+  ) -> (result: Int32, acceptedAsyncAudioOutputCommands: [RawAudioOutputCommand],
+        completionTrackedSequences: Set<UInt64>,
+        synchronouslyCompletedAudioOutputCommands: [(intentSequence: UInt64, output: String?)]) {
+    var audioOutputCommandIndex = 0
+    var acceptedAsyncAudioOutputCommands: [RawAudioOutputCommand] = []
+    var completionTrackedSequences = Set<UInt64>()
+    var synchronouslyCompletedAudioOutputCommands: [(intentSequence: UInt64, output: String?)] = []
+    for segment in segments {
+      guard !segment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+      let parsedAudioOutputCommand = Self.rawCommandAudioOutputs(segment).first
+      let result: Int32
+      if parsedAudioOutputCommand != nil,
+         audioOutputCommandIndex < audioOutputCommands.count {
+        let audioOutputCommand = audioOutputCommands[audioOutputCommandIndex]
+        audioOutputCommandIndex += 1
+        if audioOutputCommand.isAsynchronous,
+           let arguments = Self.asyncRawAudioOutputCommandArguments(segment),
+           let replyUserdata = registerRawAudioOutputCommand(
+             intentSequence: audioOutputCommand.intentSequence,
+             requestedOutput: audioOutputCommand.output, needsReply: true) {
+          let submitResult = asyncRawCommand(arguments, replyUserdata: replyUserdata)
+          if submitResult < 0 {
+            rejectRawAudioOutputCommand(replyUserdata)
+          } else {
+            completionTrackedSequences.insert(audioOutputCommand.intentSequence)
+            acceptedAsyncAudioOutputCommands.append(audioOutputCommand)
+          }
+          result = submitResult
+        } else {
+          result = mpv_command_string(mpv, segment)
+          if audioOutputCommand.isAsynchronous, result >= 0 {
+            acceptedAsyncAudioOutputCommands.append(audioOutputCommand)
+            // The compatibility path retains mpv's input-string parser. Its AO property commands
+            // execute inline even with `async`, so sample only after the command string returns.
+            synchronouslyCompletedAudioOutputCommands.append((
+              audioOutputCommand.intentSequence, getString(MPVOption.Audio.ao)))
+          }
+        }
+      } else {
+        result = mpv_command_string(mpv, segment)
+      }
+      if result < 0 {
+        return (result, acceptedAsyncAudioOutputCommands, completionTrackedSequences,
+                synchronouslyCompletedAudioOutputCommands)
+      }
+    }
+    return (0, acceptedAsyncAudioOutputCommands, completionTrackedSequences,
+            synchronouslyCompletedAudioOutputCommands)
+  }
+
+  private static func rawCommandAudioOutputs(_ rawString: String) -> [RawAudioOutputCommand] {
+    var commands: [RawAudioOutputCommand] = []
+    for segment in rawCommandSegments(rawString) {
+      let tokens = rawCommandTokens(segment)
+      var commandIndex = 0
+      var isAsynchronous = false
+      var cycleValuesReversed = false
+      while commandIndex < tokens.count,
+            let prefix = literalRawCommandToken(tokens[commandIndex]),
+            MPVPlaylistMutationPolicy.commandPrefixes.contains(prefix) {
+        if prefix == "async" { isAsynchronous = true }
+        commandIndex += 1
+      }
+      guard commandIndex < tokens.count,
+            let command = literalRawCommandToken(tokens[commandIndex]) else { continue }
+      var propertyIndex = commandIndex + 1
+      if command == "cycle-values",
+         propertyIndex < tokens.count,
+         literalRawCommandToken(tokens[propertyIndex]) == "!reverse" {
+        cycleValuesReversed = true
+        propertyIndex += 1
+      }
+      guard propertyIndex < tokens.count,
+            literalRawCommandToken(tokens[propertyIndex]) == MPVOption.Audio.ao else { continue }
+      let output: String?
+      let kind: RawAudioOutputCommandKind
+      switch command {
+      case "set":
+        guard propertyIndex + 1 < tokens.count else { continue }
+        output = literalRawCommandToken(tokens[propertyIndex + 1])
+        kind = .set
+      case "cycle":
+        output = nil
+        let arguments = tokens.dropFirst(propertyIndex + 1)
+        var unchangedReadbackCanConfirmIntent = false
+        if arguments.isEmpty {
+          unchangedReadbackCanConfirmIntent = true
+        } else if arguments.count == 1, let direction = arguments.first,
+                  ["up", "down"].contains(literalRawCommandToken(direction) ?? "") {
+          unchangedReadbackCanConfirmIntent = true
+        }
+        kind = .cycle(canConfirmUnchanged: unchangedReadbackCanConfirmIntent)
+      case "cycle-values":
+        guard propertyIndex + 1 < tokens.count else { continue }
+        output = nil
+        let valueTokens = tokens.dropFirst(propertyIndex + 1)
+        let literalValues = valueTokens.map(literalRawCommandToken)
+        let values = literalValues.allSatisfy({ $0 != nil })
+          ? literalValues.compactMap { $0 } : nil
+        kind = .cycleValues(values: values, reversed: cycleValuesReversed)
+      default:
+        continue
+      }
+      commands.append(RawAudioOutputCommand(
+        output: output, isAsynchronous: isAsynchronous, kind: kind))
+    }
+    return commands
+  }
+
+  private static func rawAudioOutputReadbackConfirmsCommands(
+    _ commands: [RawAudioOutputCommand], commandSegments: [String],
+    previousOutput: String?, sampledOutput: String
+  ) -> Bool {
+    guard let lastCommand = commands.last else { return false }
+    if lastCommand.output == sampledOutput { return true }
+    guard let previousOutput else { return false }
+    if previousOutput != sampledOutput { return true }
+    var matchedAudioOutputCommands = 0
+    for segment in commandSegments {
+      let parsedCommands = rawCommandAudioOutputs(segment)
+      if parsedCommands.count == 1 {
+        matchedAudioOutputCommands += 1
+      } else if !parsedCommands.isEmpty || !rawCommandIsDisplayOnly(segment) {
+        return false
+      }
+    }
+    guard matchedAudioOutputCommands == commands.count else { return false }
+    if commands.count == 1,
+       case .cycle(canConfirmUnchanged: true) = commands[0].kind {
+      return true
+    }
+
+    var simulatedOutput = previousOutput
+    for command in commands {
+      switch command.kind {
+      case .set:
+        guard let output = command.output else { return false }
+        simulatedOutput = output
+      case .cycle:
+        // A multi-command list cannot predict the currently available AO choice list.
+        return false
+      case let .cycleValues(values, reversed):
+        guard let values, !values.isEmpty, Set(values).count == values.count,
+              let currentIndex = values.firstIndex(of: simulatedOutput) else { return false }
+        let step = reversed ? values.count - 1 : 1
+        simulatedOutput = values[(currentIndex + step) % values.count]
+      }
+    }
+    return simulatedOutput == sampledOutput
+  }
+
+  /// Display-only commands may accompany a literal AO selector without obscuring its readback.
+  private static func rawCommandIsDisplayOnly(_ segment: String) -> Bool {
+    let tokens = rawCommandTokens(segment)
+    var commandIndex = 0
+    while commandIndex < tokens.count,
+          let prefix = literalRawCommandToken(tokens[commandIndex]),
+          MPVPlaylistMutationPolicy.commandPrefixes.contains(prefix) {
+      commandIndex += 1
+    }
+    guard commandIndex < tokens.count,
+          let command = literalRawCommandToken(tokens[commandIndex]) else { return false }
+    return command == "show-text" || command == "print-text"
+  }
+
+  private func recordDirectAudioOutputIntent(_ output: String, intentSequence: UInt64,
+                                            in snapshot: inout MPVAirPlaySnapshot) {
+    guard intentSequence > snapshot.directAudioOutputIntentSequence else { return }
+    snapshot.directAudioOutput = output
+    snapshot.directAudioOutputIntentSequence = intentSequence
+    snapshot.directAudioOutputGeneration &+= 1
+    snapshot.audioOutputIntentGeneration &+= 1
+    snapshot.pendingRawAudioOutputIntents.removeAll { $0.intentSequence <= intentSequence }
+    snapshot.pendingRawAudioOutputCommands.removeAll { $0.intentSequence <= intentSequence }
+    snapshot.rawAudioOutputResolutionInFlight = false
+  }
+
+  private func invalidateDirectAudioOutputIntent(intentSequence: UInt64) {
+    _ = registerRawAudioOutputCommand(intentSequence: intentSequence, requestedOutput: nil,
+                                       needsReply: false)
+  }
+
+  private func registerRawAudioOutputCommand(intentSequence: UInt64,
+                                              requestedOutput: String?,
+                                              needsReply: Bool) -> UInt64? {
+    $airPlaySnapshot.withLock { snapshot in
+      guard intentSequence > snapshot.directAudioOutputIntentSequence else { return nil }
+      snapshot.nextRawAudioOutputCommandReplyId &+= 1
+      let replyUserdata = needsReply
+        ? UserData.rawAudioOutputCommandBase &+ snapshot.nextRawAudioOutputCommandReplyId
+        : nil
+      let fallback = snapshot.pendingRawAudioOutputCommands.first?.fallbackAudioOutput
+        ?? [snapshot.directAudioOutput, snapshot.audioOutput]
+          .compactMap({ $0 }).first(where: { $0 != "null" })
+      snapshot.directAudioOutput = nil
+      snapshot.directAudioOutputIntentSequence = intentSequence
+      snapshot.directAudioOutputGeneration &+= 1
+      snapshot.audioOutputIntentGeneration &+= 1
+      snapshot.pendingRawAudioOutputIntents.removeAll { $0.intentSequence <= intentSequence }
+      snapshot.pendingRawAudioOutputCommands.append(MPVAirPlayPendingRawAudioOutputCommand(
+        intentSequence: intentSequence,
+        replyUserdata: replyUserdata,
+        requestedOutput: requestedOutput,
+        fallbackAudioOutput: fallback,
+        commandResult: needsReply ? nil : 0))
+      snapshot.rawAudioOutputResolutionInFlight = false
+      return replyUserdata
+    }
+  }
+
+  private func rejectRawAudioOutputCommand(_ replyUserdata: UInt64) {
+    $airPlaySnapshot.withLock { snapshot in
+      guard let index = snapshot.pendingRawAudioOutputCommands.firstIndex(
+        where: { $0.replyUserdata == replyUserdata }) else { return }
+      let selector = snapshot.pendingRawAudioOutputCommands.remove(at: index)
+      if snapshot.pendingRawAudioOutputCommands.isEmpty,
+         snapshot.directAudioOutputIntentSequence == selector.intentSequence,
+         !snapshot.pendingRawAudioOutputIntents.contains(where: {
+           $0.intentSequence > selector.intentSequence
+         }) {
+        snapshot.directAudioOutput = selector.fallbackAudioOutput
+        snapshot.directAudioOutputGeneration &+= 1
+        snapshot.audioOutputIntentGeneration &+= 1
+      }
+      snapshot.rawAudioOutputResolutionInFlight = false
+    }
+    DispatchQueue.main.async { [weak self] in
+      self?.player.airPlayAudio.playbackSnapshotChanged()
+    }
+  }
+
+  /// Records command completion; a fresh AO readback after every queued selector has completed
+  /// resolves no-op selectors and coalesced property changes without guessing from event order.
+  @discardableResult
+  private func rawAsyncAudioOutputCommandCompleted(_ replyUserdata: UInt64,
+                                                       result: Int32) -> Bool {
+    let matched = $airPlaySnapshot.withLock { snapshot -> Bool in
+      guard let index = snapshot.pendingRawAudioOutputCommands.firstIndex(
+        where: { $0.replyUserdata == replyUserdata }) else { return false }
+      snapshot.pendingRawAudioOutputCommands[index].commandResult = result
+      return true
+    }
+    if matched { scheduleRawAudioOutputCommandReconciliation() }
+    return matched
+  }
+
+  private func scheduleRawAudioOutputCommandReconciliation() {
+    airPlaySnapshotQueue.async { [weak self] in
+      guard let self else { return }
+      self.airPlaySnapshotCallLock.lock()
+      let sampleState = self.$airPlaySnapshot.withLock { snapshot -> (
+        selectorReplyIds: [UInt64?], latestIntentSequence: UInt64, fallbackAudioOutput: String?,
+        hasSuccessfulCommand: Bool, audioOutputGeneration: UInt64, intentGeneration: UInt64
+      )? in
+        guard !self.hasReceivedShutdownEvent, self.mpv != nil,
+              !snapshot.rawAudioOutputResolutionInFlight,
+              !snapshot.pendingRawAudioOutputCommands.isEmpty,
+              snapshot.pendingRawAudioOutputCommands.allSatisfy({ $0.commandResult != nil }),
+              snapshot.audioOutputChangesInFlight == 0 else { return nil }
+        let latestIntentSequence = snapshot.pendingRawAudioOutputCommands
+          .map(\.intentSequence).max() ?? 0
+        guard !snapshot.pendingRawAudioOutputIntents.contains(where: {
+          $0.intentSequence > latestIntentSequence
+        }) else { return nil }
+        snapshot.rawAudioOutputResolutionInFlight = true
+        return (
+          snapshot.pendingRawAudioOutputCommands.map(\.replyUserdata),
+          latestIntentSequence,
+          snapshot.pendingRawAudioOutputCommands.first?.fallbackAudioOutput,
+          snapshot.pendingRawAudioOutputCommands.contains(where: { ($0.commandResult ?? -1) >= 0 }),
+          snapshot.audioOutputGeneration,
+          snapshot.audioOutputIntentGeneration
+        )
+      }
+      guard let sampleState else {
+        self.airPlaySnapshotCallLock.unlock()
+        return
+      }
+      let audioOutput = self.getString(MPVOption.Audio.ao)
+      self.airPlaySnapshotCallLock.unlock()
+
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        let observation = self.$airPlaySnapshot.withLock { snapshot -> (String, UInt64)? in
+          guard snapshot.rawAudioOutputResolutionInFlight,
+                snapshot.pendingRawAudioOutputCommands.map(\.replyUserdata)
+                  == sampleState.selectorReplyIds,
+                snapshot.audioOutputGeneration == sampleState.audioOutputGeneration,
+                snapshot.audioOutputIntentGeneration == sampleState.intentGeneration,
+                snapshot.audioOutputChangesInFlight == 0,
+                !snapshot.pendingRawAudioOutputIntents.contains(where: {
+                  $0.intentSequence > sampleState.latestIntentSequence
+                }) else {
+            snapshot.rawAudioOutputResolutionInFlight = false
+            return nil
+          }
+          if let audioOutput {
+            self.observeAudioOutput(audioOutput, in: &snapshot)
+          }
+          let latestSuccessfulCommand = snapshot.pendingRawAudioOutputCommands
+            .last(where: { ($0.commandResult ?? -1) >= 0 })
+          let resolvedOutput: String?
+          if latestSuccessfulCommand?.requestedOutput == "null" {
+            resolvedOutput = "null"
+          } else if sampleState.hasSuccessfulCommand {
+            resolvedOutput = audioOutput.flatMap({ $0 == "null" ? nil : $0 })
+              ?? sampleState.fallbackAudioOutput
+          } else {
+            resolvedOutput = sampleState.fallbackAudioOutput
+          }
+          snapshot.directAudioOutput = resolvedOutput
+          snapshot.directAudioOutputIntentSequence = max(
+            snapshot.directAudioOutputIntentSequence, sampleState.latestIntentSequence)
+          snapshot.directAudioOutputGeneration &+= 1
+          snapshot.audioOutputIntentGeneration &+= 1
+          snapshot.pendingRawAudioOutputCommands.removeAll {
+            $0.intentSequence <= sampleState.latestIntentSequence
+          }
+          snapshot.rawAudioOutputResolutionInFlight = false
+          guard let audioOutput else { return nil }
+          return (audioOutput, snapshot.audioOutputObservedGeneration)
+        }
+        if let (audioOutput, generation) = observation {
+          self.player.airPlayAudio.audioOutputObservationChanged(audioOutput,
+                                                                generation: generation)
+        } else {
+          self.player.airPlayAudio.playbackSnapshotChanged()
+          let shouldRetry = self.$airPlaySnapshot.withLock { snapshot in
+            !snapshot.rawAudioOutputResolutionInFlight
+              && !snapshot.pendingRawAudioOutputCommands.isEmpty
+              && snapshot.pendingRawAudioOutputCommands.allSatisfy({ $0.commandResult != nil })
+              && !snapshot.pendingRawAudioOutputIntents.contains(where: { intent in
+                intent.intentSequence > (snapshot.pendingRawAudioOutputCommands
+                  .map(\.intentSequence).max() ?? 0)
+              })
+          }
+          if shouldRetry {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+              self?.scheduleRawAudioOutputCommandReconciliation()
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /// Confirms a bridge-owned `ao` write if the cached value is still its pre-submit value (or has
+  /// already reached the target) and no newer direct intent superseded it. Repeated delayed events
+  /// for the old value do not veto a successful setter reply.
+  func confirmAirPlayAudioOutput(_ output: String, ifStillOutput previousOutput: String?,
+                                andNoNewerIntentThan intentGeneration: UInt64) {
+    $airPlaySnapshot.withLock { snapshot in
+      guard (snapshot.audioOutput == previousOutput || snapshot.audioOutput == output),
+            snapshot.audioOutputIntentGeneration == intentGeneration else { return }
+      snapshot.audioOutput = output
+      snapshot.audioOutputGeneration &+= 1
+    }
+  }
+
+  /// Applies an observed AO value and consumes only the newest matching raw async request.
+  private func observeAudioOutput(_ output: String?, in snapshot: inout MPVAirPlaySnapshot) {
+    snapshot.audioOutput = output
+    snapshot.audioOutputGeneration &+= 1
+    snapshot.audioOutputObservedGeneration &+= 1
+    guard let output,
+          let matchingIndex = snapshot.pendingRawAudioOutputIntents.indices
+            .filter({ snapshot.pendingRawAudioOutputIntents[$0].output == output })
+            .max(by: {
+              snapshot.pendingRawAudioOutputIntents[$0].intentSequence
+                < snapshot.pendingRawAudioOutputIntents[$1].intentSequence
+            }) else { return }
+    let intent = snapshot.pendingRawAudioOutputIntents[matchingIndex]
+    if intent.intentSequence > snapshot.directAudioOutputIntentSequence {
+      recordDirectAudioOutputIntent(output, intentSequence: intent.intentSequence, in: &snapshot)
+    } else {
+      snapshot.pendingRawAudioOutputIntents.removeAll { $0.intentSequence <= intent.intentSequence }
+    }
+  }
+
+  /// Resolves the accepted selector batch against one readback after its command replies settle.
+  /// One final value is authoritative for a batch, including when intermediate property events
+  /// were coalesced or the selectors left AO unchanged.
+  private func resolveRawAudioOutputCommandsFromSample(
+    _ sampledOutput: String?, assumeCommandsCompleted: Bool,
+    in snapshot: inout MPVAirPlaySnapshot
+  ) {
+    guard !snapshot.pendingRawAudioOutputCommands.isEmpty else { return }
+    if assumeCommandsCompleted {
+      for index in snapshot.pendingRawAudioOutputCommands.indices
+        where snapshot.pendingRawAudioOutputCommands[index].commandResult == nil {
+        snapshot.pendingRawAudioOutputCommands[index].commandResult = 0
+      }
+    }
+    guard snapshot.pendingRawAudioOutputCommands.allSatisfy({ $0.commandResult != nil }),
+          let latestIntentSequence = snapshot.pendingRawAudioOutputCommands
+            .map(\.intentSequence).max(),
+          !snapshot.pendingRawAudioOutputIntents.contains(where: {
+            $0.intentSequence > latestIntentSequence
+          }) else { return }
+    let selectors = snapshot.pendingRawAudioOutputCommands.filter {
+      $0.intentSequence <= latestIntentSequence
+    }
+    let fallbackOutput = selectors.first?.fallbackAudioOutput
+    let lastSuccessfulCommand = selectors.last(where: { ($0.commandResult ?? -1) >= 0 })
+    let selectedOutput: String?
+    if lastSuccessfulCommand?.requestedOutput == "null" {
+      selectedOutput = "null"
+    } else if lastSuccessfulCommand != nil {
+      selectedOutput = sampledOutput.flatMap({ $0 == "null" ? nil : $0 }) ?? fallbackOutput
+    } else {
+      selectedOutput = fallbackOutput
+    }
+    snapshot.directAudioOutput = selectedOutput
+    snapshot.directAudioOutputIntentSequence = max(
+      snapshot.directAudioOutputIntentSequence, latestIntentSequence)
+    snapshot.directAudioOutputGeneration &+= 1
+    snapshot.audioOutputIntentGeneration &+= 1
+    snapshot.pendingRawAudioOutputCommands.removeAll {
+      $0.intentSequence <= latestIntentSequence
+    }
+    snapshot.rawAudioOutputResolutionInFlight = false
+  }
+
+  private func recordAcceptedRawAsyncAudioOutputIntent(_ output: String, intentSequence: UInt64) {
+    $airPlaySnapshot.withLock { snapshot in
+      guard intentSequence > snapshot.directAudioOutputIntentSequence else { return }
+      snapshot.pendingRawAudioOutputCommands.removeAll { $0.intentSequence <= intentSequence }
+      if snapshot.audioOutput == output || output == "null" {
+        // `null` is a valid output used by Reel itself, so a later bridge write cannot prove
+        // whether a pending request to select it came from the user or from AirPlay.
+        recordDirectAudioOutputIntent(output, intentSequence: intentSequence, in: &snapshot)
+        return
+      }
+      // Keep the older output intent until this async request is observed, but do not let a
+      // bridge setter reply publish over the newer accepted request in the meantime.
+      snapshot.audioOutputIntentGeneration &+= 1
+      snapshot.pendingRawAudioOutputIntents.append(MPVAirPlayPendingAudioOutputIntent(
+        output: output, intentSequence: intentSequence))
+      snapshot.pendingRawAudioOutputIntents.sort { $0.intentSequence < $1.intentSequence }
+      if snapshot.pendingRawAudioOutputIntents.count > 16 {
+        snapshot.pendingRawAudioOutputIntents.removeFirst(
+          snapshot.pendingRawAudioOutputIntents.count - 16)
+      }
+    }
+    DispatchQueue.main.async { [weak self] in
+      self?.player.airPlayAudio.playbackSnapshotChanged()
+    }
+  }
+
+  @discardableResult
   func asyncCommand(_ command: MPVCommand, args: [String?] = [], checkError: Bool = true,
-                    replyUserdata: UInt64, level: Logger.Level = .debug) {
-    guard mpv != nil else { return }
+                    replyUserdata: UInt64, level: Logger.Level = .debug) -> Int32 {
+    guard mpv != nil else { return MPV_ERROR_UNINITIALIZED.rawValue }
     log("Asynchronously run command: \(command.rawValue) \(args.compactMap{$0}.joined(separator: " "))",
         level: level)
     var cargs = makeCArgs(command, args).map { $0.flatMap { UnsafePointer<CChar>(strdup($0)) } }
@@ -821,10 +1965,371 @@ class MPVController: NSObject {
     if checkError {
       chkErr(returnValue)
     }
+    return returnValue
+  }
+
+  @discardableResult
+  private func asyncRawCommand(_ arguments: [String], replyUserdata: UInt64) -> Int32 {
+    guard mpv != nil else { return MPV_ERROR_UNINITIALIZED.rawValue }
+    var cargs = arguments.map { UnsafePointer<CChar>(strdup($0)) }
+    cargs.append(nil)
+    defer {
+      for pointer in cargs where pointer != nil {
+        free(UnsafeMutablePointer(mutating: pointer!))
+      }
+    }
+    return mpv_command_async(mpv, replyUserdata, &cargs)
+  }
+
+  /// Records a main-thread route transition so queued audio-output writes can detect stale
+  /// preflight decisions before they enter libmpv.
+  func advanceAirPlayRouteOwnershipGeneration() {
+    airPlayRouteOwnershipLock.lock()
+    airPlayRouteOwnershipGeneration &+= 1
+    airPlayRouteOwnershipLock.unlock()
+  }
+
+  /// Returns the route epoch used by a bridge command's main-thread preflight.
+  func airPlayRouteOwnershipGenerationSnapshot() -> UInt64 {
+    airPlayRouteOwnershipLock.lock()
+    let generation = airPlayRouteOwnershipGeneration
+    airPlayRouteOwnershipLock.unlock()
+    return generation
+  }
+
+  /// Submit an AirPlay request away from AppKit and report immediate errors on the main queue.
+  /// Snapshot batches, AirPlay requests, and quit share this serial queue and shutdown gate.
+  func submitAirPlayCommand(
+    ifAudioOutputIntentGeneration expectedIntentGeneration: UInt64? = nil,
+    ifRouteOwnershipGeneration expectedRouteOwnershipGeneration: UInt64? = nil,
+    ifTimingOwnership timingOwnership: MPVAirPlayTimingOwnership? = nil,
+    submission: @escaping () -> Int32,
+    completion: @escaping (Int32, Bool) -> Void
+  ) {
+    airPlaySnapshotQueue.async { [weak self] in
+      guard let self else { return }
+      self.airPlaySnapshotCallLock.lock()
+      guard !self.hasReceivedShutdownEvent, self.mpv != nil else {
+        self.airPlaySnapshotCallLock.unlock()
+        return
+      }
+      if expectedIntentGeneration != nil {
+        // Acquire the possibly contended lock before taking the route lock. Direct plugin AO
+        // setters hold this across synchronous libmpv calls; route callbacks must not wait behind
+        // them while a bridge submission is queued.
+        self.airPlayAudioOutputWriteLock.lock()
+      }
+      if let expectedRouteOwnershipGeneration {
+        // Serialize route changes only with libmpv's async enqueue call. Unlike the synchronous
+        // overflow fallback, this call does not wait for command completion or core reconfigure.
+        self.airPlayRouteOwnershipLock.lock()
+        guard self.airPlayRouteOwnershipGeneration == expectedRouteOwnershipGeneration else {
+          self.airPlayRouteOwnershipLock.unlock()
+          if expectedIntentGeneration != nil {
+            self.airPlayAudioOutputWriteLock.unlock()
+          }
+          self.airPlaySnapshotCallLock.unlock()
+          DispatchQueue.main.async { [weak self] in
+            guard let self, !self.hasReceivedShutdownEvent else { return }
+            completion(0, true)
+          }
+          return
+        }
+      }
+      if let expectedIntentGeneration {
+        // Serialize the last generation check with direct AO intent registration and its libmpv
+        // submission. A bridge-owned AO write that passed main-thread preflight can otherwise be
+        // enqueued here after a newer direct user choice.
+        let currentIntentGeneration = self.$airPlaySnapshot.withLock {
+          $0.audioOutputIntentGeneration
+        }
+        guard currentIntentGeneration == expectedIntentGeneration else {
+          if expectedRouteOwnershipGeneration != nil {
+            self.airPlayRouteOwnershipLock.unlock()
+          }
+          self.airPlayAudioOutputWriteLock.unlock()
+          self.airPlaySnapshotCallLock.unlock()
+          DispatchQueue.main.async { [weak self] in
+            guard let self, !self.hasReceivedShutdownEvent else { return }
+            completion(0, true)
+          }
+          return
+        }
+      }
+      let result: Int32
+      if let timingOwnership {
+        // Check both the event-fed state and libmpv's live state immediately before enqueue.
+        // The playback core can advance while its detached event reader still has START_FILE or a
+        // timing property event waiting to be consumed.
+        let submittedResult = self.$airPlaySnapshot.withLock { snapshot -> Int32? in
+          let currentValue: Double?
+          switch timingOwnership.property {
+          case MPVOption.PlaybackControl.speed:
+            currentValue = snapshot.speed
+          case MPVOption.Audio.audioDelay:
+            currentValue = snapshot.audioDelay
+          default:
+            currentValue = nil
+          }
+          let livePlaylistEntryID = self.activePlaylistEntryIDIfAvailable()
+          let ownsLiveEntry = self.isAirPlayPreStartBarrierActive(
+            for: timingOwnership.fileTransitionGeneration) || (timingOwnership.allowsNoActivePlaylistEntry
+              ? (livePlaylistEntryID == nil || livePlaylistEntryID == timingOwnership.playlistEntryID)
+              : livePlaylistEntryID == timingOwnership.playlistEntryID)
+          let liveTimingValue = timingOwnership.expectedValue == nil
+            ? nil : self.getDoubleIfAvailable(timingOwnership.property)
+          let ownsTimingValue: Bool
+          if let expectedValue = timingOwnership.expectedValue {
+            ownsTimingValue = currentValue.map {
+              AirPlayTimingRestorePolicy.stillOwnsValue($0, expectedValue: expectedValue)
+            } == true && liveTimingValue.map {
+              AirPlayTimingRestorePolicy.stillOwnsValue($0, expectedValue: expectedValue)
+            } == true
+          } else {
+            ownsTimingValue = true
+          }
+          guard snapshot.fileTransitionGeneration == timingOwnership.fileTransitionGeneration,
+                snapshot.currentPlaylistEntryID == timingOwnership.playlistEntryID,
+                ownsLiveEntry, ownsTimingValue else { return nil }
+          return submission()
+        }
+        guard let submittedResult else {
+          if expectedRouteOwnershipGeneration != nil {
+            self.airPlayRouteOwnershipLock.unlock()
+          }
+          if expectedIntentGeneration != nil {
+            self.airPlayAudioOutputWriteLock.unlock()
+          }
+          self.airPlaySnapshotCallLock.unlock()
+          DispatchQueue.main.async { [weak self] in
+            guard let self, !self.hasReceivedShutdownEvent else { return }
+            completion(0, true)
+          }
+          return
+        }
+        result = submittedResult
+      } else {
+        result = submission()
+      }
+      if expectedRouteOwnershipGeneration != nil {
+        self.airPlayRouteOwnershipLock.unlock()
+      }
+      if expectedIntentGeneration != nil {
+        self.airPlayAudioOutputWriteLock.unlock()
+      }
+      self.airPlaySnapshotCallLock.unlock()
+      guard !self.hasReceivedShutdownEvent else { return }
+      let completionResult: Int32
+      if result == MPV_ERROR_EVENT_QUEUE_FULL.rawValue {
+        completionResult = self.beginAirPlayEventQueueOverflowRecovery()
+          ? result : MPV_ERROR_UNINITIALIZED.rawValue
+      } else {
+        completionResult = result
+      }
+      DispatchQueue.main.async { [weak self] in
+        guard let self, !self.hasReceivedShutdownEvent else { return }
+        completion(completionResult, false)
+      }
+    }
+  }
+
+  /// Restore Reel's saved local output after async AirPlay restoration hits sustained queue
+  /// pressure. This bypasses the bounded async retry queue, runs away from AppKit, and stays
+  /// serialized with snapshot calls and shutdown. The event reader remains free to drain events.
+  func restoreAirPlayAudioOutput(_ output: String, ifNoNewerIntentThan intentGeneration: UInt64,
+                                ifRouteOwnershipUnchangedSince routeGeneration: UInt64,
+                                completion: @escaping (Int32, Bool) -> Void) {
+    airPlaySnapshotQueue.async { [weak self] in
+      guard let self else { return }
+      if !self.hasReceivedShutdownEvent, let mpv = self.mpv {
+        // Make sure previous accepted async requests have finished before using the synchronous
+        // client API. The event reader is a separate queue and continues to service their replies.
+        mpv_wait_async_requests(mpv)
+      }
+
+      self.airPlaySnapshotCallLock.lock()
+      let result: Int32
+      let wasSuperseded: Bool
+      if self.hasReceivedShutdownEvent || self.mpv == nil {
+        result = MPV_ERROR_UNINITIALIZED.rawValue
+        wasSuperseded = false
+      } else if self.airPlayRouteOwnershipGenerationSnapshot() != routeGeneration {
+        // The failed async restore must be resolved against current route ownership on main.
+        result = 0
+        wasSuperseded = true
+      } else {
+        let writeToken = self.beginSynchronousAudioOutputWrite(recordsDirectAudioOutputIntent: false)
+        if writeToken.intentGenerationBeforeWrite != intentGeneration {
+          self.finishSynchronousAudioOutputWrite(
+            nil, result: MPV_ERROR_UNINITIALIZED.rawValue, writeToken: writeToken,
+            intentSequence: nil, recordsDirectAudioOutputIntent: false)
+          result = 0
+          wasSuperseded = true
+        } else {
+          let setResult = mpv_set_property_string(self.mpv, MPVOption.Audio.ao, output)
+          self.finishSynchronousAudioOutputWrite(
+            output, result: setResult, writeToken: writeToken, intentSequence: nil,
+            recordsDirectAudioOutputIntent: false)
+          if setResult < 0 {
+            let routeChanged = self.airPlayRouteOwnershipGenerationSnapshot() != routeGeneration
+            result = routeChanged ? 0 : setResult
+            wasSuperseded = routeChanged
+          } else if self.airPlayRouteOwnershipGenerationSnapshot() != routeGeneration {
+            // Do not reload the local output after a reconnect. Main-thread route reconciliation
+            // will either reclaim it or enqueue the full restore when the route is unavailable.
+            result = 0
+            wasSuperseded = true
+          } else {
+            result = self.command(rawString: "ao-reload", level: .warning)
+            wasSuperseded =
+              self.airPlayRouteOwnershipGenerationSnapshot() != routeGeneration
+          }
+        }
+      }
+      self.airPlaySnapshotCallLock.unlock()
+
+      DispatchQueue.main.async { [weak self] in
+        guard let self, !self.hasReceivedShutdownEvent else { return }
+        completion(result, wasSuperseded)
+      }
+    }
+  }
+
+  /// Restore the bridge's final speed or delay after its async write was rejected. Run off AppKit,
+  /// after prior async requests settle, and under the client-call gate used by shutdown.
+  func restoreAirPlayTimingValue(_ property: String, value: Double,
+                                 ifStillOwned timingOwnership: MPVAirPlayTimingOwnership,
+                                 completion: @escaping (Int32, Bool) -> Void) {
+    guard property == MPVOption.PlaybackControl.speed ||
+            property == MPVOption.Audio.audioDelay,
+          property == timingOwnership.property else {
+      DispatchQueue.main.async { completion(MPV_ERROR_OPTION_NOT_FOUND.rawValue, false) }
+      return
+    }
+    airPlaySnapshotQueue.async { [self] in
+      if !hasReceivedShutdownEvent, let mpv {
+        // Let accepted async writes finish before synchronously restoring the terminal value.
+        mpv_wait_async_requests(mpv)
+      }
+
+      airPlaySnapshotCallLock.lock()
+      let result: Int32
+      var wasSuperseded = false
+      if hasReceivedShutdownEvent || mpv == nil {
+        result = MPV_ERROR_UNINITIALIZED.rawValue
+      } else if let mpv {
+        let stillOwned = $airPlaySnapshot.withLock { snapshot -> Bool in
+          guard snapshot.fileTransitionGeneration == timingOwnership.fileTransitionGeneration,
+                snapshot.currentPlaylistEntryID == timingOwnership.playlistEntryID else { return false }
+          let livePlaylistEntryID = activePlaylistEntryIDIfAvailable()
+          let ownsLiveEntry = isAirPlayPreStartBarrierActive(
+            for: timingOwnership.fileTransitionGeneration) || (timingOwnership.allowsNoActivePlaylistEntry
+              ? (livePlaylistEntryID == nil || livePlaylistEntryID == timingOwnership.playlistEntryID)
+              : livePlaylistEntryID == timingOwnership.playlistEntryID)
+          guard ownsLiveEntry,
+                let expectedValue = timingOwnership.expectedValue,
+                let currentValue = getDoubleIfAvailable(timingOwnership.property),
+                AirPlayTimingRestorePolicy.stillOwnsValue(
+                  currentValue, expectedValue: expectedValue) else { return false }
+          return true
+        }
+        if stillOwned {
+          log("Restoring AirPlay timing property synchronously: \(property)=\(value)",
+              level: .warning)
+          var mutableValue = value
+          result = mpv_set_property(mpv, property, MPV_FORMAT_DOUBLE, &mutableValue)
+        } else {
+          log("Skipping stale synchronous AirPlay timing restore for \(property)",
+              level: .verbose)
+          result = 0
+          wasSuperseded = true
+        }
+      } else {
+        result = MPV_ERROR_UNINITIALIZED.rawValue
+      }
+      airPlaySnapshotCallLock.unlock()
+
+      DispatchQueue.main.async { completion(result, wasSuperseded) }
+    }
+  }
+
+  /// Starts one recovery for either an overflow event or a rejected async submission.
+  /// Returns false only if shutdown already disabled AirPlay polling.
+  @discardableResult
+  private func beginAirPlayEventQueueOverflowRecovery() -> Bool {
+    guard !hasReceivedShutdownEvent else { return false }
+    let recovery = $airPlaySnapshotRequests.withLock { state -> (available: Bool, start: Bool) in
+      state.generation &+= 1
+      state.pendingTokens.removeAll()
+      guard !state.isDisabled else { return (false, false) }
+      guard !state.isRecoveringFromQueueOverflow else { return (true, false) }
+      state.isRecoveringFromQueueOverflow = true
+      return (true, true)
+    }
+    if recovery.start { recoverAirPlayAsyncRequestsAfterQueueOverflow() }
+    return recovery.available
   }
 
   func observe(property: String, format: mpv_format = MPV_FORMAT_DOUBLE) {
     mpv_observe_property(mpv, 0, property, format)
+  }
+
+  /// Request a compact playback clock sample without blocking the caller. The replies are handled
+  /// on mpv's event queue and never forwarded to the main queue as plugin events.
+  func requestAirPlayPlaybackSnapshot() {
+    let properties: [(String, mpv_format)] = [
+      (MPVProperty.timePos, MPV_FORMAT_DOUBLE),
+      (MPVProperty.audioPts, MPV_FORMAT_DOUBLE),
+      (MPVProperty.pausedForCache, MPV_FORMAT_FLAG),
+      (MPVProperty.estimatedVfFps, MPV_FORMAT_DOUBLE),
+      (MPVProperty.containerFps, MPV_FORMAT_DOUBLE)
+    ]
+    $airPlaySnapshotRequests.withLock { state in
+      guard !state.isDisabled, !state.isRecoveringFromQueueOverflow,
+            !hasReceivedShutdownEvent, state.pendingTokens.isEmpty else { return }
+      state.generation &+= 1
+      for index in properties.indices {
+        state.pendingTokens.insert(Self.airPlaySnapshotToken(state.generation, propertyIndex: index))
+      }
+      let generation = state.generation
+      airPlaySnapshotQueue.async { [weak self] in
+        guard let self else { return }
+        self.airPlaySnapshotCallLock.lock()
+        defer { self.airPlaySnapshotCallLock.unlock() }
+        let mpv = self.$airPlaySnapshotRequests.withLock { state -> OpaquePointer? in
+          guard state.generation == generation, !state.isDisabled,
+                !state.isRecoveringFromQueueOverflow,
+                !self.hasReceivedShutdownEvent, let mpv = self.mpv else {
+            if state.generation == generation { state.pendingTokens.removeAll() }
+            return nil
+          }
+          return mpv
+        }
+        guard let mpv else { return }
+        for (index, property) in properties.enumerated() {
+          let token = Self.airPlaySnapshotToken(generation, propertyIndex: index)
+          if mpv_get_property_async(mpv, token, property.0, property.1) < 0 {
+            self.$airPlaySnapshotRequests.withLock { state in
+              if state.generation == generation { state.pendingTokens.remove(token) }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /// Stop new snapshots and let an in-flight client call finish before destroying its mpv handle.
+  private func stopAirPlaySnapshotRequests() {
+    disableAirPlaySnapshotRequests()
+    airPlaySnapshotQueue.sync {}
+  }
+
+  /// Prevent any additional snapshot batches from being submitted.
+  private func disableAirPlaySnapshotRequests() {
+    $airPlaySnapshotRequests.withLock { state in
+      state.isDisabled = true
+      state.pendingTokens.removeAll()
+    }
   }
 
   // Set property
@@ -847,9 +2352,101 @@ class MPVController: NSObject {
   }
 
   @discardableResult
+  func setDoubleAsync(_ name: String, _ value: Double, replyUserdata: UInt64,
+                      level: Logger.Level = .debug) -> Int32 {
+    log("Set property asynchronously: \(name)=\(value)", level: level)
+    var data = value
+    return withUnsafeMutablePointer(to: &data) { pointer in
+      mpv_set_property_async(mpv, replyUserdata, name, MPV_FORMAT_DOUBLE, pointer)
+    }
+  }
+
+  @discardableResult
+  func setStringAsync(_ name: String, _ value: String, replyUserdata: UInt64,
+                      level: Logger.Level = .debug) -> Int32 {
+    log("Set property asynchronously: \(name)=\(value)", level: level)
+    return name.withCString { namePointer in
+      value.withCString { valuePointer in
+        mpv_set_property_async(mpv, replyUserdata, namePointer, MPV_FORMAT_STRING,
+                               UnsafeMutableRawPointer(mutating: valuePointer))
+      }
+    }
+  }
+
+  @discardableResult
   func setString(_ name: String, _ value: String, level: Logger.Level = .debug) -> Int32 {
+    setString(name, value, level: level, recordsDirectAudioOutputIntent: true)
+  }
+
+  @discardableResult
+  private func setString(_ name: String, _ value: String, level: Logger.Level,
+                         recordsDirectAudioOutputIntent: Bool) -> Int32 {
     log("Set property: \(name)=\(value)", level: level)
-    return mpv_set_property_string(mpv, name, value)
+    let isAudioOutput = name == MPVOption.Audio.ao
+    let audioOutputWrite = isAudioOutput
+      ? beginSynchronousAudioOutputWrite(recordsDirectAudioOutputIntent: recordsDirectAudioOutputIntent)
+      : nil
+    let result = mpv_set_property_string(mpv, name, value)
+    if let audioOutputWrite {
+      finishSynchronousAudioOutputWrite(value, result: result,
+                                        writeToken: audioOutputWrite,
+                                        intentSequence: audioOutputWrite.intentSequences.first,
+                                        recordsDirectAudioOutputIntent: recordsDirectAudioOutputIntent)
+    }
+    return result
+  }
+
+  /// Marks a synchronous AO change before libmpv runs and serializes direct setters with one another.
+  private func beginSynchronousAudioOutputWrite(
+    intentCount: Int = 1,
+    recordsDirectAudioOutputIntent: Bool = true
+  ) -> MPVAirPlayAudioOutputWriteToken {
+    airPlayAudioOutputWriteLock.lock()
+    return $airPlaySnapshot.withLock { snapshot in
+      snapshot.audioOutputChangesInFlight += 1
+      snapshot.audioOutputGeneration &+= 1
+      var intentSequences: [UInt64] = []
+      if recordsDirectAudioOutputIntent {
+        for _ in 0..<max(0, intentCount) {
+          snapshot.nextDirectAudioOutputIntentSequence &+= 1
+          intentSequences.append(snapshot.nextDirectAudioOutputIntentSequence)
+        }
+      }
+      return MPVAirPlayAudioOutputWriteToken(
+        outputBeforeWrite: snapshot.audioOutput,
+        intentGenerationBeforeWrite: snapshot.audioOutputIntentGeneration,
+        intentSequences: intentSequences)
+    }
+  }
+
+  /// Publishes the newest successful direct AO intent and then releases the setter lock.
+  private func finishSynchronousAudioOutputWrite(_ value: String?, result: Int32,
+                                                 writeToken: MPVAirPlayAudioOutputWriteToken,
+                                                 intentSequence: UInt64?,
+                                                 recordsDirectAudioOutputIntent: Bool = true) {
+    $airPlaySnapshot.withLock { snapshot in
+      if result >= 0 {
+        if let value {
+          // Repeated events for the prior value may be delayed until after this write begins.
+          // Accept the readback only while neither the cached value nor direct intent moved on.
+          if (snapshot.audioOutput == writeToken.outputBeforeWrite || snapshot.audioOutput == value),
+             snapshot.audioOutputIntentGeneration == writeToken.intentGenerationBeforeWrite {
+            snapshot.audioOutput = value
+          }
+          if recordsDirectAudioOutputIntent, let intentSequence {
+            recordDirectAudioOutputIntent(value, intentSequence: intentSequence, in: &snapshot)
+          }
+        }
+      }
+      snapshot.audioOutputChangesInFlight = max(0, snapshot.audioOutputChangesInFlight - 1)
+      snapshot.audioOutputGeneration &+= 1
+    }
+    airPlayAudioOutputWriteLock.unlock()
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.scheduleRawAudioOutputCommandReconciliation()
+      self.player.airPlayAudio.playbackSnapshotChanged()
+    }
   }
 
   @discardableResult
@@ -875,9 +2472,48 @@ class MPVController: NSObject {
     return Int(data)
   }
 
+  /// Like `getInt`, but `nil` when mpv cannot provide the property right now.
+  func getIntIfAvailable(_ name: String) -> Int? {
+    var data = Int64()
+    guard mpv_get_property(mpv, name, MPV_FORMAT_INT64, &data) >= 0 else { return nil }
+    return Int(data)
+  }
+
+  private func activePlaylistEntryIDIfAvailable() -> Int64? {
+    guard let playingPosition = getIntIfAvailable(MPVProperty.playlistPlayingPos),
+          playingPosition >= 0,
+          let entryID = getIntIfAvailable(MPVProperty.playlistNId(playingPosition)),
+          entryID >= 0 else { return nil }
+    return Int64(entryID)
+  }
+
+  private func isAirPlayPreStartBarrierActive(for fileTransitionGeneration: UInt64) -> Bool {
+    $airPlayPreStartBarrierGeneration.withLock { $0 == fileTransitionGeneration }
+  }
+
+  /// Reject a deferred AirPlay key command if its file changed before the main-queue turn ran.
+  func isAirPlayPlaybackFileCurrent(fileTransitionGeneration: UInt64,
+                                    playlistEntryID: Int64) -> Bool {
+    var isCurrent = false
+    let completed = performIfNotShutdown {
+      let snapshot = airPlayPlaybackSnapshot
+      isCurrent = snapshot.fileTransitionGeneration == fileTransitionGeneration &&
+        snapshot.currentPlaylistEntryID == playlistEntryID &&
+        activePlaylistEntryIDIfAvailable() == playlistEntryID
+    }
+    return completed && isCurrent
+  }
+
   func getDouble(_ name: String) -> Double {
     var data = Double()
     mpv_get_property(mpv, name, MPV_FORMAT_DOUBLE, &data)
+    return data
+  }
+
+  /// Like `getDouble`, but `nil` when mpv cannot provide the property right now.
+  func getDoubleIfAvailable(_ name: String) -> Double? {
+    var data = Double()
+    guard mpv_get_property(mpv, name, MPV_FORMAT_DOUBLE, &data) >= 0, data.isFinite else { return nil }
     return data
   }
 
@@ -1056,12 +2692,390 @@ class MPVController: NSObject {
 
   // MARK: - Hooks
 
-  func addHook(_ name: MPVHook, priority: Int32 = 0, hook: MPVHookValue) {
-    $hooks.withLock {
-      mpv_hook_add(mpv, hookCounter, name.rawValue, priority)
-      $0[hookCounter] = hook
-      hookCounter += 1
+  @discardableResult
+  func addHook(_ name: MPVHook, priority: Int32 = 0, client: OpaquePointer? = nil,
+               hook: MPVHookValue) -> UInt64? {
+    $hooks.withLock { hooks in
+      let userData = hookCounter
+      hookCounter &+= 1
+      let status = mpv_hook_add(client ?? mpv, userData, name.rawValue, priority)
+      guard status >= 0 else {
+        log("Could not register mpv hook \(name.rawValue): \(status)", level: .error)
+        return nil
+      }
+      hooks[userData] = hook
+      return userData
     }
+  }
+
+  /// Register lifecycle hooks on a handle with an independent event queue. The primary handle
+  /// receives frequent property and UI events; MPV removes a hook if its event cannot be queued.
+  private func setupCriticalLifecycleHooks() {
+    if createDedicatedLifecycleHookClient() {
+      $lifecycleHookHasEverBeenAvailable.withLock { $0 = true }
+      setLifecycleHookSafetyAvailable(true)
+      $lifecycleHookSetupComplete.withLock { $0 = true }
+      return
+    }
+
+    log("Could not create or configure the isolated MPV lifecycle client; AirPlay is disabled until recovery",
+        level: .error)
+    setLifecycleHookSafetyAvailable(false)
+    $lifecycleHookSetupComplete.withLock { $0 = true }
+    scheduleDedicatedLifecycleHookRetry()
+  }
+
+  /// Creates the low-traffic event client used to protect Stop persistence and AirPlay transitions.
+  /// This helper is called during setup and later only on `lifecycleHookQueue`.
+  @discardableResult
+  private func createDedicatedLifecycleHookClient() -> Bool {
+    guard !hasReceivedShutdownEvent, let primaryClient = mpv,
+          let client = mpv_create_client(primaryClient, "iina_lifecycle") else {
+      return false
+    }
+    guard configureLifecycleHookClient(client),
+          registerCriticalLifecycleHooks(on: client) else {
+      removeDedicatedLifecycleHookValues()
+      mpv_destroy(client)
+      return false
+    }
+    lifecycleHookClient = client
+    lifecycleHookShutdown = false
+    activeLifecycleHook = nil
+    lifecycleHookGeneration &+= 1
+    installLifecycleHookWakeupCallback(on: client)
+    readLifecycleHookEvents()
+    return true
+  }
+
+  private func setLifecycleHookSafetyAvailable(_ available: Bool) {
+    let changed = $lifecycleHookSafetyAvailable.withLock { current -> Bool in
+      guard current != available else { return false }
+      current = available
+      return true
+    }
+    guard changed else { return }
+    let update: () -> Void = { [weak self] in
+      guard let self else { return }
+      self.player.airPlayAudio.lifecycleHookAvailabilityChanged(available)
+    }
+    if Thread.isMainThread {
+      update()
+    } else {
+      DispatchQueue.main.async(execute: update)
+    }
+  }
+
+  private func retryDedicatedLifecycleHookClient() {
+    guard $lifecycleHookSetupComplete.withLock({ $0 }),
+          !$lifecycleHookSafetyAvailable.withLock({ $0 }) else { return }
+    lifecycleHookQueue.async { [weak self] in
+      guard let self, !self.lifecycleHookRetryScheduled else { return }
+      self.retryDedicatedLifecycleHookClientOnQueue()
+    }
+  }
+
+  private func retryDedicatedLifecycleHookClientOnQueue() {
+    guard $lifecycleHookSetupComplete.withLock({ $0 }),
+          !$lifecycleHookSafetyAvailable.withLock({ $0 }),
+          lifecycleHookClient == nil, !hasReceivedShutdownEvent, mpv != nil else { return }
+    guard createDedicatedLifecycleHookClient() else {
+      log("Isolated MPV lifecycle client recovery failed; AirPlay remains disabled", level: .error)
+      scheduleDedicatedLifecycleHookRetryOnQueue()
+      return
+    }
+    lifecycleHookRetryAttempt = 0
+    let mustWaitForFileLoaded = $lifecycleHookHasEverBeenAvailable.withLock { $0 }
+    $lifecycleHookHasEverBeenAvailable.withLock { $0 = true }
+    if mustWaitForFileLoaded {
+      armLifecycleHookRecoveryAtNextFileBoundary()
+    } else {
+      setLifecycleHookSafetyAvailable(true)
+    }
+  }
+
+  private func scheduleDedicatedLifecycleHookRetry() {
+    lifecycleHookQueue.async { [weak self] in
+      self?.scheduleDedicatedLifecycleHookRetryOnQueue()
+    }
+  }
+
+  private func scheduleDedicatedLifecycleHookRetryOnQueue() {
+    guard $lifecycleHookSetupComplete.withLock({ $0 }),
+          !$lifecycleHookSafetyAvailable.withLock({ $0 }),
+          !hasReceivedShutdownEvent, mpv != nil,
+          lifecycleHookClient == nil, !lifecycleHookRetryScheduled else { return }
+    lifecycleHookRetryScheduled = true
+    let attempt = lifecycleHookRetryAttempt
+    lifecycleHookRetryAttempt = min(attempt + 1, 5)
+    let delaySeconds = min(1 << min(attempt, 5), 30)
+    lifecycleHookQueue.asyncAfter(deadline: .now() + .seconds(delaySeconds)) { [weak self] in
+      guard let self else { return }
+      self.lifecycleHookRetryScheduled = false
+      self.retryDedicatedLifecycleHookClientOnQueue()
+    }
+  }
+
+  /// Ignore FILE_LOADED events already queued when recovered hooks are installed. Drain the
+  /// primary client first, then require a later file generation before AirPlay can resume.
+  private func armLifecycleHookRecoveryAtNextFileBoundary() {
+    let epoch = $lifecycleHookRecoveryBoundary.withLock { boundary -> UInt64 in
+      boundary.epoch &+= 1
+      boundary.fileGeneration = nil
+      return boundary.epoch
+    }
+    queue.async { [weak self] in
+      guard let self else { return }
+      self.readEventsOnQueue(afterDraining: { [weak self] in
+        guard let self else { return }
+        let generation = self.$airPlaySnapshot.withLock { $0.fileTransitionGeneration }
+        self.$lifecycleHookRecoveryBoundary.withLock { boundary in
+          guard boundary.epoch == epoch else { return }
+          boundary.fileGeneration = generation
+        }
+      })
+    }
+  }
+
+  private func invalidateLifecycleHookRecoveryBoundary() {
+    $lifecycleHookRecoveryBoundary.withLock { boundary in
+      boundary.epoch &+= 1
+      boundary.fileGeneration = nil
+    }
+  }
+
+  private func consumeLifecycleHookRecoveryBoundary(for fileGeneration: UInt64?) -> Bool {
+    guard let fileGeneration else { return false }
+    return $lifecycleHookRecoveryBoundary.withLock { boundary in
+      guard let recoveredAtGeneration = boundary.fileGeneration,
+            fileGeneration > recoveredAtGeneration else { return false }
+      boundary.fileGeneration = nil
+      return true
+    }
+  }
+
+  private func configureLifecycleHookClient(_ client: OpaquePointer) -> Bool {
+    // Restrict this handle to shutdown/overflow notifications and critical hooks. The project
+    // disables deprecated MPV events in its bridging header, so filter every remaining
+    // non-lifecycle event exposed by this API here.
+    for event in [MPV_EVENT_LOG_MESSAGE, MPV_EVENT_GET_PROPERTY_REPLY,
+                  MPV_EVENT_SET_PROPERTY_REPLY, MPV_EVENT_COMMAND_REPLY,
+                  MPV_EVENT_START_FILE, MPV_EVENT_END_FILE, MPV_EVENT_FILE_LOADED,
+                  MPV_EVENT_CLIENT_MESSAGE,
+                  MPV_EVENT_VIDEO_RECONFIG,
+                  MPV_EVENT_AUDIO_RECONFIG, MPV_EVENT_SEEK,
+                  MPV_EVENT_PLAYBACK_RESTART, MPV_EVENT_PROPERTY_CHANGE] {
+      let status = mpv_request_event(client, event, 0)
+      if status < 0 {
+        log("Could not disable non-lifecycle mpv event \(event): \(status)", level: .error)
+        return false
+      }
+    }
+    let overflowStatus = mpv_request_event(client, MPV_EVENT_QUEUE_OVERFLOW, 1)
+    if overflowStatus < 0 {
+      log("Could not enable lifecycle queue overflow notifications: \(overflowStatus)", level: .error)
+      return false
+    }
+    let hookStatus = mpv_request_event(client, MPV_EVENT_HOOK, 1)
+    if hookStatus < 0 {
+      log("Could not enable lifecycle hook events: \(hookStatus)", level: .error)
+    }
+    let logStatus = mpv_request_log_messages(client, "no")
+    if logStatus < 0 {
+      log("Could not disable log events on lifecycle client: \(logStatus)", level: .warning)
+    }
+    return hookStatus >= 0
+  }
+
+  private func registerCriticalLifecycleHooks(on client: OpaquePointer) -> Bool {
+    var userData = Set<UInt64>()
+    let playerCore = player
+    // MPV sorts hooks by ascending priority, then registration order. A negative priority keeps
+    // these guards ahead of the neutral priority-0 hooks commonly registered by user scripts,
+    // even though the isolated client can only be created after mpv_initialize().
+    if let unloadHook = addHook(MPVHook.onUnLoad, priority: -1, client: client,
+                                hook: MPVHookValue(withBlock: { [weak playerCore] next in
+      playerCore?.writeStopWatchLaterIfPending()
+      next()
+    })) {
+      userData.insert(unloadHook)
+    }
+    if let beforeStartHook = addHook(MPVHook.onBeforeStartFile, priority: -1, client: client,
+                                     hook: MPVHookValue(withBlock: { [weak self] next in
+      guard let self else { next(); return }
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { next(); return }
+        // The lifecycle client has its own event queue, so this hook can arrive before the primary
+        // client's END_FILE callback has queued the previous file's timing restore. Drain primary
+        // events first; their main-thread callbacks are enqueued before this continuation.
+        self.queue.async { [weak self] in
+          guard let self else {
+            DispatchQueue.main.async { next() }
+            return
+          }
+          self.readEventsOnQueue {
+            DispatchQueue.main.async { [weak self] in
+              guard let self else { next(); return }
+              self.player.airPlayAudio.whenMPVCommandsDrained { next() }
+            }
+          }
+        }
+      }
+    })) {
+      userData.insert(beforeStartHook)
+    }
+    lifecycleHookUserdata = userData
+    return userData.count == 2
+  }
+
+  private func removeDedicatedLifecycleHookValues() {
+    let userData = lifecycleHookUserdata
+    $hooks.withLock { hooks in
+      userData.forEach { hooks.removeValue(forKey: $0) }
+    }
+    lifecycleHookUserdata.removeAll()
+  }
+
+  private func removeLifecycleHookValues() {
+    let userData = lifecycleHookUserdata
+    $hooks.withLock { hooks in
+      userData.forEach { hooks.removeValue(forKey: $0) }
+    }
+    lifecycleHookUserdata.removeAll()
+  }
+
+  private func installLifecycleHookWakeupCallback(on client: OpaquePointer) {
+    mpv_set_wakeup_callback(client, { (context) in
+      let mpvController = unsafeBitCast(context, to: MPVController.self)
+      mpvController.readLifecycleHookEvents()
+    }, mutableRawPointerOf(obj: self))
+  }
+
+  private func readLifecycleHookEvents() {
+    lifecycleHookQueue.async { [self] in
+      guard !lifecycleHookShutdown, let client = lifecycleHookClient else { return }
+      while true {
+        let event = mpv_wait_event(client, 0)!
+        let eventID = event.pointee.event_id
+        if eventID == MPV_EVENT_NONE { break }
+        switch eventID {
+        case MPV_EVENT_HOOK:
+          handleCriticalLifecycleHook(event, generation: lifecycleHookGeneration)
+        case MPV_EVENT_QUEUE_OVERFLOW:
+          log("Isolated MPV lifecycle event queue overflowed; rebuilding hook delivery",
+              level: .error)
+          invalidateLifecycleHookRecoveryBoundary()
+          setLifecycleHookSafetyAvailable(false)
+          recoverLifecycleHookClientAfterOverflow(client)
+          // MPV requires the client to drain its queue through NONE after overflow. Recovery
+          // may be deferred while an active pre-start hook waits for the AirPlay command drain.
+          if lifecycleHookClient == client { continue }
+          return
+        case MPV_EVENT_SHUTDOWN:
+          lifecycleHookShutdown = true
+          activeLifecycleHook = nil
+          lifecycleHookRecoveryPending = false
+          lifecycleHookRetryAttempt = 0
+          lifecycleHookRetryScheduled = false
+          return
+        default:
+          // No other events are requested by this handle.
+          break
+        }
+      }
+    }
+  }
+
+  private func handleCriticalLifecycleHook(_ event: UnsafePointer<mpv_event>, generation: UInt64) {
+    let userData = event.pointee.reply_userdata
+    let hookEvent = event.pointee.data.bindMemory(to: mpv_event_hook.self, capacity: 1).pointee
+    let hookID = hookEvent.id
+    let hookName = String(cString: hookEvent.name)
+    let eventName = String(cString: mpv_event_name(event.pointee.event_id))
+    if activeLifecycleHook != nil {
+      log("Received a lifecycle hook while another lifecycle hook was active", level: .error)
+    }
+    activeLifecycleHook = LifecycleHookInvocation(hookID: hookID, name: hookName,
+                                                   generation: generation)
+    if hookName == MPVHook.onBeforeStartFile.rawValue {
+      let fileGeneration = $airPlaySnapshot.withLock { $0.fileTransitionGeneration }
+      $airPlayPreStartBarrierGeneration.withLock { $0 = fileGeneration }
+    }
+
+    // Preserve the public MPV event notification previously emitted by the primary reader.
+    DispatchQueue.main.async { [self] in
+      player.events.emit(.init("mpv.\(eventName)"))
+    }
+
+    let continuation = MPVHookContinuation { [self] in
+      continueCriticalLifecycleHook(hookID, name: hookName, generation: generation)
+    }
+    guard let hook = $hooks.withLock({ $0[userData] }) else {
+      log("Lifecycle hook \(hookID) not found", level: .warning)
+      continuation.call()
+      return
+    }
+    hook.call { continuation.call() }
+  }
+
+  private func continueCriticalLifecycleHook(_ hookID: UInt64, name: String, generation: UInt64) {
+    lifecycleHookQueue.async { [self] in
+      guard generation == lifecycleHookGeneration else { return }
+      guard let activeHook = activeLifecycleHook,
+            activeHook.hookID == hookID, activeHook.name == name,
+            activeHook.generation == generation else {
+        log("Ignoring continuation for a lifecycle hook that is no longer active", level: .warning)
+        return
+      }
+      if name == MPVHook.onBeforeStartFile.rawValue {
+        $airPlayPreStartBarrierGeneration.withLock { $0 = nil }
+      }
+      guard !lifecycleHookShutdown, let client = lifecycleHookClient else {
+        activeLifecycleHook = nil
+        lifecycleHookRecoveryPending = false
+        return
+      }
+      let status = mpv_hook_continue(client, hookID)
+      activeLifecycleHook = nil
+      if status < 0 {
+        log("Could not continue mpv lifecycle hook \(hookID): \(status)", level: .error)
+      }
+      if lifecycleHookRecoveryPending {
+        lifecycleHookRecoveryPending = false
+        recoverLifecycleHookClientAfterOverflow(client)
+      }
+    }
+  }
+
+  /// Recover registrations after an overflow. If a hook is waiting on the AirPlay drain, retain its
+  /// client until the drain callback continues it; destroying an active MPV client auto-continues
+  /// that hook and would let the next file start before its timing restore is submitted.
+  private func recoverLifecycleHookClientAfterOverflow(_ oldClient: OpaquePointer) {
+    guard lifecycleHookClient == oldClient else { return }
+    if activeLifecycleHook?.generation == lifecycleHookGeneration {
+      lifecycleHookRecoveryPending = true
+      log("Deferring lifecycle hook recovery until the active hook has drained", level: .error)
+      return
+    }
+    lifecycleHookRecoveryPending = false
+    lifecycleHookGeneration &+= 1
+    lifecycleHookShutdown = true
+    activeLifecycleHook = nil
+    lifecycleHookClient = nil
+    mpv_set_wakeup_callback(oldClient, nil, nil)
+    mpv_destroy(oldClient)
+    removeDedicatedLifecycleHookValues()
+
+    guard !hasReceivedShutdownEvent, mpv != nil else { return }
+    if createDedicatedLifecycleHookClient() {
+      $lifecycleHookHasEverBeenAvailable.withLock { $0 = true }
+      armLifecycleHookRecoveryAtNextFileBoundary()
+      return
+    }
+    log("Could not recreate isolated MPV lifecycle hooks; AirPlay remains disabled",
+        level: .error)
+    setLifecycleHookSafetyAvailable(false)
+    scheduleDedicatedLifecycleHookRetryOnQueue()
   }
 
   func removeHooks(withIdentifier id: String) {
@@ -1074,21 +3088,47 @@ class MPVController: NSObject {
 
   // Read event and handle it async
   private func readEvents() {
-    queue.async {
-      while ((self.mpv) != nil) {
-        let event = mpv_wait_event(self.mpv, 0)!
-        let eventId = event.pointee.event_id
-        // Do not deal with mpv-event-none
-        if eventId == MPV_EVENT_NONE {
-          break
+    guard !hasReceivedShutdownEvent else { return }
+    queue.async { self.readEventsOnQueue() }
+  }
+
+  /// The sole event-queue reader. An optional completion runs after draining through MPV_EVENT_NONE.
+  private func readEventsOnQueue(afterDraining completion: (() -> Void)? = nil) {
+    guard !hasReceivedShutdownEvent, let mpv else {
+      completion?()
+      return
+    }
+    while !hasReceivedShutdownEvent {
+      // Keep polling independent of client-call submission: libmpv may be waiting for an event
+      // hook while a queued API call is in progress.
+      let event = mpv_wait_event(mpv, 0)!
+      let eventId = event.pointee.event_id
+      if eventId == MPV_EVENT_SHUTDOWN {
+        // Publish terminal state immediately so work queued behind the call gate cannot begin.
+        hasReceivedShutdownEvent = true
+        airPlaySnapshotCallLock.lock()
+        $airPlaySnapshotRequests.withLock { state in
+          state.isDisabled = true
+          state.pendingTokens.removeAll()
         }
-        self.handleEvent(event)
-        // Must stop reading events once the mpv core is shutdown.
-        if eventId == MPV_EVENT_SHUTDOWN {
-          break
-        }
+        airPlaySnapshotCallLock.unlock()
+      }
+      // Do not deal with mpv-event-none
+      if eventId == MPV_EVENT_NONE {
+        break
+      }
+      if eventId == MPV_EVENT_SHUTDOWN {
+        // Snapshot calls use a separate queue. Close that path and drain it before notifying the
+        // main thread, which may destroy the mpv handle as soon as it handles this event.
+        airPlaySnapshotQueue.sync {}
+      }
+      handleEvent(event)
+      // Must stop reading events once the mpv core is shutdown.
+      if eventId == MPV_EVENT_SHUTDOWN {
+        break
       }
     }
+    completion?()
   }
 
   // Handle the event
@@ -1113,14 +3153,25 @@ class MPVController: NSObject {
       let userData = event.pointee.reply_userdata
       let hookEvent = event.pointee.data.bindMemory(to: mpv_event_hook.self, capacity: 1).pointee
       let hookID = hookEvent.id
+      let hookName = String(cString: hookEvent.name)
+      if hookName == MPVHook.onBeforeStartFile.rawValue {
+        let generation = $airPlaySnapshot.withLock { $0.fileTransitionGeneration }
+        $airPlayPreStartBarrierGeneration.withLock { $0 = generation }
+      }
       guard let hook = $hooks.withLock({ $0[userData] }) else {
         // Hook not found, probably because it's from an unloaded plugin.
         // Still need to call hook_continue otherwise it will stuck.
         log("Hook \(hookID) not found", level: .warning)
+        if hookName == MPVHook.onBeforeStartFile.rawValue {
+          $airPlayPreStartBarrierGeneration.withLock { $0 = nil }
+        }
         mpv_hook_continue(self.mpv, hookID)
         break
       }
       hook.call {
+        if hookName == MPVHook.onBeforeStartFile.rawValue {
+          self.$airPlayPreStartBarrierGeneration.withLock { $0 = nil }
+        }
         mpv_hook_continue(self.mpv, hookID)
       }
 
@@ -1131,24 +3182,96 @@ class MPVController: NSObject {
         handlePropertyChange(propertyName, property)
       }
 
+    case MPV_EVENT_GET_PROPERTY_REPLY:
+      if handleAirPlaySnapshotReply(event) { return }
+
     case MPV_EVENT_AUDIO_RECONFIG: break
 
     case MPV_EVENT_VIDEO_RECONFIG:
       DispatchQueue.main.async { self.player.onVideoReconfig() }
 
     case MPV_EVENT_START_FILE:
+      let startFile = event.pointee.data.bindMemory(to: mpv_event_start_file.self,
+                                                    capacity: 1).pointee
+      let playlistEntryID = startFile.playlist_entry_id
+      let fileTransitionGeneration = $airPlaySnapshot.withLock { snapshot -> UInt64 in
+        snapshot.fileTransitionGeneration &+= 1
+        snapshot.currentPlaylistEntryID = playlistEntryID
+        snapshot.resetMediaValues()
+        return snapshot.fileTransitionGeneration
+      }
+      activeFileTransitionGeneration = fileTransitionGeneration
+      let startFileGeneration = player.fileStartEventObserved(playlistEntryID: playlistEntryID)
+      let abandonedTransition = activePlaylistLoadTransition
+      activePlaylistLoadTransition = consumeOrStartPlaylistLoadTransition()
+      if let abandonedTransition {
+        DispatchQueue.main.async { self.player.playlistLoadDidFinish(abandonedTransition) }
+      }
+      $airPlaySnapshotRequests.withLock {
+        $0.generation &+= 1
+        $0.pendingTokens.removeAll()
+      }
       guard let path = getString(MPVProperty.path) else { break }
       DispatchQueue.main.async { [self] in
+        player.fileStartEventReachedMain(startFileGeneration,
+                                         playlistEntryID: playlistEntryID)
+        guard player.info.state != .shuttingDown, player.info.state != .shutDown else { return }
+        if player.info.state == .stopping { return }
         player.info.state = .starting
-        player.fileStarted(path: path)
+        player.fileStarted(path: path,
+                           fileTransitionGeneration: fileTransitionGeneration,
+                           playlistEntryID: playlistEntryID)
       }
 
     case MPV_EVENT_FILE_LOADED:
-      DispatchQueue.main.async { self.player.fileLoaded() }
+      var fileTransitionGeneration = activeFileTransitionGeneration
+      var recoveredStart: (path: String, playlistEntryID: Int64, generation: UInt64,
+                           mainGeneration: UInt64)?
+      if fileTransitionGeneration == nil,
+         let playlistEntryID = activePlaylistEntryIDIfAvailable(),
+         let path = getString(MPVProperty.path) {
+        // START_FILE may have been the event lost during primary-queue overflow. Rebuild the
+        // file identity before FILE_LOADED reaches PlayerCore so route selection cannot reuse the
+        // previous item's URL or timing generation.
+        let recoveredGeneration = $airPlaySnapshot.withLock { snapshot in
+          snapshot.fileTransitionGeneration &+= 1
+          snapshot.currentPlaylistEntryID = playlistEntryID
+          snapshot.resetMediaValues()
+          return snapshot.fileTransitionGeneration
+        }
+        fileTransitionGeneration = recoveredGeneration
+        let mainGeneration = player.fileStartEventObserved(playlistEntryID: playlistEntryID)
+        recoveredStart = (path, playlistEntryID, recoveredGeneration, mainGeneration)
+        log("Recovered missing START_FILE after MPV event-queue overflow", level: .warning)
+      }
+      activeFileTransitionGeneration = nil
+      if consumeLifecycleHookRecoveryBoundary(for: fileTransitionGeneration) {
+        $lifecycleHookHasEverBeenAvailable.withLock { $0 = true }
+        setLifecycleHookSafetyAvailable(true)
+      }
+      let transition = activePlaylistLoadTransition
+      activePlaylistLoadTransition = nil
+      let loadedTransitionGeneration = fileTransitionGeneration
+      let recoveredStartFile = recoveredStart
+      DispatchQueue.main.async {
+        if let recoveredStartFile {
+          self.player.fileStartEventReachedMain(recoveredStartFile.mainGeneration,
+                                                playlistEntryID: recoveredStartFile.playlistEntryID)
+          if self.player.info.state.active, self.player.info.state != .stopping {
+            self.player.info.state = .starting
+            self.player.fileStarted(path: recoveredStartFile.path,
+                                    fileTransitionGeneration: recoveredStartFile.generation,
+                                    playlistEntryID: recoveredStartFile.playlistEntryID)
+          }
+        }
+        self.player.fileLoaded(fileTransitionGeneration: loadedTransitionGeneration)
+        self.player.playlistLoadDidFinish(transition)
+      }
 
     case MPV_EVENT_SEEK:
       DispatchQueue.main.async { [self] in
         player.info.isSeeking = true
+        player.airPlayAudio.playbackSeekStarted()
         // When playback is paused the display link may be shutdown in order to not waste energy.
         // It must be running when seeking to avoid slowdowns caused by mpv waiting for IINA to call
         // mpv_render_report_swap.
@@ -1164,6 +3287,17 @@ class MPVController: NSObject {
       }
 
     case MPV_EVENT_PLAYBACK_RESTART:
+      // Pending replies may describe the picture from before this seek. Fence that batch before
+      // letting the bridge align the speaker with the restarted picture.
+      $airPlaySnapshotRequests.withLock { state in
+        state.generation &+= 1
+        state.pendingTokens.removeAll()
+      }
+      $airPlaySnapshot.withLock { snapshot in
+        snapshot.timePosition = nil
+        snapshot.audioPTS = nil
+      }
+      requestAirPlayPlaybackSnapshot()
       DispatchQueue.main.async { [self] in
         player.info.isSeeking = false
         // When playback is paused the display link may be shutdown in order to not waste energy.
@@ -1181,8 +3315,15 @@ class MPVController: NSObject {
       }
 
     case MPV_EVENT_END_FILE:
-      let reason = event.pointee.data.load(as: mpv_end_file_reason.self)
+      let transition = activePlaylistLoadTransition
+      activePlaylistLoadTransition = nil
+      let endFile = event.pointee.data.bindMemory(to: mpv_event_end_file.self, capacity: 1).pointee
+      let reason = endFile.reason
       let dueToStopCommand = reason == MPV_END_FILE_REASON_STOP
+      player.stopWatchLaterUnloadCompleted()
+      let endedPlaylistEntryID = endFile.playlist_entry_id >= 0
+        ? Int64(endFile.playlist_entry_id) : nil
+      let fileTransitionGeneration = $airPlaySnapshot.withLock { $0.fileTransitionGeneration }
       // When the IINA "Pause" setting is enabled under "When media is opened" IINA must tell mpv to
       // pause playback ASAP. Events are delivered asynchronously. If the IINA
       // "Play next item automatically" setting is enabled mpv will currently be loading the next
@@ -1198,11 +3339,18 @@ class MPVController: NSObject {
         // condition, playback must be paused as soon as possible, so logging is done afterward.
         log("Pausing playback because \"pause when media is opened\" is enabled")
       }
-      DispatchQueue.main.async { self.player.fileEnded(dueToStopCommand) }
+      DispatchQueue.main.async {
+        self.player.fileEnded(dueToStopCommand,
+                              fileTransitionGeneration: fileTransitionGeneration,
+                              playlistEntryID: endedPlaylistEntryID)
+        self.player.playlistLoadDidFinish(transition)
+      }
 
     case MPV_EVENT_COMMAND_REPLY:
       let reply = event.pointee.reply_userdata
-      if reply == MPVController.UserData.screenshot {
+      if rawAsyncAudioOutputCommandCompleted(reply, result: event.pointee.error) {
+        break
+      } else if reply == MPVController.UserData.screenshot {
         let code = event.pointee.error
         guard code >= 0 else {
           let error = String(cString: mpv_error_string(code))
@@ -1216,6 +3364,23 @@ class MPVController: NSObject {
           break
         }
         DispatchQueue.main.async { self.player.screenshotCallback() }
+      } else if MPVController.UserData.isAirPlayAudioCommand(reply) {
+        let code = event.pointee.error
+        DispatchQueue.main.async {
+          self.player.airPlayAudio.mpvCommandCompleted(code, replyUserdata: reply)
+        }
+      }
+
+    case MPV_EVENT_SET_PROPERTY_REPLY:
+      let reply = event.pointee.reply_userdata
+      if MPVController.UserData.isAirPlayAudioCommand(reply) {
+        let code = event.pointee.error
+        DispatchQueue.main.async {
+          self.player.airPlayAudio.mpvCommandCompleted(code, replyUserdata: reply)
+        }
+      } else if reply == MPVController.UserData.preferenceOptionCommand, event.pointee.error < 0 {
+        let error = String(cString: mpv_error_string(event.pointee.error))
+        log("Asynchronous preference update failed: \(error)", level: .warning)
       }
 
     case MPV_EVENT_QUEUE_OVERFLOW:
@@ -1225,10 +3390,14 @@ class MPVController: NSObject {
       // some types of mpv events, but certain mpv events are critical. If a critical event is
       // discarded IINA will experience severe malfunctions. For this reason most of the work of
       // processing an event is dispatched to other queues so that MPVController can move on to
-      // reading the next event. This event indicates something went wrong and IINA failed to read
-      // events fast enough. As IINA has been ignoring this event we don't know if this has been
-      // occurring. For now log this as an error. May want to switch to an alert in the future.
-      log("Critical failure, mpv events lost, queue overflowed", level: .error)
+      // reading the next event. Snapshot polling and serialized AirPlay command replies both need
+      // explicit recovery because either kind of response may have been dropped. If the
+      // lifecycle hooks are using this busy queue as a fallback, retry the isolated client here;
+      // AirPlay remains disabled until independent hook delivery is restored.
+      log("Critical failure, mpv events lost, queue overflowed; recovering AirPlay requests",
+          level: .error)
+      retryDedicatedLifecycleHookClient()
+      beginAirPlayEventQueueOverflowRecovery()
 
     default: break
       // let eventName = String(cString: mpv_event_name(eventId))
@@ -1244,9 +3413,253 @@ class MPVController: NSObject {
     }
   }
 
+  private func handleAirPlaySnapshotReply(_ event: UnsafePointer<mpv_event>) -> Bool {
+    let token = event.pointee.reply_userdata
+    guard let (generation, propertyIndex) = Self.airPlaySnapshotTokenParts(token) else { return false }
+    let isCurrentSample = $airPlaySnapshotRequests.withLock { state -> Bool in
+      guard state.pendingTokens.remove(token) != nil else { return false }
+      return state.generation == generation
+    }
+    // Consume stale private replies too, so they never fall through to generic/plugin dispatch.
+    guard isCurrentSample else { return true }
+
+    let property: mpv_event_property? = {
+      guard event.pointee.error >= 0 else { return nil }
+      let dataOpaquePtr = OpaquePointer(event.pointee.data)
+      return UnsafePointer<mpv_event_property>(dataOpaquePtr)?.pointee
+    }()
+    $airPlaySnapshot.withLock { snapshot in
+      switch propertyIndex {
+      case 0:
+        snapshot.timePosition = property.flatMap(doubleValue(from:))
+      case 1:
+        snapshot.audioPTS = property.flatMap(doubleValue(from:))
+      case 2:
+        snapshot.pausedForCache = property.flatMap(flagValue(from:))
+      case 3:
+        snapshot.estimatedVideoFPS = property.flatMap(doubleValue(from:))
+      case 4:
+        snapshot.containerFPS = property.flatMap(doubleValue(from:))
+      default:
+        break
+      }
+    }
+    return true
+  }
+
+  /// Recovers accepted asynchronous AirPlay commands whose reply events may have been dropped.
+  /// Keep this wait off AppKit and the event-reader queue; the latter must continue draining events.
+  private func recoverAirPlayAsyncRequestsAfterQueueOverflow() {
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      let activeReplyToken = self.player.airPlayAudio.beginMPVEventQueueOverflowRecovery()
+      self.airPlaySnapshotQueue.async { [weak self] in
+        guard let self else { return }
+        if !self.hasReceivedShutdownEvent, let mpv = self.mpv {
+          // This API waits off-main until every accepted asynchronous request has produced its
+          // reply event. Do not hold the call gate: the event reader must keep draining the queue.
+          mpv_wait_async_requests(mpv)
+        }
+        self.queue.async { [weak self] in
+          guard let self else { return }
+          // The async barrier guarantees replies were emitted, not that the event reader has
+          // delivered them to the bridge yet. Drain the event queue before treating one as lost.
+          self.readEventsOnQueue {
+            // The overflow may have discarded the ao property-change event. Re-read the actual
+            // value after the accepted async requests and their replies have drained, before the
+            // bridge resumes and makes another route decision.
+            self.airPlaySnapshotQueue.async { [weak self] in
+              guard let self else { return }
+              self.airPlaySnapshotCallLock.lock()
+              let sampleState = self.$airPlaySnapshot.withLock { snapshot in
+                (generation: snapshot.audioOutputGeneration,
+                 canPublish: snapshot.audioOutputChangesInFlight == 0,
+                 speedGeneration: snapshot.speedObservationGeneration,
+                 audioDelayGeneration: snapshot.audioDelayObservationGeneration)
+              }
+              let audioOutput: String?
+              let speed: Double?
+              let audioDelay: Double?
+              if !self.hasReceivedShutdownEvent, self.mpv != nil {
+                audioOutput = self.getString(MPVOption.Audio.ao)
+                speed = self.getDoubleIfAvailable(MPVOption.PlaybackControl.speed)
+                audioDelay = self.getDoubleIfAvailable(MPVOption.Audio.audioDelay)
+              } else {
+                audioOutput = nil
+                speed = nil
+                audioDelay = nil
+              }
+              self.airPlaySnapshotCallLock.unlock()
+
+              DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                var recoveredAudioOutputObservation: (value: String, generation: UInt64)?
+                var recoveredSpeed: Double?
+                var recoveredAudioDelay: Double?
+                if !self.hasReceivedShutdownEvent {
+                  self.$airPlaySnapshot.withLock { snapshot in
+                    // An observed ao event after this sample is newer than the queried value.
+                    if sampleState.canPublish,
+                       snapshot.audioOutputGeneration == sampleState.generation,
+                       snapshot.audioOutputChangesInFlight == 0 {
+                      if let audioOutput {
+                        // Reconcile raw async AO intent here too: MPV may have dropped the property
+                        // event that would otherwise confirm the pending request.
+                        self.observeAudioOutput(audioOutput, in: &snapshot)
+                      }
+                      // mpv_wait_async_requests() has settled every reply-bearing selector, even
+                      // when overflow dropped one or more replies. One final sample resolves the
+                      // entire pending selector batch.
+                      self.resolveRawAudioOutputCommandsFromSample(
+                        audioOutput, assumeCommandsCompleted: true, in: &snapshot)
+                      if let audioOutput {
+                        recoveredAudioOutputObservation =
+                          (audioOutput, snapshot.audioOutputObservedGeneration)
+                      }
+                    }
+                    // Property-change notifications can be dropped by the same overflow. These
+                    // post-barrier readbacks restore timing values used to validate bridge
+                    // releases, unless a newer observed event has already arrived.
+                    if snapshot.speedObservationGeneration == sampleState.speedGeneration,
+                       let speed {
+                      snapshot.speed = speed
+                      recoveredSpeed = speed
+                    }
+                    if snapshot.audioDelayObservationGeneration == sampleState.audioDelayGeneration,
+                       let audioDelay {
+                      snapshot.audioDelay = audioDelay
+                      recoveredAudioDelay = audioDelay
+                    }
+                  }
+                }
+                self.$airPlaySnapshotRequests.withLock { $0.isRecoveringFromQueueOverflow = false }
+                // The shutdown path clears the bridge command queue after draining this reader.
+                guard !self.hasReceivedShutdownEvent else { return }
+                if let recoveredSpeed { self.handleSpeedPropertyValue(recoveredSpeed) }
+                if let recoveredAudioDelay {
+                  self.handleAudioDelayPropertyValue(recoveredAudioDelay)
+                }
+                self.player.airPlayAudio.finishMPVEventQueueOverflowRecovery(
+                  for: activeReplyToken
+                )
+                if let recoveredAudioOutputObservation {
+                  self.player.airPlayAudio.audioOutputObservationChanged(
+                    recoveredAudioOutputObservation.value,
+                    generation: recoveredAudioOutputObservation.generation)
+                } else {
+                  self.player.airPlayAudio.playbackSnapshotChanged()
+                }
+                self.requestAirPlayPlaybackSnapshot()
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private static func airPlaySnapshotToken(_ generation: UInt64, propertyIndex: Int) -> UInt64 {
+    UserData.airPlaySnapshotBase &+ (generation << 3) &+ UInt64(propertyIndex)
+  }
+
+  private static func airPlaySnapshotTokenParts(_ token: UInt64) -> (UInt64, Int)? {
+    guard token >= UserData.airPlaySnapshotBase else { return nil }
+    let offset = token - UserData.airPlaySnapshotBase
+    let propertyIndex = Int(offset & 0b111)
+    guard propertyIndex < 5 else { return nil }
+    return (offset >> 3, propertyIndex)
+  }
+
   // MARK: - Property listeners
 
+  /// Applies an event-fed or overflow-recovered speed value on the main thread.
+  private func handleSpeedPropertyValue(_ speed: Double) {
+    let isInternalWrite = player.airPlayAudio.consumeInternalSpeed(speed)
+    if player.airPlayAudio.hasPendingUserSpeedTarget(speed) {
+      let osdMode = player.airPlayAudio.userSpeedOSDMode(for: speed)
+      player.speedChanged(speed, osdMode: osdMode)
+      player.airPlayAudio.userSpeedChanged(speed)
+      return
+    }
+    guard !isInternalWrite else { return }
+    let osdMode = player.airPlayAudio.userSpeedOSDMode(for: speed)
+    player.speedChanged(speed, osdMode: osdMode)
+    player.airPlayAudio.userSpeedChanged(speed)
+  }
+
+  /// Applies an event-fed or overflow-recovered audio-delay value on the main thread.
+  private func handleAudioDelayPropertyValue(_ value: Double) {
+    guard let delay = player.airPlayAudio.userAudioDelay(fromMPV: value) else { return }
+    let osdMode = player.airPlayAudio.userAudioDelayChanged(delay)
+    player.info.audioDelay = delay
+    switch osdMode {
+    case .none:
+      break
+    case .bar:
+      player.sendOSD(.audioDelayBarOnly(delay))
+    case .message:
+      player.sendOSD(.audioDelayMessage(delay))
+    case .automatic:
+      player.sendOSD(.audioDelay(delay))
+    case .messageAndBar:
+      player.sendOSD(.audioDelay(delay))
+    }
+    player.postNotification(.iinaAudioDelayChanged)
+  }
+
   private func handlePropertyChange(_ name: String, _ property: mpv_event_property) {
+    var observedAudioOutput: (value: String?, generation: UInt64)?
+    $airPlaySnapshot.withLock { snapshot in
+      switch name {
+      case MPVOption.Audio.ao:
+        self.observeAudioOutput(stringValue(from: property), in: &snapshot)
+        observedAudioOutput = (snapshot.audioOutput, snapshot.audioOutputObservedGeneration)
+      case MPVOption.PlaybackControl.rebaseStartTime:
+        snapshot.rebaseStartTime = flagValue(from: property)
+      case MPVOption.PlaybackControl.pause:
+        snapshot.isPaused = flagValue(from: property)
+      case MPVProperty.pausedForCache:
+        snapshot.pausedForCache = flagValue(from: property)
+      case MPVProperty.timePos:
+        snapshot.timePosition = doubleValue(from: property)
+      case MPVProperty.audioPts:
+        snapshot.audioPTS = doubleValue(from: property)
+      case MPVProperty.duration:
+        snapshot.duration = doubleValue(from: property)
+      case MPVProperty.demuxerStartTime:
+        snapshot.demuxerStartTime = doubleValue(from: property)
+      case MPVProperty.streamOpenFilename:
+        snapshot.streamOpenFilename = stringValue(from: property)
+      case MPVProperty.estimatedVfFps:
+        snapshot.estimatedVideoFPS = doubleValue(from: property)
+      case MPVProperty.containerFps:
+        snapshot.containerFPS = doubleValue(from: property)
+      case MPVOption.PlaybackControl.speed:
+        snapshot.speed = doubleValue(from: property)
+        snapshot.speedObservationGeneration &+= 1
+      case MPVOption.Audio.audioDelay:
+        snapshot.audioDelay = doubleValue(from: property)
+        snapshot.audioDelayObservationGeneration &+= 1
+      default:
+        break
+      }
+    }
+
+    switch name {
+    case MPVOption.Audio.ao:
+      if let observedAudioOutput {
+        DispatchQueue.main.async {
+          self.player.airPlayAudio.audioOutputObservationChanged(
+            observedAudioOutput.value, generation: observedAudioOutput.generation)
+        }
+      }
+      scheduleRawAudioOutputCommandReconciliation()
+    case MPVOption.PlaybackControl.rebaseStartTime,
+         MPVProperty.duration, MPVProperty.demuxerStartTime, MPVProperty.streamOpenFilename:
+      DispatchQueue.main.async { self.player.airPlayAudio.playbackSnapshotChanged() }
+    default:
+      break
+    }
 
     switch name {
 
@@ -1286,7 +3699,7 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.secondarySidChanged(Int(id)) }
 
     case MPVOption.PlaybackControl.pause:
-      guard let paused = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee else {
+      guard let paused = flagValue(from: property) else {
         logPropertyValueError(MPVOption.PlaybackControl.pause, property.format)
         break
       }
@@ -1300,7 +3713,7 @@ class MPVController: NSObject {
         logPropertyValueError(MPVOption.PlaybackControl.speed, property.format)
         break
       }
-      DispatchQueue.main.async { self.player.speedChanged(speed) }
+      DispatchQueue.main.async { self.handleSpeedPropertyValue(speed) }
 
     case MPVOption.PlaybackControl.loopPlaylist, MPVOption.PlaybackControl.loopFile:
       DispatchQueue.main.async { [self] in
@@ -1318,7 +3731,7 @@ class MPVController: NSObject {
       }
 
     case MPVOption.Video.deinterlace:
-      guard let data = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee else {
+      guard let data = flagValue(from: property) else {
         logPropertyValueError(MPVOption.Video.deinterlace, property.format)
         break
       }
@@ -1332,7 +3745,10 @@ class MPVController: NSObject {
       }
 
     case MPVOption.Video.hwdec:
-      let data = String(cString: property.data.assumingMemoryBound(to: UnsafePointer<UInt8>.self).pointee)
+      guard let data = stringValue(from: property) else {
+        logPropertyValueError(MPVOption.Video.hwdec, property.format)
+        break
+      }
       DispatchQueue.main.async { [self] in
         if player.info.hwdec != data {
           player.info.hwdec = data
@@ -1350,12 +3766,13 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.info.rotation = intData }
 
     case MPVOption.Audio.mute:
-      guard let data = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee else {
+      guard let data = flagValue(from: property) else {
         logPropertyValueError(MPVOption.Audio.mute, property.format)
         break
       }
       DispatchQueue.main.async { [self] in
         player.info.isMuted = data
+        player.airPlayAudio.volumeChanged()
         player.syncUI(.volume)
         player.sendOSD(data ? OSDMessage.mute : OSDMessage.unMute)
       }
@@ -1367,6 +3784,7 @@ class MPVController: NSObject {
       }
       DispatchQueue.main.async { [self] in
         player.info.volume = data
+        player.airPlayAudio.volumeChanged()
         player.syncUI(.volume)
         player.sendOSD(.volume(data))
       }
@@ -1376,21 +3794,17 @@ class MPVController: NSObject {
         logPropertyValueError(MPVOption.Audio.audioDelay, property.format)
         break
       }
-      DispatchQueue.main.async { [self] in
-        player.info.audioDelay = data
-        player.sendOSD(.audioDelay(data))
-        player.postNotification(.iinaAudioDelayChanged)
-      }
+      DispatchQueue.main.async { self.handleAudioDelayPropertyValue(data) }
 
     case MPVOption.Subtitles.subVisibility:
-      if let visible = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee {
+      if let visible = flagValue(from: property) {
         DispatchQueue.main.async {
           self.player.subVisibilityChanged(visible)
         }
       }
 
     case MPVOption.Subtitles.secondarySubVisibility:
-      if let visible = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee {
+      if let visible = flagValue(from: property) {
         DispatchQueue.main.async {
           self.player.secondSubVisibilityChanged(visible)
         }
@@ -1494,6 +3908,9 @@ class MPVController: NSObject {
     case MPVProperty.playlistCount:
       DispatchQueue.main.async { self.player.postNotification(.iinaPlaylistChanged) }
 
+    case MPVProperty.playlistCurrentPos, MPVProperty.playlistPlayingPos:
+      DispatchQueue.main.async { self.player.playlistPlaybackStatusMayHaveChanged() }
+
     case MPVProperty.trackList:
       // Parse while mpv's event data is alive. Querying track-list again on the main thread can
       // deadlock with mpv's file-loading hooks and leave the player window unresponsive.
@@ -1523,7 +3940,7 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.mediaTitleChanged() }
 
     case MPVProperty.idleActive:
-      guard let idleActive = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee else {
+      guard let idleActive = flagValue(from: property) else {
         logPropertyValueError(MPVProperty.idleActive, property.format)
         break
       }
@@ -1538,6 +3955,10 @@ class MPVController: NSObject {
       break
     }
 
+    // mpv owns property.data only until the next call to mpv_wait_event. Copy the primitive value
+    // while still on the event queue; the main-queue plugin callback must not capture the C pointer.
+    let eventData = copyPropertyValue(property)
+
     // This code is running in the com.colliderli.iina.controller dispatch queue. We must not run
     // plugins from a task in this queue. Accessing EventController data from a thread in this queue
     // results in data races that can cause a crash. See issue 3986.
@@ -1545,28 +3966,55 @@ class MPVController: NSObject {
       let eventName = EventController.Name("mpv.\(name).changed")
       if player.events.hasListener(for: eventName) {
         // FIXME: better convert to JSValue before passing to call()
-        let data: Any
-        switch property.format {
-        case MPV_FORMAT_FLAG:
-          data = property.data.bindMemory(to: Bool.self, capacity: 1).pointee
-        case MPV_FORMAT_INT64:
-          data = property.data.bindMemory(to: Int64.self, capacity: 1).pointee
-        case MPV_FORMAT_DOUBLE:
-          data = property.data.bindMemory(to: Double.self, capacity: 1).pointee
-        case MPV_FORMAT_STRING:
-          data = property.data.bindMemory(to: String.self, capacity: 1).pointee
-        default:
-          data = 0
-        }
-        player.events.emit(eventName, data: data)
+        player.events.emit(eventName, data: eventData)
       }
+    }
+  }
+
+  /// mpv represents `MPV_FORMAT_FLAG` as a C `int`, not a Swift `Bool`.
+  private func flagValue(from property: mpv_event_property) -> Bool? {
+    guard property.format == MPV_FORMAT_FLAG,
+          let data = property.data else { return nil }
+    return data.assumingMemoryBound(to: Int32.self).pointee != 0
+  }
+
+  private func doubleValue(from property: mpv_event_property) -> Double? {
+    guard property.format == MPV_FORMAT_DOUBLE,
+          let data = property.data else { return nil }
+    let value = data.assumingMemoryBound(to: Double.self).pointee
+    return value.isFinite ? value : nil
+  }
+
+  /// `MPV_FORMAT_STRING` stores a `char *` at `property.data` (so the event field is `char **`).
+  private func stringValue(from property: mpv_event_property) -> String? {
+    guard property.format == MPV_FORMAT_STRING,
+          let data = property.data,
+          let value = data.assumingMemoryBound(to: UnsafePointer<CChar>?.self).pointee else { return nil }
+    return String(cString: value)
+  }
+
+  /// Copy a supported property into Swift-owned storage before mpv advances its event queue.
+  private func copyPropertyValue(_ property: mpv_event_property) -> Any {
+    guard let data = property.data else { return 0 }
+    switch property.format {
+    case MPV_FORMAT_FLAG:
+      return data.assumingMemoryBound(to: Int32.self).pointee != 0
+    case MPV_FORMAT_INT64:
+      return data.assumingMemoryBound(to: Int64.self).pointee
+    case MPV_FORMAT_DOUBLE:
+      return data.assumingMemoryBound(to: Double.self).pointee
+    case MPV_FORMAT_STRING:
+      guard let value = data.assumingMemoryBound(to: UnsafePointer<CChar>?.self).pointee else { return 0 }
+      return String(cString: value)
+    default:
+      return 0
     }
   }
 
   // MARK: - User Options
 
   private enum UserOptionType {
-    case bool, int, float, string, color, other
+    case bool, int, float, string, color, other, asyncOther
   }
 
   private struct OptionObserverInfo {
@@ -1649,6 +4097,25 @@ class MPVController: NSObject {
     return setOptionString(name, value, level: level, verboseIfDefault: verboseIfDefault)
   }
 
+  /// Apply language and subtitle-count preferences after mpv has loaded its config files.
+  private func applyPreferredTrackOptions() {
+    let options: [(String, String)] = [
+      (MPVOption.TrackSelection.alang, preferredTrackLanguage(for: .audioLanguage)),
+      (MPVOption.TrackSelection.slang, preferredTrackLanguage(for: .subLang)),
+      (MPVOption.Subtitles.secondarySid,
+       Preference.bool(for: .showSecondSubtitleTrack) ? "auto" : "no"),
+    ]
+    for (name, value) in options where !userOptionsContains(name) {
+      chkErr(setString(name, value, level: .verbose))
+    }
+  }
+
+  private func preferredTrackLanguage(for key: Preference.Key) -> String {
+    guard Preference.bool(for: .autoSelectPreferredTrackLanguages) else { return "" }
+    return SubtitleLanguagePreference.preferredTrackTags(from: Preference.string(for: key))
+      .joined(separator: ",")
+  }
+
   /// Set the given mpv option to the value of the given IINA setting.
   ///
   /// To reduce the amount of logging that occurs when `MPVController` initializes a mpv core this method provides a
@@ -1697,7 +4164,7 @@ class MPVController: NSObject {
         code = setOptionalOptionColor(name, value, level: level, verboseIfDefault: verboseIfDefault)
       }
 
-    case .other:
+    case .other, .asyncOther:
       guard let tr = transformer else {
         log("setUserOption: no transformer!", level: .error)
         return
@@ -1760,6 +4227,21 @@ class MPVController: NSObject {
         }
         if let value = tr(info.prefKey) {
           setString(info.optionName, value)
+        }
+
+      case .asyncOther:
+        guard let tr = info.transformer else {
+          log("setUserOption: no transformer!", level: .error)
+          return
+        }
+        if let value = tr(info.prefKey) {
+          let result = setStringAsync(info.optionName, value,
+                                      replyUserdata: UserData.preferenceOptionCommand,
+                                      level: .verbose)
+          if result < 0 {
+            log("Could not queue asynchronous preference update for \(info.optionName): \(result)",
+                level: .warning)
+          }
         }
       }
     }

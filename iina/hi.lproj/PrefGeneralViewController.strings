@@ -26,7 +26,7 @@
 "6TV-DG-503.title" = "प्लेलिस्ट:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "8kU-8g-VgX"; */
-"8kU-8g-VgX.title" = "प्रभावी होने के लिए IINA को पुनः आरंभ करने की आवश्यकता है।";
+"8kU-8g-VgX.title" = "प्रभावी होने के लिए Reel को पुनः आरंभ करने की आवश्यकता है।";
 
 /* Class = "NSButtonCell"; title = "Only in \"music mode\""; ObjectID = "AVe-9Z-RgQ"; */
 "AVe-9Z-RgQ.title" = "Only in \"music mode\"";
