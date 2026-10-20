@@ -40,6 +40,9 @@ selected, Reel engages the bridge again when the next supported file loads.
   changes retain their normal on-screen feedback.
 - **What carries over.** Pause, seek, speed, audio-track changes, **Audio Delay**, mute and volume all
   apply to the speaker. Watch-later files keep your own speed and audio delay.
+  Mute and volume are applied to the decoded audio before it reaches AirPlay. Changing either
+  rebuilds the routed audio item to discard audio buffered with the old gain, so the speaker may
+  briefly buffer again while the picture realigns.
 - Custom MPV `set`, `add`, `multiply` and `cycle-values` bindings for speed and Audio Delay keep
   applying to the user's timing while AirPlay carries audio. Their OSD settings are preserved, and
   timing commands stay in order within a command list, including bindings with an async prefix.

@@ -16,6 +16,32 @@ import Cocoa
 
 // MARK: - WAV stream
 
+enum AirPlayPCMVolume {
+  static func gain(volume: Double, muted: Bool) -> Double {
+    guard !muted, volume.isFinite else { return 0 }
+    return min(max(volume / 100, 0), 1)
+  }
+
+  /// Apply Reel's gain before handing PCM to the external route. The receiver must never
+  /// depend on AVPlayer's local mixer honoring its mute or volume settings.
+  static func apply(to data: Data, gain: Double) -> Data {
+    let gain = gain.isFinite ? min(max(gain, 0), 1) : 0
+    guard gain < 1 else { return data }
+    guard gain > 0 else { return Data(count: data.count) }
+    var result = data
+    result.withUnsafeMutableBytes { (bytes: UnsafeMutableRawBufferPointer) in
+      for offset in stride(from: 0, to: bytes.count - 1, by: 2) {
+        let bits = UInt16(bytes[offset]) | UInt16(bytes[offset + 1]) << 8
+        let scaled = Int16((Double(Int16(bitPattern: bits)) * gain).rounded())
+        let output = UInt16(bitPattern: scaled)
+        bytes[offset] = UInt8(truncatingIfNeeded: output)
+        bytes[offset + 1] = UInt8(truncatingIfNeeded: output >> 8)
+      }
+    }
+    return result
+  }
+}
+
 struct AirPlayAudioStartupClock {
   private(set) var startedAt: Date?
 
@@ -178,6 +204,7 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
   let queue = DispatchQueue(label: "com.colliderli.iina.airplay-audio", qos: .userInitiated)
   let delegateQueue = DispatchQueue(label: "com.colliderli.iina.airplay-audio-delegate", qos: .userInitiated)
   let frameCount: Int64
+  let gain: Double
   private let source: String
   private let streamIndex: Int
   private let mediaOrigin: Double?
@@ -192,12 +219,13 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
   private var requests: [Request] = []
   private var pumpToken = 0
 
-  init(source: String, streamIndex: Int, mediaOrigin: Double?, frameCount: Int64,
+  init(source: String, streamIndex: Int, mediaOrigin: Double?, frameCount: Int64, gain: Double = 1,
        onFailure: @escaping () -> Void) {
     self.source = source
     self.streamIndex = streamIndex
     self.mediaOrigin = mediaOrigin
     self.frameCount = min(max(frameCount, 1), Self.maximumFrames)
+    self.gain = gain.isFinite ? min(max(gain, 0), 1) : 0
     self.onFailure = onFailure
     super.init()
   }
@@ -347,7 +375,8 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
       }
       guard !request.cancellation.isCancelled else { return true }
       let length = Int(upper - request.offset)
-      dataRequest.respond(with: data[skip..<(skip + length)])
+      let adjusted = AirPlayPCMVolume.apply(to: data, gain: gain)
+      dataRequest.respond(with: adjusted[skip..<(skip + length)])
       request.offset = upper
     }
     if request.offset >= request.end {
@@ -1393,7 +1422,9 @@ final class AirPlayAudioBridge: NSObject {
     // Unknown lengths (live streams) get the longest stream a WAV header can describe.
     let frames = AirPlayPCMResourceLoader.frameCount(for: duration)
     let loader = AirPlayPCMResourceLoader(source: selection.source, streamIndex: selection.streamIndex,
-                                          mediaOrigin: selection.origin, frameCount: frames) { [weak self] in
+                                          mediaOrigin: selection.origin, frameCount: frames,
+                                          gain: AirPlayPCMVolume.gain(volume: player.info.volume,
+                                                                     muted: player.info.isMuted)) { [weak self] in
       guard let self, self.itemGeneration == generation else { return }
       self.failForFile("the audio could not be decoded")
     }
@@ -1928,8 +1959,19 @@ final class AirPlayAudioBridge: NSObject {
 
   func volumeChanged() {
     guard let avPlayer, let player else { return }
-    avPlayer.volume = Float((player.info.volume / 100).clamped(to: 0...1))
-    avPlayer.isMuted = player.info.isMuted
+    let gain = AirPlayPCMVolume.gain(volume: player.info.volume, muted: player.info.isMuted)
+    if let loader, loader.gain != gain, isCarrying {
+      // AVFoundation and the receiver may have already buffered seconds of the old gain.
+      // Replace the stream so mute and volume changes also discard those buffered samples.
+      avPlayer.pause()
+      avPlayer.isMuted = true
+      guard case .supported(let selection) = audioSelection() else { return }
+      replaceItem(with: selection)
+      return
+    }
+    // PCM already carries the gain; applying it here too would square the requested volume.
+    avPlayer.volume = 1
+    avPlayer.isMuted = gain == 0
   }
 
   func consumeInternalSpeed(_ speed: Double) -> Bool {
