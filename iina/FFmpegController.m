@@ -78,6 +78,7 @@ return -1;\
     _addedTimestamps = [[NSMutableSet alloc] init];
     _queue = [[NSOperationQueue alloc] init];
     _queue.maxConcurrentOperationCount = 1;
+    _queue.qualityOfService = NSQualityOfServiceUtility;
   }
   return self;
 }
@@ -95,15 +96,23 @@ return -1;\
     if (!operation || [operation isCancelled]) {
       return;
     }
-    self->_timestamp = CACurrentMediaTime();
-    int success = [self getPeeksForFile:file thumbnailsWidth:thumbWidth operation:operation];
-    if ([operation isCancelled]) {
-      return;
-    }
-    if (self.delegate) {
-      [self.delegate didGenerateThumbnails:[NSArray arrayWithArray:self->_thumbnails]
-                                   forFile: file
-                                 succeeded:(success < 0 ? NO : YES)];
+    @try {
+      self->_timestamp = CACurrentMediaTime();
+      int success = [self getPeeksForFile:file thumbnailsWidth:thumbWidth operation:operation];
+      if ([operation isCancelled]) {
+        return;
+      }
+      if (self.delegate) {
+        [self.delegate didGenerateThumbnails:[NSArray arrayWithArray:self->_thumbnails]
+                                     forFile: file
+                                   succeeded:(success < 0 ? NO : YES)];
+      }
+    } @finally {
+      // The delegate owns the published images. This serial worker must also release images
+      // after cancellation or failure, including when the next file has no video thumbnails.
+      [self->_thumbnails removeAllObjects];
+      [self->_thumbnailPartialResult removeAllObjects];
+      [self->_addedTimestamps removeAllObjects];
     }
   }];
   [_queue addOperation:op];

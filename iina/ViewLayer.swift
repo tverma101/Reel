@@ -68,7 +68,12 @@ class ViewLayer: CAOpenGLLayer {
 
   private weak var videoView: VideoView!
 
-  private let mpvGLQueue = DispatchQueue(label: "com.colliderli.iina.mpvgl", qos: .userInteractive)
+  // Each frame creates temporary Core Animation/driver objects. Drain them after that frame,
+  // even when the render queue remains continuously busy during long playback sessions.
+  private let mpvGLQueue = DispatchQueue(label: "com.colliderli.iina.mpvgl", qos: .userInteractive,
+                                       autoreleaseFrequency: .workItem)
+  private let renderUpdateGate = CoalescedNotificationGate()
+  @Atomic private var queuedForceDraw = false
 
   private var bufferDepth: GLint = 8
 
@@ -313,7 +318,14 @@ class ViewLayer: CAOpenGLLayer {
   }
 
   func update(force: Bool = false) {
-    mpvGLQueue.async { [self] in
+    if force { queuedForceDraw = true }
+    // A running draw may have one successor. Bursts must not retain a backlog of obsolete frames;
+    // merge forced redraw intent separately so a resize or paused snapshot still gets rendered.
+    renderUpdateGate.schedule(on: mpvGLQueue) { [self] in
+      let force = $queuedForceDraw.withLock { pending in
+        defer { pending = false }
+        return pending
+      }
       if force { forceDraw = true }
       needsFlip = true
       display()

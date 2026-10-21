@@ -591,9 +591,12 @@ class PlayerCore: NSObject {
 
   override init() {
     playerNumber = PlayerCore.playerCoreCounter
-    backgroundQueue = DispatchQueue(label: "IINAPlayerCoreTask\(playerNumber)", qos: .background)
-    playlistQueue = DispatchQueue(label: "IINAPlaylistTask\(playerNumber)", qos: .utility)
-    thumbnailQueue = DispatchQueue(label: "IINAPlayerCoreThumbnailTask\(playerNumber)", qos: .utility)
+    backgroundQueue = DispatchQueue(label: "IINAPlayerCoreTask\(playerNumber)", qos: .background,
+                                    autoreleaseFrequency: .workItem)
+    playlistQueue = DispatchQueue(label: "IINAPlaylistTask\(playerNumber)", qos: .utility,
+                                  autoreleaseFrequency: .workItem)
+    thumbnailQueue = DispatchQueue(label: "IINAPlayerCoreThumbnailTask\(playerNumber)", qos: .utility,
+                                   autoreleaseFrequency: .workItem)
     super.init()
     self.mpv = MPVController(playerCore: self)
     self.mainWindow = MainWindowController(playerCore: self)

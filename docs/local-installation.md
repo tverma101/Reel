@@ -17,6 +17,9 @@ checkout is `~/Projects/iina`, and local support files live at `~/Documents/IINA
 
 ## Build and install
 
+Build 202's playback resource changes and focused regression commands are documented in
+[Resource efficiency](resource-efficiency.md).
+
 Build from a committed, canonical Reel checkout, increasing `CURRENT_PROJECT_VERSION` for each
 published build and keeping it monotonic across marketing-version changes. The app embeds the
 checked-out commit, version, build number, and Xcode configuration; the installer

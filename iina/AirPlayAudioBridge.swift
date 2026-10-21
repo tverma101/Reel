@@ -201,8 +201,10 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
     }
   }
 
-  let queue = DispatchQueue(label: "com.colliderli.iina.airplay-audio", qos: .userInitiated)
-  let delegateQueue = DispatchQueue(label: "com.colliderli.iina.airplay-audio-delegate", qos: .userInitiated)
+  let queue = DispatchQueue(label: "com.colliderli.iina.airplay-audio", qos: .userInitiated,
+                            autoreleaseFrequency: .workItem)
+  let delegateQueue = DispatchQueue(label: "com.colliderli.iina.airplay-audio-delegate", qos: .userInitiated,
+                                    autoreleaseFrequency: .workItem)
   let frameCount: Int64
   let gain: Double
   private let source: String
@@ -899,7 +901,7 @@ final class AirPlayAudioBridge: NSObject {
   private var loader: AirPlayPCMResourceLoader?
   private let playheadFeeder = AirPlayPlayheadFeeder()
   private let playheadQueue = DispatchQueue(label: "com.colliderli.iina.airplay-playhead",
-                                             qos: .userInitiated)
+                                             qos: .userInitiated, autoreleaseFrequency: .workItem)
   private var playheadObserver: Any?
   private var itemSelection: Selection?
   private var itemGeneration = 0

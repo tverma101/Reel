@@ -241,10 +241,10 @@ class MPVController: NSObject {
   /// - Important: To avoid using locking to prevent data races the convention is that processing involving data used by the UI is
   ///     never performed while running on this queue's thread and instead is queued for processing by the main thread .
   private lazy var queue = DispatchQueue(label: "com.colliderli.iina.controller",
-                                         qos: .userInitiated)
+                                         qos: .userInitiated, autoreleaseFrequency: .workItem)
   /// Owns the two lifecycle hooks whose delivery must not share the busy UI event queue.
   private let lifecycleHookQueue = DispatchQueue(label: "com.colliderli.iina.lifecycle-hooks",
-                                                  qos: .userInitiated)
+                                                  qos: .userInitiated, autoreleaseFrequency: .workItem)
   private struct LifecycleHookInvocation {
     let hookID: UInt64
     let name: String
@@ -271,7 +271,7 @@ class MPVController: NSObject {
   private var lifecycleHookRetryScheduled = false
   /// Snapshot queries share libmpv's core lock and must not delay the AppKit event thread.
   private let airPlaySnapshotQueue = DispatchQueue(label: "com.colliderli.iina.airplay-snapshot",
-                                                    qos: .userInitiated)
+                                                    qos: .userInitiated, autoreleaseFrequency: .workItem)
   /// Gates queued AirPlay/snapshot/quit calls against the terminal marker. The event reader never
   /// takes this lock while polling so it can always dispatch hooks that unblock libmpv calls.
   private let airPlaySnapshotCallLock = NSLock()
@@ -751,7 +751,9 @@ class MPVController: NSObject {
 
     setUserOption(PK.enableCache, type: .other, forName: MPVOption.Cache.cache,
                   verboseIfDefault: true) { key in
-      return Preference.bool(for: key) ? "yes" : "no"
+      // This preference controls network buffering. Let mpv recognize network inputs instead of
+      // filling a second read-ahead cache for local files already cached by the operating system.
+      return Preference.bool(for: key) ? "auto" : "no"
     }
 
     setUserOption(PK.cachePauseInitial, type: .bool, forName: MPVOption.Cache.cachePauseInitial,
