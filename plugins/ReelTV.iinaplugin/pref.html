@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: -apple-system, sans-serif; font-size: 13px; margin: 14px; color: #333; }
+    .field { margin-bottom: 14px; }
+    label { display: block; font-weight: 600; margin-bottom: 4px; }
+    input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid #bbb; border-radius: 6px; }
+    .help { color: #777; font-size: 11px; line-height: 1.4; margin-top: 4px; }
+    code { background: #eee; padding: 1px 4px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="field">
+    <label for="tvFolder">TV shows folder</label>
+    <input type="text" id="tvFolder" placeholder="/Users/you/Movies/TV">
+    <div class="help">Enter the full folder path; paths beginning with <code>~/</code> are not supported. A folder containing your shows — one subfolder per show works best, but flat folders and mixed layouts are detected too. Episodes are matched from names like <code>Show S02E03.mkv</code>, <code>Show.2x04.mp4</code>, or <code>Show.S01.E05.avi</code>. Everything stays local; the plugin scans at most three levels deep.</div>
+  </div>
+  <div class="field">
+    <label for="tmdbKey">TMDB API key (optional)</label>
+    <input type="text" id="tmdbKey" placeholder="free key from themoviedb.org">
+    <div class="help">Without a key the library still works fully — you just get plain tiles instead of posters and episode titles. Saved poster images may continue to load from TMDB after the key is removed. Get a free key at <code>themoviedb.org/settings/api</code>. Poster and episode-title requests go directly to TMDB.</div>
+  </div>
+  <div class="field">
+    <label for="tmdbLanguage">TMDB language</label>
+    <input type="text" id="tmdbLanguage" placeholder="en-US">
+    <div class="help">Used for metadata titles, overviews, and episode names.</div>
+  </div>
+  <script>
+    const keys = ["tvFolder", "tmdbKey", "tmdbLanguage"];
+    window.onload = () => keys.forEach((k) => {
+      const el = document.getElementById(k);
+      el.value = iina.preferences.get(k) || "";
+      el.addEventListener("change", () => {
+        iina.preferences.set(k, el.value.trim());
+        iina.preferences.sync();
+      });
+    });
+  </script>
+</body>
+</html>

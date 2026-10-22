@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="sidebar.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>TV Library</h1>
+      <button id="rescan" title="Rescan the shows folder">↻</button>
+    </header>
+    <div id="empty" class="hidden">
+      <p>No shows found yet.</p>
+      <p class="hint">Set your TV shows folder in <b>Settings › Plugins › Reel TV</b>, then hit ↻ above. Episodes are detected from names like <code>Spark S02E03.mkv</code> or <code>Show.1x04.mp4</code>.</p>
+    </div>
+    <div id="rows"></div>
+    <div id="detail" class="hidden"></div>
+  </div>
+  <script src="sidebar.js"></script>
+</body>
+</html>
