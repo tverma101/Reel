@@ -180,7 +180,9 @@ after that deadline before cancellation is observed. Network reconnects are boun
 capped at 12 seconds (about 750 KiB of mono
 16 kHz float samples). FFmpeg also bounds each decoded frame across all channels, so ordinary
 surround audio remains supported while an unusually large frame is rejected before its decoded
-buffer is allocated. Protected media is outside this path. Reel does not control the separate
+buffer is allocated. Resampling uses the decoded frame's sample format, rate, and channel layout;
+some codecs, including DTS, do not provide the sample format in stream metadata until decoding
+begins. Protected media is outside this path. Reel does not control the separate
 macOS system-wide Live Captions window.
 
 ## Related debugging notes
