@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import os.log
 
 /// The IINA Logger.
 ///
@@ -253,6 +254,28 @@ class Logger: NSObject {
     return "\(time) [\(subsystem.rawValue)][\(level.shortForm)] \(message)\(appendNewlineAtTheEnd ? "\n" : "")"
   }
 
+  private static let osLogLock = Lock()
+  private static var osLoggers: [String: os.Logger] = [:]
+
+  private static func osLogger(for subsystem: String) -> os.Logger {
+    osLogLock.withLock {
+      if let cached = osLoggers[subsystem] { return cached }
+      let logger = os.Logger(subsystem: Bundle.main.bundleIdentifier ?? "io.iina",
+                             category: subsystem)
+      osLoggers[subsystem] = logger
+      return logger
+    }
+  }
+
+  private static func mirrorToUnifiedLog(_ message: String, level: Level, subsystem: Subsystem) {
+    let logger = osLogger(for: subsystem.rawValue)
+    if level == .error {
+      logger.error("\(message, privacy: .public)")
+    } else {
+      logger.notice("\(message, privacy: .public)")
+    }
+  }
+
   /// Whether the logger is emitting messages at the given level.
   /// - Parameter level: The log level to check.
   /// - Returns: `true` if messages at the given level will be emitted; `false` if the logger is suppressing messages at this level.
@@ -294,6 +317,16 @@ class Logger: NSObject {
   ///   - level: The log level of the message.
   ///   - subsystem: The subsystem emitting this message.
   static func log(_ message: () -> String, level: Level = .debug, subsystem: Subsystem = .general) {
+    // Warnings and errors are mirrored to the unified system log even when file logging is
+    // disabled. File logging is off by default, and without this mirror an event such as the
+    // caption pipeline stopping would leave no trace that Console or `log show` could recover.
+    if level.rawValue >= Level.warning.rawValue {
+      let text = message()
+      mirrorToUnifiedLog(text, level: level, subsystem: subsystem)
+      write(text, level: level, subsystem: subsystem)
+      return
+    }
+
     #if !DEBUG
     guard enabled else { return }
     #endif
@@ -302,8 +335,10 @@ class Logger: NSObject {
 
     // Now that we know the message will not be discarded, call the closure to construct the message
     // string to log.
-    let message = message()
+    write(message(), level: level, subsystem: subsystem)
+  }
 
+  private static func write(_ message: String, level: Level, subsystem: Subsystem) {
     let date = Date()
     let string = formatMessage(message, level, subsystem, true, date)
     let log = Log(subsystem: subsystem.rawValue, level: level, message: message, date: dateFormatter.string(from: date), logString: string)

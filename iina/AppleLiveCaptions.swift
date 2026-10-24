@@ -582,15 +582,31 @@ final class AppleLiveCaptions: @unchecked Sendable {
   private var captionResults = SpeechCaptionResultStore()
   private var playbackTimeline = SpeechCaptionPlaybackTimeline()
   private var decodeCancellation: LiveCaptionDecodeCancellation?
-  private var unavailableSpeechLocales = Set<String>()
+  /// Locales whose most recent installed-model check found no usable on-device model, with the
+  /// time of that check. A negative result is trusted only briefly: the system can report no
+  /// models while its speech assets are still loading, and caching such a miss permanently kept
+  /// captions off for a whole session even though the model was installed.
+  private var unavailableSpeechLocaleChecks: [String: Date] = [:]
   private var installedSpeechLanguageCodes: Set<String>?
   private var speechLocaleCheckTask: Task<Void, Never>?
   private var speechLocaleLookupState = LiveCaptionLocaleLookupState()
   private let chunkDuration: Double = 10
+  /// How long a locale with no installed model waits before the installed-model check runs again.
+  private static let unavailableModelRetryInterval: TimeInterval = 60
+  /// How long a stream whose audio could not be read waits before it is read again.
+  private static let streamRetryInterval: TimeInterval = 60
   /// Consecutive chunks of the active stream that could not be opened or decoded.
   private var streamDecodeFailures = 0
-  /// Set after repeated stream failures so an unreadable URL is not refetched every chunk.
+  /// Set after repeated stream failures so an unreadable URL is not refetched on every chunk.
   private var abandonedURL: URL?
+  /// When the URL was abandoned. A transient outage is retried after `streamRetryInterval`.
+  private var abandonedAt: Date?
+  /// True when the URL was abandoned because its source cannot seek to excerpts. Only such a
+  /// source can ever produce captions, so this abandonment is permanent.
+  private var abandonedBecauseUnseekable = false
+  /// The URL for which the missing-audio-selection notice was last logged, so the notice is not
+  /// repeated on every tick.
+  private var loggedMissingAudioSelectionFor: URL?
   /// Keeps the media open between chunks so a stream is not reconnected and re-probed each time.
   /// Confined to `decodeQueue`.
   private var chunkReader: FFmpegAudioChunkReader?
@@ -939,7 +955,7 @@ final class AppleLiveCaptions: @unchecked Sendable {
     guard Preference.bool(for: .appleLiveCaptionsFallback) else {
       // Let a user retry after installing a speech model while the app is open.
       stopAppearanceTracking()
-      unavailableSpeechLocales.removeAll()
+      unavailableSpeechLocaleChecks.removeAll()
       installedSpeechLanguageCodes = nil
       stop()
       return
@@ -961,8 +977,10 @@ final class AppleLiveCaptions: @unchecked Sendable {
     if #available(macOS 26, *), SpeechTranscriber.isAvailable {
       let locale = selectedSpeechLocale
       let localeID = canonicalLocaleID(locale)
-      guard !unavailableSpeechLocales.contains(localeID) else {
-        stop()
+      if localeModelUnavailable(localeID) {
+        // A recent check found no usable on-device model. Keep a timer running so tick retries
+        // the check during continuous playback instead of waiting for another playback event.
+        if timer == nil, player.info.state == .playing { startTimer() }
         return
       }
       guard let installedSpeechLanguageCodes else {
@@ -971,10 +989,10 @@ final class AppleLiveCaptions: @unchecked Sendable {
       }
       guard let languageCode = locale.language.languageCode?.identifier,
             installedSpeechLanguageCodes.contains(languageCode) else {
-        unavailableSpeechLocales.insert(localeID)
-        Logger.log("Apple live captions have no installed on-device model for \(locale.identifier)",
+        recordLocaleModelUnavailable(localeID)
+        Logger.log("Apple live captions have no installed on-device model for \(locale.identifier); the check runs again in \(Int(Self.unavailableModelRetryInterval))s",
                    level: .warning, subsystem: Logger.Sub.onlinesub)
-        stop()
+        if timer == nil, player.info.state == .playing { startTimer() }
         return
       }
       if timer == nil, player.info.state == .playing { startTimer() }
@@ -1169,6 +1187,9 @@ final class AppleLiveCaptions: @unchecked Sendable {
       playbackTimeline.reset()
       streamDecodeFailures = 0
       abandonedURL = nil
+      abandonedAt = nil
+      abandonedBecauseUnseekable = false
+      loggedMissingAudioSelectionFor = nil
       audioOffset = nil
       activeAudioSelection = nil
       activeURL = url
@@ -1209,7 +1230,19 @@ final class AppleLiveCaptions: @unchecked Sendable {
     }
     overlay.isHidden = text.isEmpty
 
-    guard player.info.state == .playing, abandonedURL != url else { return }
+    if abandonedURL == url {
+      // A source that cannot seek never can, but a stream whose audio merely failed to read may
+      // have hit a transient outage (a throttled or restarting server), so retry after a cooldown
+      // instead of keeping captions off for the rest of the session.
+      if abandonedBecauseUnseekable { return }
+      guard let abandonedAt, Date().timeIntervalSince(abandonedAt) >= Self.streamRetryInterval else { return }
+      self.abandonedURL = nil
+      self.abandonedAt = nil
+      streamDecodeFailures = 0
+      Logger.log("Apple live captions: retrying \(url.absoluteString) after its audio could not be read",
+                 level: .debug, subsystem: Logger.Sub.onlinesub)
+    }
+    guard player.info.state == .playing else { return }
     if inFlight, let recognitionStartedAt,
        Date().timeIntervalSince(recognitionStartedAt) > 15 {
       Logger.log("Apple live captions: chunk \(requestedStart ?? -1)s timed out",
@@ -1247,9 +1280,23 @@ final class AppleLiveCaptions: @unchecked Sendable {
         return
       }
     }
+    if #available(macOS 26, *) {
+      // An expired no-model result is refreshed here so captions recover during continuous
+      // playback, when no other event would run the eligibility check again.
+      let localeID = canonicalLocaleID(selectedSpeechLocale)
+      if unavailableSpeechLocaleChecks[localeID] != nil,
+         Date().timeIntervalSince(unavailableSpeechLocaleChecks[localeID]!) >= Self.unavailableModelRetryInterval {
+        unavailableSpeechLocaleChecks[localeID] = nil
+        Logger.log("Apple live captions: retrying the installed-model check for \(localeID)",
+                   level: .debug, subsystem: Logger.Sub.onlinesub)
+        checkInstalledSpeechLocales(localeID: localeID, mediaURL: url)
+      }
+      if localeModelUnavailable(localeID) { return }
+    }
     // Captions wait for final text, so the next chunk starts well before it is needed; a stream
     // starts earlier still in case its connection has to be reopened.
     let lookahead: Double = url.isFileURL ? 4 : 6
+    if activeAudioSelection == nil { logOnceMissingAudioSelection(for: url) }
     guard let audioSelection = activeAudioSelection else { return }
     if !inFlight, analyzerTask == nil, !legacySpeechTaskState.hasActiveTask,
        requestedStart == nil || position >= requestedStart! + chunkDuration - lookahead {
@@ -1330,8 +1377,9 @@ final class AppleLiveCaptions: @unchecked Sendable {
     if #available(macOS 26, *), SpeechTranscriber.isAvailable {
       let localeID = canonicalLocaleID(selectedSpeechLocale)
       // The model check is performed before decoding; if analyzer setup previously confirmed that
-      // the selected locale has no usable model, avoid reopening and probing the media on every chunk.
-      guard !unavailableSpeechLocales.contains(localeID) else { return }
+      // the selected locale has no usable model, avoid reopening and probing the media on every
+      // chunk. tick refreshes an expired check.
+      guard !localeModelUnavailable(localeID) else { return }
     } else {
       guard recognizer?.isAvailable == true else { return }
     }
@@ -1382,6 +1430,8 @@ final class AppleLiveCaptions: @unchecked Sendable {
             // Excerpt transcription must seek to each requested media-time window. A live or
             // otherwise nonseekable HTTP input cannot satisfy that contract, so stop retrying it.
             self.abandonedURL = url
+            self.abandonedAt = nil
+            self.abandonedBecauseUnseekable = true
             self.streamDecodeFailures = 0
             Logger.log("Apple live captions stopped for this stream: its audio source cannot seek to excerpts",
                        level: .warning, subsystem: Logger.Sub.onlinesub)
@@ -1389,7 +1439,9 @@ final class AppleLiveCaptions: @unchecked Sendable {
             self.streamDecodeFailures += 1
             if self.streamDecodeFailures >= 3 {
               self.abandonedURL = url
-              Logger.log("Apple live captions stopped for this stream: its audio could not be read",
+              self.abandonedAt = Date()
+              self.abandonedBecauseUnseekable = false
+              Logger.log("Apple live captions stopped for this stream: its audio could not be read; audio is retried in \(Int(Self.streamRetryInterval))s",
                          level: .warning, subsystem: Logger.Sub.onlinesub)
             }
           }
@@ -1477,13 +1529,11 @@ final class AppleLiveCaptions: @unchecked Sendable {
         let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
         try Task.checkCancellation()
         guard let format else {
-          Logger.log("Apple live captions have no installed on-device model for \(locale.identifier)",
+          Logger.log("Apple live captions have no installed on-device model for \(locale.identifier); the check runs again in \(Int(Self.unavailableModelRetryInterval))s",
                      level: .warning, subsystem: Logger.Sub.onlinesub)
           await MainActor.run {
             guard captions.workState.accepts(token) else { return }
-            captions.unavailableSpeechLocales.insert(localeID)
-            captions.timer?.invalidate()
-            captions.timer = nil
+            captions.recordLocaleModelUnavailable(localeID)
             captions.inFlight = false
             captions.recognitionStartedAt = nil
             captions.captionResults.removeAll()
@@ -1582,6 +1632,26 @@ final class AppleLiveCaptions: @unchecked Sendable {
   private var selectedSpeechLocale: Locale {
     let selected = Preference.string(for: .appleLiveCaptionsLanguage) ?? ""
     return selected.isEmpty ? Locale.current : Locale(identifier: selected)
+  }
+
+  /// Whether the last installed-model check for the locale, within the retry interval, found no
+  /// usable model. An expired result lets the check run again.
+  private func localeModelUnavailable(_ localeID: String) -> Bool {
+    guard let checkedAt = unavailableSpeechLocaleChecks[localeID] else { return false }
+    return Date().timeIntervalSince(checkedAt) < Self.unavailableModelRetryInterval
+  }
+
+  private func recordLocaleModelUnavailable(_ localeID: String) {
+    unavailableSpeechLocaleChecks[localeID] = Date()
+  }
+
+  /// Reports once per URL that transcription cannot start because no eligible internal audio
+  /// track is selected, so the condition is diagnosable without repeating on every tick.
+  private func logOnceMissingAudioSelection(for url: URL) {
+    guard loggedMissingAudioSelectionFor != url else { return }
+    loggedMissingAudioSelectionFor = url
+    Logger.log("Apple live captions: no eligible internal audio track is selected; not transcribing",
+               level: .debug, subsystem: Logger.Sub.onlinesub)
   }
 
   private func canonicalLocaleID(_ locale: Locale) -> String {
