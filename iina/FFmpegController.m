@@ -857,12 +857,16 @@ static const double FFmpegAudioChunkMaximumDuration = 12.0;
   AVFormatContext *formatContext;
   AVCodecContext *decoder;
   SwrContext *resampler;
+  AVChannelLayout resamplerInputLayout;
+  int resamplerInputRate;
+  int resamplerInputFormat;
   int audioStreamIndex;
   double mediaOrigin;
 }
 @property (nonatomic, copy, nullable) BOOL (^cancellationCheck)(void);
 @property (nonatomic, readwrite) BOOL failed;
 @property (nonatomic, readwrite) BOOL seekUnsupported;
+- (BOOL)configureResamplerForFrame:(AVFrame *)frame;
 - (nullable instancetype)initWithSource:(nonnull NSString *)source
               requestedAudioStreamIndex:(NSInteger)requestedAudioStreamIndex
                      cancellationCheck:(nullable BOOL (^)(void))cancellationCheck;
@@ -903,6 +907,8 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
       requestedAudioStreamIndex > INT_MAX) {
     return nil;
   }
+  resamplerInputRate = -1;
+  resamplerInputFormat = -1;
   const BOOL useBestAudioStream = requestedAudioStreamIndex == -1;
   audioStreamIndex = useBestAudioStream ? -1 : (int)requestedAudioStreamIndex;
   _cancellationCheck = [cancellationCheck copy];
@@ -1004,16 +1010,6 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
     return nil;
   }
 
-  AVChannelLayout outputLayout;
-  memset(&outputLayout, 0, sizeof(outputLayout));
-  av_channel_layout_default(&outputLayout, 1);
-  ret = swr_alloc_set_opts2(&resampler, &outputLayout, AV_SAMPLE_FMT_FLT, 16000,
-                            &decoder->ch_layout, decoder->sample_fmt, decoder->sample_rate, 0, NULL);
-  av_channel_layout_uninit(&outputLayout);
-  if (ret < 0 || resampler == NULL || swr_init(resampler) < 0) {
-    return nil;
-  }
-
   if (formatContext->start_time != AV_NOPTS_VALUE) {
     mediaOrigin = (double)formatContext->start_time / AV_TIME_BASE;
   }
@@ -1024,8 +1020,49 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
 - (void)dealloc
 {
   if (resampler != NULL) swr_free(&resampler);
+  av_channel_layout_uninit(&resamplerInputLayout);
   if (decoder != NULL) avcodec_free_context(&decoder);
   if (formatContext != NULL) avformat_close_input(&formatContext);
+}
+
+- (BOOL)configureResamplerForFrame:(AVFrame *)frame
+{
+  int inputRate = frame->sample_rate;
+  int inputFormat = frame->format;
+  const AVChannelLayout *frameLayout = &frame->ch_layout;
+  AVChannelLayout inputLayout;
+  memset(&inputLayout, 0, sizeof(inputLayout));
+  if (inputRate <= 0 || inputFormat < 0 || frameLayout->nb_channels <= 0) {
+    return NO;
+  }
+  if (frameLayout->order == AV_CHANNEL_ORDER_UNSPEC) {
+    av_channel_layout_default(&inputLayout, frameLayout->nb_channels);
+  } else if (av_channel_layout_copy(&inputLayout, frameLayout) < 0) {
+    return NO;
+  }
+  if (resampler != NULL && inputRate == resamplerInputRate && inputFormat == resamplerInputFormat &&
+      av_channel_layout_compare(&inputLayout, &resamplerInputLayout) == 0) {
+    av_channel_layout_uninit(&inputLayout);
+    return YES;
+  }
+
+  if (resampler != NULL) swr_free(&resampler);
+  av_channel_layout_uninit(&resamplerInputLayout);
+  AVChannelLayout outputLayout;
+  memset(&outputLayout, 0, sizeof(outputLayout));
+  av_channel_layout_default(&outputLayout, 1);
+  int ret = swr_alloc_set_opts2(&resampler, &outputLayout, AV_SAMPLE_FMT_FLT, 16000,
+                                &inputLayout, inputFormat, inputRate, 0, NULL);
+  av_channel_layout_uninit(&outputLayout);
+  if (ret < 0 || resampler == NULL || swr_init(resampler) < 0) {
+    av_channel_layout_uninit(&inputLayout);
+    if (resampler != NULL) swr_free(&resampler);
+    return NO;
+  }
+  resamplerInputLayout = inputLayout;
+  resamplerInputRate = inputRate;
+  resamplerInputFormat = inputFormat;
+  return YES;
 }
 
 - (nullable NSData *)readMonoAudioFrom:(double)startTime
@@ -1090,8 +1127,11 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
   }
   avcodec_flush_buffers(decoder);
   // Drop samples buffered from the previous chunk; this chunk starts at a new position.
-  swr_close(resampler);
-  if (swr_init(resampler) < 0 || (cancellationCheck != nil && cancellationCheck())) {
+  if (resampler != NULL) {
+    swr_close(resampler);
+  }
+  if ((resampler != NULL && swr_init(resampler) < 0) ||
+      (cancellationCheck != nil && cancellationCheck())) {
     _failed = YES;
     goto cleanup;
   }
@@ -1105,8 +1145,14 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
           av_frame_unref(frame);
           continue;
         }
+        // Codec parameters may not include a sample format (DTS is one example). Configure only
+        // after decoding exposes the actual frame format, rate, and channel layout.
+        if (![self configureResamplerForFrame:frame]) {
+          _failed = YES;
+          goto cleanup;
+        }
         double frameStart = frame->best_effort_timestamp * av_q2d(audioStream->time_base) - mediaOrigin;
-        double frameEnd = frameStart + (double)frame->nb_samples / decoder->sample_rate;
+        double frameEnd = frameStart + (double)frame->nb_samples / resamplerInputRate;
         if (!isfinite(frameStart) || !isfinite(frameEnd) || frame->nb_samples < 0) {
           _failed = YES;
           goto cleanup;
@@ -1117,8 +1163,8 @@ static int FFmpegAudioChunkReaderInterrupt(void *opaque) {
           break;
         }
         if (frameEnd >= startTime - 0.1 && frameStart <= sampleEnd + 0.1) {
-          int64_t outputCapacityValue = av_rescale_rnd(swr_get_delay(resampler, decoder->sample_rate) + frame->nb_samples,
-                                                       16000, decoder->sample_rate, AV_ROUND_UP);
+          int64_t outputCapacityValue = av_rescale_rnd(swr_get_delay(resampler, resamplerInputRate) + frame->nb_samples,
+                                                       16000, resamplerInputRate, AV_ROUND_UP);
           // Keep a single decoded frame's temporary float buffer bounded too. Normal audio frames
           // are far below this; an absurd frame is safer to reject than to allocate from its size.
           int64_t maximumFrameSamples = (int64_t)maximumOutputSamples + 16000;
