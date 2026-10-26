@@ -146,7 +146,7 @@ class SidebarPlaylistPane: NSView, SidebarPane {
     }
 
     player.observe(.iinaFileLoaded) { [unowned self] _ in
-      updateTable()
+      tableView.reloadData()
     }
 
     player.observe(.iinaPlaylistChanged) { [unowned self] _ in

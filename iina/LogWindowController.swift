@@ -30,6 +30,7 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
   private let scrollView = NSScrollView()
 
   @objc private dynamic var logs: [Logger.Log] = []
+  private var recentLogHistory = Logger.makeLogBuffer()
   private let arrayController = NSArrayController()
   private var isWindowVisible: Bool {
     window?.occlusionState.contains(.visible) ?? false
@@ -118,6 +119,8 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
 
       NotificationCenter.default.addObserver(self, selector: #selector(occlusionChanged(_:)),
                                              name: NSWindow.didChangeOcclusionStateNotification, object: window)
+      NotificationCenter.default.addObserver(self, selector: #selector(windowWillClose(_:)),
+                                             name: NSWindow.willCloseNotification, object: window)
       NotificationCenter.default.addObserver(self, selector: #selector(scheduleFlush), name: .iinaLogAppended, object: nil)
 
       let toolbar = NSToolbar(identifier: "iina.logWindow.toolbar")
@@ -147,6 +150,8 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
     }
 
     super.showWindow(sender)
+    Logger.setLogWindowVisible(true)
+    flushBuffer()
   }
 
   private func setupTableView() {
@@ -396,10 +401,19 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
     let saveAll = sender is NSToolbarItem
     let filename = saveAll ? "iina.log" : (window?.subtitle ?? "filtered") + " iina.log"
     Utility.quickSavePanel(title: "Log", filename: filename, sheetWindow: window) { url in
+      if saveAll {
+        do {
+          if try Logger.copyCompleteSessionLog(to: url) { return }
+        } catch let error {
+          Utility.showAlert("error_saving_file", arguments: [NSLocalizedString("logwindow.logs", comment: "logs"), error.localizedDescription])
+          return
+        }
+      }
       let content: Any? = saveAll ? self.arrayController.content : self.arrayController.arrangedObjects
       let logs = (content as! [Logger.Log]).map { $0.logString }.joined()
+      let notice = Logger.boundedLogExportNotice
       do {
-        try logs.write(to: url, atomically: true, encoding: .utf8)
+        try (notice + logs).write(to: url, atomically: true, encoding: .utf8)
       } catch let error {
         Utility.showAlert("error_saving_file", arguments: [NSLocalizedString("logwindow.logs", comment: "logs"), error.localizedDescription])
       }
@@ -412,7 +426,7 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
   }
 
   @objc private func scheduleFlush() {
-    guard flushTimer == nil && isWindowVisible else { return }
+    guard flushTimer == nil else { return }
     flushTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak self] _ in
       self?.flushTimer = nil
       self?.flushBuffer()
@@ -420,15 +434,26 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
   }
 
   private func flushBuffer() {
-    let toFlush: [Logger.Log] = Logger.$buffer.withLock {
-      let copy = $0
-      $0.removeAll(keepingCapacity: true)
-      return copy
-    }
+    let toFlush = Logger.drainBuffer()
 
     if !toFlush.isEmpty {
       checkIfAtBottom()
-      logs.append(contentsOf: toFlush)
+      // Logger and recentLogHistory share the same entry/count/byte limits. Logger.drainBuffer()
+      // therefore returns exactly the records retained by this bounded window.
+      let discardedCount = recentLogHistory.append(contentsOf: toFlush)
+      if discardedCount > 0 {
+        let removedCount = min(discardedCount, logs.count)
+        let selectedLogs = arrayController.selectedObjects.compactMap { $0 as? Logger.Log }
+        let retainedLogs = Array(logs.dropFirst(removedCount))
+        let retainedIdentities = Set(retainedLogs.map(ObjectIdentifier.init))
+        let retainedSelection = selectedLogs.filter { retainedIdentities.contains(ObjectIdentifier($0)) }
+        var updatedLogs = retainedLogs
+        updatedLogs.append(contentsOf: toFlush)
+        logs = updatedLogs
+        _ = arrayController.setSelectedObjects(retainedSelection)
+      } else {
+        logs.append(contentsOf: toFlush)
+      }
       if following {
         scrollToBottom()
       }
@@ -436,11 +461,20 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
   }
 
   @objc private func occlusionChanged(_ note: Notification) {
-    if isWindowVisible {
+    let visible = isWindowVisible
+    Logger.setLogWindowVisible(visible)
+    if visible {
       flushBuffer()
     } else {
+      flushTimer?.invalidate()
       flushTimer = nil
     }
+  }
+
+  @objc private func windowWillClose(_ note: Notification) {
+    Logger.setLogWindowVisible(false)
+    flushTimer?.invalidate()
+    flushTimer = nil
   }
 }
 

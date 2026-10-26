@@ -799,7 +799,7 @@ class PlayerCore: NSObject {
     info.isNetworkResource = isNetwork
     info.audioTracks = []
     info.chapters = []
-    info.playlist = []
+    info.resetPlaylistSnapshot(activeFilePath: path)
     info.isShuffled = false
     info.subTracks = []
     info.thumbnails = []
@@ -2361,7 +2361,8 @@ class PlayerCore: NSObject {
       Preference.set(url, for: .iinaLastPlayedFilePath)
       // Write to cache directly (rather than calling `refreshCachedVideoProgress`).
       // If user only closed the window but didn't quit the app, this can make sure playlist displays the correct progress.
-      info.setCachedVideoDurationAndProgress(url.path, (duration: info.videoDuration?.second, progress: info.videoPosition?.second))
+      info.setActiveCachedVideoDurationAndProgress((duration: info.videoDuration?.second,
+                                                   progress: info.videoPosition?.second))
     }
     if let position = info.videoPosition?.second {
       Preference.set(position, for: .iinaLastPlayedFilePosition)
@@ -2444,6 +2445,7 @@ class PlayerCore: NSObject {
     info.currentURL = path.contains("://") ?
       URL(string: path.addingPercentEncoding(withAllowedCharacters: .urlAllowed) ?? path) :
       URL(fileURLWithPath: path)
+    info.setActiveCachedFile(path)
     if let url = info.currentURL {
       info.mpvMd5 = Utility.mpvWatchLaterMd5(url, ignorePathInWatchLaterConfig)
     }
@@ -2495,7 +2497,7 @@ class PlayerCore: NSObject {
           try checkTicket(currentTicket)
           setTrack(1, forType: .sub)
         }
-        autoSearchOnlineSub()
+        scheduleOnlineSubSearch(ticket: currentTicket)
       } catch TicketExpiredError.ticketExpired {
         log("Background task stopping due to ticket expiration")
       } catch let err {
@@ -2742,6 +2744,7 @@ class PlayerCore: NSObject {
     }
     if info.state != .loading {
       log("Playback has stopped")
+      info.setActiveCachedFile(nil)
       info.state = .idle
       postNotification(.iinaPlayerStopped)
       if let pendingUrl {
@@ -3009,18 +3012,20 @@ class PlayerCore: NSObject {
     }
   }
 
-  private func autoSearchOnlineSub() {
-    let expectedURL = info.currentURL
-    Thread.sleep(forTimeInterval: 0.5)
-    if Preference.bool(for: .autoSearchOnlineSub) && !info.isNetworkResource &&
-      (info.videoDuration?.second ?? 0.0) >= Preference.double(for: .autoSearchThreshold) * 60 {
-      DispatchQueue.main.async {
-        guard self.info.currentURL == expectedURL, self.info.subTracks.isEmpty,
-              SubDL.apiKey != nil else { return }
-        let item = NSMenuItem()
-        item.representedObject = OnlineSubtitle.Providers.subDL.id
-        self.mainWindow.menuActionHandler.menuFindOnlineSub(item)
-      }
+  private func scheduleOnlineSubSearch(ticket: Int) {
+    guard Preference.bool(for: .autoSearchOnlineSub) else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+      guard let self,
+            self.backgroundQueueTicket == ticket,
+            self.info.state.active,
+            Preference.bool(for: .autoSearchOnlineSub),
+            !self.info.isNetworkResource,
+            (self.info.videoDuration?.second ?? 0.0) >= Preference.double(for: .autoSearchThreshold) * 60,
+            self.info.subTracks.isEmpty,
+            SubDL.apiKey != nil else { return }
+      let item = NSMenuItem()
+      item.representedObject = OnlineSubtitle.Providers.subDL.id
+      self.mainWindow.menuActionHandler.menuFindOnlineSub(item)
     }
   }
   /**
@@ -3311,6 +3316,13 @@ class PlayerCore: NSObject {
     DispatchQueue.main.async {
       self.touchBarSupport.touchBarPlaySlider?.resetCachedThumbnails()
     }
+    guard let videoWidth = info.videoWidth, videoWidth > 0,
+          let videoHeight = info.videoHeight, videoHeight > 0 else {
+      info.thumbnailsReady = true
+      info.thumbnailsProgress = 1
+      log("...stopped because file has no video stream", level: .debug)
+      return
+    }
     guard !info.isNetworkResource, let url = info.currentURL else {
       log("...stopped because cannot get file path", level: .warning)
       return
@@ -3408,17 +3420,17 @@ class PlayerCore: NSObject {
   }
 
   func getPlaylist() {
-    info.$playlist.withLock { playlist in
-      playlist.removeAll()
-      let playlistCount = mpv.getInt(MPVProperty.playlistCount)
-      for index in 0..<playlistCount {
-        let playlistItem = MPVPlaylistItem(filename: mpv.getString(MPVProperty.playlistNFilename(index))!,
-                                           isCurrent: mpv.getFlag(MPVProperty.playlistNCurrent(index)),
-                                           isPlaying: mpv.getFlag(MPVProperty.playlistNPlaying(index)),
-                                           title: mpv.getString(MPVProperty.playlistNTitle(index)))
-        playlist.append(playlistItem)
-      }
+    var playlist: [MPVPlaylistItem] = []
+    let playlistCount = mpv.getInt(MPVProperty.playlistCount)
+    playlist.reserveCapacity(playlistCount)
+    for index in 0..<playlistCount {
+      let playlistItem = MPVPlaylistItem(filename: mpv.getString(MPVProperty.playlistNFilename(index))!,
+                                         isCurrent: mpv.getFlag(MPVProperty.playlistNCurrent(index)),
+                                         isPlaying: mpv.getFlag(MPVProperty.playlistNPlaying(index)),
+                                         title: mpv.getString(MPVProperty.playlistNTitle(index)))
+      playlist.append(playlistItem)
     }
+    info.replacePlaylistSnapshot(playlist)
   }
 
   func getChapters() {
@@ -3588,31 +3600,36 @@ class PlayerCore: NSObject {
    It may take some time to run this method, so it should be used in background.
    */
   func refreshCachedVideoInfo(forVideoPath path: String) {
-    guard let dict = FFmpegController.probeVideoInfo(forFile: path) else { return }
+    guard let requestID = info.beginCachedInfoProbe(for: path) else { return }
+    guard let dict = FFmpegController.probeVideoInfo(forFile: path) else {
+      info.finishCachedInfoProbe(for: path, requestID: requestID,
+                                 durationAndProgress: nil, metadata: nil)
+      return
+    }
     let progress: VideoTime? = {
       let url = URL(fileURLWithPath: path)
       let mpvMd5 = Utility.mpvWatchLaterMd5(url, ignorePathInWatchLaterConfig)
       return Utility.playbackProgressFromWatchLater(mpvMd5)
     }()
-    self.info.setCachedVideoDurationAndProgress(path, (
+    let durationAndProgress: (duration: Double?, progress: Double?) = (
       duration: dict["@iina_duration"] as? Double,
       progress: progress?.second
-    ))
-    var result: (title: String?, album: String?, artist: String?)
+    )
+    var result: (title: String?, artist: String?)
     dict.forEach { (k, v) in
       guard let key = k as? String else { return }
       switch key.lowercased() {
       case "title":
         result.title = v as? String
-      case "album":
-        result.album = v as? String
       case "artist":
         result.artist = v as? String
       default:
         break
       }
     }
-    self.info.setCachedMetadata(path, result)
+    self.info.finishCachedInfoProbe(for: path, requestID: requestID,
+                                    durationAndProgress: durationAndProgress,
+                                    metadata: result)
   }
 }
 

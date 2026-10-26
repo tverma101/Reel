@@ -22,19 +22,31 @@ import Foundation
 @objc
 class Logger: NSObject {
 
+  private static let maximumBufferedLogCount = 4_096
+  private static let maximumBufferedLogBytes = 4 * 1_024 * 1_024
+  private static let maximumBufferedLogEntryBytes = 512 * 1_024
+  private static let logWindowExportNotice = "Only entries retained in the recent in-memory log window are included in this export. The window keeps at most 4,096 records (about 4 MiB); earlier records may be omitted.\n\n"
+  @Atomic private static var logWindowVisible = false
+  private static let logNotificationGate = CoalescedNotificationGate()
+
   class Log: NSObject {
     @objc dynamic let subsystem: String
     @objc dynamic let level: Level
     @objc dynamic let message: String
     @objc dynamic let date: String
-    let logString: String
+    var logString: String {
+      "\(date) [\(subsystem)][\(level.shortForm)] \(message)\n"
+    }
+    let estimatedRetainedBytes: Int
 
-    init(subsystem: String, level: Level, message: String, date: String, logString: String) {
+    init(subsystem: String, level: Level, message: String, date: String) {
       self.subsystem = subsystem
       self.level = level
-      self.message = message
       self.date = date
-      self.logString = logString
+      let retainedOverhead = subsystem.utf8.count * 2 + date.utf8.count * 2 + 128
+      let maximumMessageBytes = max(0, (Logger.maximumBufferedLogEntryBytes - retainedOverhead) / 2)
+      self.message = Logger.messageForLogWindow(message, maximumBytes: maximumMessageBytes)
+      self.estimatedRetainedBytes = self.message.utf8.count * 2 + subsystem.utf8.count * 2 + date.utf8.count * 2 + 128
     }
 
     override var description: String {
@@ -42,7 +54,52 @@ class Logger: NSObject {
     }
   }
 
-  @Atomic static var buffer: [Logger.Log] = []
+  @Atomic private static var buffer = makeLogBuffer()
+
+  static func makeLogBuffer() -> BoundedLogBuffer<Log> {
+    BoundedLogBuffer(maximumCount: maximumBufferedLogCount,
+                     maximumBytes: maximumBufferedLogBytes,
+                     maximumEntryBytes: maximumBufferedLogEntryBytes,
+                     byteCount: { $0.estimatedRetainedBytes })
+  }
+
+  static func drainBuffer() -> [Log] {
+    $buffer.withLock { $0.drain() }
+  }
+
+  /// Export the complete current session log without loading it all into memory.
+  /// Returns false when file logging is disabled or no log file has been opened.
+  static func copyCompleteSessionLog(to destination: URL) throws -> Bool {
+    guard enabled else { return false }
+    return try lock.withLock {
+      guard let logFileHandle else { return false }
+      try logFileHandle.synchronize()
+      guard destination.standardizedFileURL != logFile.standardizedFileURL else { return true }
+
+      let fileManager = FileManager.default
+      let temporary = destination.deletingLastPathComponent()
+        .appendingPathComponent(".\(destination.lastPathComponent).\(UUID().uuidString).tmp")
+      do {
+        try fileManager.copyItem(at: logFile, to: temporary)
+        if fileManager.fileExists(atPath: destination.path) {
+          _ = try fileManager.replaceItemAt(destination, withItemAt: temporary)
+        } else {
+          try fileManager.moveItem(at: temporary, to: destination)
+        }
+      } catch {
+        try? fileManager.removeItem(at: temporary)
+        throw error
+      }
+      return true
+    }
+  }
+
+  /// A Save from the bounded in-memory window can be incomplete when file logging is off.
+  static var boundedLogExportNotice: String { logWindowExportNotice }
+
+  static func setLogWindowVisible(_ visible: Bool) {
+    logWindowVisible = visible
+  }
 
   class Subsystem: RawRepresentable {
     let rawValue: String
@@ -226,6 +283,14 @@ class Logger: NSObject {
     return "\(time) [\(subsystem.rawValue)][\(level.shortForm)] \(message)\(appendNewlineAtTheEnd ? "\n" : "")"
   }
 
+  private static func messageForLogWindow(_ message: String, maximumBytes: Int) -> String {
+    guard message.utf8.count > maximumBytes else { return message }
+    let marker = "\n[message truncated for in-memory log window]"
+    let prefixBudget = max(0, maximumBytes - marker.utf8.count - 2)
+    let prefix = String(decoding: message.utf8.prefix(prefixBudget), as: UTF8.self)
+    return prefix + marker
+  }
+
   /// Whether the logger is emitting messages at the given level.
   /// - Parameter level: The log level to check.
   /// - Returns: `true` if messages at the given level will be emitted; `false` if the logger is suppressing messages at this level.
@@ -279,13 +344,17 @@ class Logger: NSObject {
 
     let date = Date()
     let string = formatMessage(message, level, subsystem, true, date)
-    let log = Log(subsystem: subsystem.rawValue, level: level, message: message, date: dateFormatter.string(from: date), logString: string)
+    let logDate = dateFormatter.string(from: date)
+    let log = Log(subsystem: subsystem.rawValue, level: level, message: message, date: logDate)
 
-    $buffer.withLock {
+    _ = $buffer.withLock {
       $0.append(log)
     }
-    Task { @MainActor in
-      NotificationCenter.default.post(name: .iinaLogAppended, object: nil)
+    if logWindowVisible {
+      logNotificationGate.schedule(on: .main) {
+        guard logWindowVisible else { return }
+        NotificationCenter.default.post(name: .iinaLogAppended, object: nil)
+      }
     }
 
     print(string, terminator: "")
