@@ -541,6 +541,9 @@ class PlayerCore: NSObject {
 
   let playerNumber: Int
 
+  /// Sends this player's audio, and only this player's, to the AirPlay speaker chosen in its picker.
+  lazy var airPlayAudio = AirPlayAudioBridge(player: self)
+
   static var keyBindings: [String: KeyMapping] = [:]
 
   override init() {
@@ -966,6 +969,8 @@ class PlayerCore: NSObject {
   ///     task is still running this method only changes the player state. When the background task ends it will notice that shutting
   ///     down was in progress and will call this method again to continue the process of shutting down..
   func shutdown() {
+    // mpv writes its watch-later file on quit, so give it the user's own speed and audio delay.
+    airPlayAudio.stopPlayback()
     if !isPluginRuntimeUnavailable {
       // Quiesce plugin timers, event listeners, and hooks while the mpv APIs are still valid.
       // In particular, do not wait until the SHUTDOWN event to call JavascriptAPIMpv cleanup.
@@ -1262,6 +1267,7 @@ class PlayerCore: NSObject {
   func stop() {
     guard info.state != .shutDown else { return }
     savePlaybackPosition()
+    airPlayAudio.stopPlayback()
     if mainWindow.loaded { mainWindow.liveCaptions.stop() }
 
     // Any online subtitle search still waiting on the user is abandoned: the media it applies to is
@@ -1816,7 +1822,8 @@ class PlayerCore: NSObject {
   }
 
   func setAudioDelay(_ delay: Double) {
-    mpv.setDouble(MPVOption.Audio.audioDelay, delay)
+    // While the AirPlay bridge carries the audio, mpv's delay also holds its sync correction.
+    mpv.setDouble(MPVOption.Audio.audioDelay, delay + airPlayAudio.audioDelayCorrection)
   }
 
   func setSubDelay(_ delay: Double, forPrimary: Bool = true) {
@@ -2270,7 +2277,12 @@ class PlayerCore: NSObject {
 
   @discardableResult
   func setAudioDevice(_ name: String) -> Bool {
-    mpv.setString(MPVProperty.audioDevice, name) >= 0
+    return mpv.setString(MPVProperty.audioDevice, name) >= 0
+  }
+
+  func stepChapter(by delta: Int) {
+    guard delta != 0 else { return }
+    mpv.command(.add, args: ["chapter", String(delta)], checkError: false)
   }
 
   /** Scale is a double value in [-100, -1] + [1, 100] */
@@ -2340,7 +2352,10 @@ class PlayerCore: NSObject {
     // The player must be active to be able to save the watch later configuration.
     if info.state.active {
       log("Write watch later config")
-      mpv.command(.writeWatchLaterConfig, level: .verbose)
+      // The AirPlay bridge briefly owns mpv's speed and audio delay; save the user's values instead.
+      airPlayAudio.withUserTiming {
+        mpv.command(.writeWatchLaterConfig, level: .verbose)
+      }
     }
     if let url = info.currentURL {
       Preference.set(url, for: .iinaLastPlayedFilePath)
@@ -2411,6 +2426,7 @@ class PlayerCore: NSObject {
   func fileStarted(path: String) {
     guard info.state.active else { return }
     log("File started")
+    airPlayAudio.fileStarted()
 
     // Opening another file in the same window does not necessarily go through `stop()`, so abandon
     // a search that was waiting on the chooser for the previous file — its chooser is stale now.
@@ -2607,6 +2623,7 @@ class PlayerCore: NSObject {
   }
 
   func fileEnded(_ dueToStopCommand: Bool) {
+    airPlayAudio.fileEnded()
     // if receive end-file when loading file, might be error
     // wait for idle
     if info.state == .loading || info.state == .starting {
@@ -2627,6 +2644,7 @@ class PlayerCore: NSObject {
   func aidChanged(_ id: Int) {
     guard info.state.active else { return }
     info.aid = id
+    airPlayAudio.audioTrackChanged()
     guard mainWindow.loaded else { return }
     mainWindow?.muteButton.isHidden = (info.aid == 0)
     mainWindow?.volumeSlider.isHidden = (info.aid == 0)
@@ -2647,7 +2665,8 @@ class PlayerCore: NSObject {
   func audioDeviceListChanged() {
     // The initial notification can arrive during an mpv loading hook. Do not synchronously query
     // mpv from the main thread until the file has finished loading.
-    guard info.state.loaded else { return }
+    // mpv's own output is switched off while the AirPlay bridge carries the audio.
+    guard info.state.loaded, !airPlayAudio.isEngaged else { return }
     let devices = getAudioDevices()
     let device = mpv.getString(MPVProperty.audioDevice)
     guard !devices.contains(where: {$0.name == device}) else { return }
@@ -2668,7 +2687,7 @@ class PlayerCore: NSObject {
   /// When the audio output driver changes it may cause the currently selected audio device to be invalid because a mpv audio device
   /// is tied to a specific audio output driver. Attempt to find and configure the same audio device with the current audio output driver.
   func currentAoChanged() {
-    guard info.state.loaded else { return }
+    guard info.state.loaded, !airPlayAudio.isEngaged else { return }
     guard let currentAo = mpv.getString(MPVProperty.currentAo),
           let audioDevice = mpv.getString(MPVProperty.audioDevice) else { return }
     let device = MPVAudioDevice(desc: "", name: audioDevice)
@@ -2748,6 +2767,7 @@ class PlayerCore: NSObject {
 
   func pauseChanged(_ paused: Bool) {
     guard mainWindow.loaded, info.state.loaded else { return }
+    airPlayAudio.pauseChanged(paused)
     if (info.state == .paused) != paused {
       sendOSD(paused ? .pause : .resume)
       // The NowPlayingInfoManager is notified when playback is paused or resumed. The video
@@ -2785,6 +2805,7 @@ class PlayerCore: NSObject {
     // Important to synchronize the time as mpv may slightly alter the playback position during a
     // restart even while paused. See issue #5337.
     syncUI(.time)
+    airPlayAudio.playbackRestarted()
     reloadSavedIINAfilters()
 
     // The new video's size is guaranteed to be available. Reset the flags used for window resizing.
@@ -3146,6 +3167,7 @@ class PlayerCore: NSObject {
         mainWindow.toggleWindowFullScreen()
       }
     }
+    airPlayAudio.fileLoaded()
   }
 
   /// Synchronize the video position cached in the `info.videoPosition` property.

@@ -18,7 +18,7 @@
 * Standalone Music Mode designed for audio files
 * Video thumbnails
 * Online subtitle searching and intelligent local subtitle matching
-* AirPlay button for sending sound to AirPlay speakers
+* Reel-only AirPlay audio: send Reel's sound to a HomePod while the picture, subtitles and captions stay on the Mac
 * Optional AirPlay video casting to a TV while Reel stays the remote
 * Apple on-device live captions for local files and http(s) streams
 * Unlimited playback history
@@ -94,10 +94,10 @@ see [Local macOS installation](docs/local-installation.md).
 
 ## Audio output
 
-Reel selects its own audio output device through mpv, so you can send playback to an AirPlay
-device without changing what the rest of the Mac does. Use the AirPlay button in the on-screen
-controller or **Audio → Audio Device** to choose an output for the current session. See
-[Audio output devices](docs/audio-output.md).
+Use **AirPlay Audio** in the on-screen controller to send only Reel's audio to an AirPlay
+speaker. Other apps keep the Mac's output. The picture, subtitles, Live Text and live captions stay
+in Reel and wait for the speaker, so they remain in sync. **Audio → Audio Device** selects devices
+exposed by mpv. See [Audio output](docs/audio-output.md) for details and limits.
 
 For video casting to an Apple TV while Reel remains the remote, see
 [AirPlay video casting](docs/airplay-casting.md). This is separate from selecting an AirPlay

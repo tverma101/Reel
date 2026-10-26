@@ -68,8 +68,8 @@ project; Reel ships under its own name, bundle identifier, and icon.
   `iina/FFmpegController.m`), and can be switched from the Subtitles menu and
   the Subtitles sidebar as well as Settings. Captions use final, word-timed
   results shown one line at a time, follow the audio clock (so audio delay
-  moves them with the sound) minus the AirPlay stream latency mpv does not
-  count, honor Subtitle Delay, and draw the outline behind the letters.
+  moves them with the sound), or the speaker's clock while Reel's audio is on
+  AirPlay, honor Subtitle Delay, and draw the outline behind the letters.
 
 ### AirPlay video casting
 
@@ -83,19 +83,24 @@ project; Reel ships under its own name, bundle identifier, and icon.
 
 ### Audio output
 
-- **AirPlay button** (`iina/AirPlayAudioRoutePicker.swift`): an on-screen
-  controller button, on by default, that opens Apple's `AVRoutePickerView`
-  speaker picker. Choosing speakers changes the Mac's output, which Reel
-  follows while `audio-device` is `auto`.
-- Device selection itself is inherited, not reimplemented: Settings → Audio,
-  *Preferred audio device*, and the Audio → Audio Device menu both set mpv's
-  `audio-device`, and selecting an AirPlay destination such as a HomePod routes
-  Reel's playback there while other Mac applications keep using macOS's
-  configured output. Reel documents this in
-  [docs/audio-output.md](docs/audio-output.md).
-- The upstream reset of a vanished device to mpv's `auto` now also runs when a
-  file finishes loading, so a speaker that dropped off the network during load
-  does not leave playback pointing at a device that cannot be used.
+- **AirPlay audio** (`iina/AirPlayAudioBridge.swift`): the native
+  `AVRoutePickerView` is bound to a hidden, Reel-owned `AVPlayer`, so a chosen
+  HomePod receives only Reel's audio and macOS's system output is unchanged.
+  `FFmpegPCMStreamReader` (`iina/FFmpegController.m`) decodes the selected
+  audio track to 48 kHz stereo PCM on mpv's timeline and the player streams
+  it as a WAV. mpv keeps the picture, subtitles, Live Text and live captions;
+  its own audio output is switched to `null` while the bridge plays. mpv waits
+  at a crawl until the speaker is playing, and a drift loop then keeps the
+  picture on the speaker's clock through mpv's audio delay. Audio delay, volume
+  and mute carry over; mpv audio filters, the equalizer and volume above 100%
+  do not. Unsupported sources and failures return the audio to the Mac with an
+  OSD message.
+- Settings → Audio, *Preferred audio device*, and Audio → Audio Device still
+  configure mpv's own output, which applies whenever Reel's audio is on the
+  Mac. Their device list is separate from Apple's route picker. Reel documents
+  both in [docs/audio-output.md](docs/audio-output.md).
+- The mpv reset of a vanished device to `auto` still runs when a file finishes
+  loading, except while the AirPlay bridge carries the audio.
 
 ### Playback stability
 

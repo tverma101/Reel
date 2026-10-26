@@ -120,8 +120,6 @@ class MainWindowController: PlayerWindowController {
 
   lazy var liveText = LiveTextController(mainWindow: self)
   lazy var liveCaptions = AppleLiveCaptions(player: player)
-  /// Created when the AirPlay button is first added to the on-screen controller.
-  private(set) var airPlay: AirPlayAudioRoutePicker?
   lazy var interactiveMode = InteractiveModeController(mainWindow: self)
   var pipStatus = PIPStatus.notInPIP
   var isVideoLoaded: Bool = false
@@ -916,9 +914,8 @@ class MainWindowController: PlayerWindowController {
     let liveTextEnabled = Preference.bool(for: .enableLiveText)
     for buttonType in effectiveButtons {
       if buttonType == .airPlay {
-        // Route this Reel player's audio through mpv's active output driver.
-        if airPlay == nil { airPlay = AirPlayAudioRoutePicker(player: player) }
-        let picker = airPlay!.makePickerView()
+        // Apple's speaker picker, bound to this player only: other apps keep their own output.
+        let picker = player.airPlayAudio.makePickerView()
         picker.translatesAutoresizingMaskIntoConstraints = false
         picker.size(width: Preference.ToolBarButton.frameSize, height: Preference.ToolBarButton.frameSize)
         oscToolbarView.addView(picker, in: .trailing)

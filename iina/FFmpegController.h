@@ -102,3 +102,36 @@
 @property (nonatomic, readonly) BOOL seekUnsupported;
 
 @end
+
+/// Decodes one audio stream as interleaved signed 16-bit stereo PCM at 48 kHz, addressed by output
+/// frame from the start of the media (the container start time, as mpv's `time-pos` uses).
+/// Consecutive reads continue decoding; a read elsewhere seeks. Gaps in the stream's timestamps
+/// are filled with silence and overlaps dropped, so frame N always plays at N / 48000 seconds.
+/// Reads past the end of the audio return silence. Not thread-safe: use one reader from one queue.
+@interface FFmpegPCMStreamReader: NSObject
+
+@property (class, nonatomic, readonly) NSInteger sampleRate;
+@property (class, nonatomic, readonly) NSInteger channelCount;
+
+/// `source` is a local path or an http(s) URL string. `audioStreamIndex` is the FFmpeg stream
+/// index of the audio track (mpv's `ff-index`). Frame 0 is the container time `mediaOrigin`, in
+/// seconds; nil uses the start time the container reports, or 0. Returns nil if that stream
+/// cannot be decoded.
+- (nullable instancetype)initWithSource:(nonnull NSString *)source
+                       audioStreamIndex:(NSInteger)audioStreamIndex
+                            mediaOrigin:(nullable NSNumber *)mediaOrigin
+                      cancellationCheck:(nullable BOOL (^)(void))cancellationCheck;
+
+/// Returns exactly `frameCount` frames (4 bytes each) starting at `frame`, or nil after a
+/// decode, seek or I/O failure. `frameCount` is limited to ten seconds of audio.
+- (nullable NSData *)readFramesAt:(int64_t)frame
+                            count:(NSInteger)frameCount
+                cancellationCheck:(nullable BOOL (^)(void))cancellationCheck;
+
+/// Container duration in seconds, or 0 when the source does not report one.
+@property (nonatomic, readonly) double duration;
+
+/// Set after a seek, read or decode error; the reader should be replaced.
+@property (nonatomic, readonly) BOOL failed;
+
+@end

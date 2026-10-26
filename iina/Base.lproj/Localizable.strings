@@ -1076,11 +1076,9 @@
 "sidebar.apple_live_captions_hint" = "Transcribes speech on-device for local files and http(s) streams that have no subtitle track.";
 "osd.apple_live_captions_on" = "Apple Live Captions: On";
 "osd.apple_live_captions_off" = "Apple Live Captions: Off";
-"osc_toolbar.airplay" = "Audio Output";
-"osc_toolbar.airplay_output.heading" = "Reel Audio Output";
-"osc_toolbar.airplay_output.default" = "System Default";
-"osc_toolbar.airplay_output.empty" = "No audio outputs available";
-"osc_toolbar.airplay_output.requested" = "Reel audio output requested: %@";
-"osc_toolbar.airplay_output.failed" = "Could not request this audio output";
-"osd.airplay_pinned_device" = "AirPlay speakers need Audio Device set to Auto";
-"osd.airplay_pinned_device_detail" = "Choose Audio > Audio Device > Auto, then pick speakers.";
+"osc_toolbar.airplay" = "AirPlay Audio";
+"osc_toolbar.airplay_output.connected" = "Reel audio: %@";
+"osc_toolbar.airplay_output.speaker" = "the AirPlay speaker";
+"osc_toolbar.airplay_output.disconnected" = "Reel audio: this Mac";
+"osc_toolbar.airplay_output.unsupported" = "This file's audio can't be sent over AirPlay, so it plays on this Mac.";
+"osc_toolbar.airplay_output.failed" = "AirPlay stopped playing this file's audio, so it plays on this Mac.";
