@@ -1237,7 +1237,17 @@ final class AirPlayAudioBridge: NSObject {
     case .supported(let selection):
       if selection != itemSelection { replaceItem(with: selection) }
     case .noAudio:
-      if itemSelection != nil { replaceItem(with: nil) }
+      if itemSelection != nil {
+        // Keep the item itself in the player so the AirPlay session outlives this file — dropping
+        // it would take the speaker away from the next file that has audio — but stop treating it
+        // as the audio being carried, so nothing aligns with or plays it.
+        rebuildItemAfterSeek = false
+        itemSelection = nil
+        avPlayer?.pause()
+        if player.mainWindow.loaded {
+          player.mainWindow.liveCaptions.playbackBackendChanged()
+        }
+      }
     case .unsupported:
       break
     }
@@ -1318,7 +1328,17 @@ final class AirPlayAudioBridge: NSObject {
         }
       }
     }
-    replaceItem(with: nil)
+    // A per-file fallback disengages while the route itself is still up; keep the item paused so
+    // the session survives until the next file. When the route is gone there is nothing to keep.
+    if routeActive, avPlayer?.currentItem != nil {
+      // Mirrors replaceItem(with: nil)'s release ordering, minus the item teardown.
+      rebuildItemAfterSeek = false
+      restoreTimingForCurrentFile(allowsNoActivePlaylistEntry: true)
+      cancelHold()
+      avPlayer?.pause()
+    } else {
+      replaceItem(with: nil)
+    }
     waitingForMPVAudio = false
     audioStartupClock.reset()
     pendingHoldReason = nil
@@ -2351,8 +2371,16 @@ final class AirPlayAudioBridge: NSObject {
     currentFileTimingReleaseStarted = true
     holdSpeedApplied = false
     audioDelayCorrection = 0
-    guard itemSelection != nil else { return }
-    replaceItem(with: nil)
+    guard avPlayer?.currentItem != nil else { return }
+    // An AVPlayer whose current item is removed ends its AirPlay session, and the speaker would
+    // not come back for the next file without re-selecting it. While the route is still up, keep
+    // the ended file's item paused: the next file's item replaces it on the same connection.
+    rebuildItemAfterSeek = false
+    guard routeActive else {
+      replaceItem(with: nil)
+      return
+    }
+    avPlayer?.pause()
   }
 
   /// Enqueues one final timing restore for the current bridge-owned file. Route disconnects and

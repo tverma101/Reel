@@ -43,6 +43,10 @@ selected, Reel engages the bridge again when the next supported file loads.
   Mute and volume are applied to the decoded audio before it reaches AirPlay. Changing either
   rebuilds the routed audio item to discard audio buffered with the old gain, so the speaker may
   briefly buffer again while the picture realigns.
+- **Switching files.** Moving to the next or previous file, opening another file, or stopping
+  playback does not end the AirPlay session: the speaker stays selected and silent between files,
+  and each new file's own audio streams to it in turn. Only choosing the Mac in the route list,
+  losing the speaker, or a file whose audio cannot be bridged sends Reel's audio back to this Mac.
 - Custom MPV `set`, `add`, `multiply` and `cycle-values` bindings for speed and Audio Delay keep
   applying to the user's timing while AirPlay carries audio. Their OSD settings are preserved, and
   timing commands stay in order within a command list, including bindings with an async prefix.
