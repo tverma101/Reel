@@ -26,6 +26,10 @@ picture, subtitles, Live Text and live captions; its own audio output is switche
   drift more than 45 ms apart, it adjusts mpv's audio delay, which moves the picture.
 - **What carries over.** Pause, seek, speed, audio-track changes, **Audio Delay**, mute and volume all
   apply to the speaker. Watch-later files keep your own speed and audio delay.
+- **Switching files.** Moving to the next or previous file, opening another file, or stopping
+  playback does not end the AirPlay session: the speaker stays selected and silent between files,
+  and each new file's own audio streams to it in turn. Only choosing the Mac in the route list,
+  losing the speaker, or a file whose audio cannot be bridged sends Reel's audio back to this Mac.
 - **Supported sources.** Local files, external audio tracks and direct http(s) streams, with any
   audio codec FFmpeg decodes.
 
