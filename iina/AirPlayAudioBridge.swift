@@ -1731,21 +1731,26 @@ final class AirPlayAudioBridge: NSObject {
     if waitingForMPVAudio {
       // mpv is rebuilding its audio output (`ao-reload`), and it will not start it while speed or
       // audio delay is being written. The audio clock moving again means the new output is running,
-      // so only then may the bridge hold it and start the speaker.
+      // so only then may the bridge hold it and start the speaker. The startup deadline runs only
+      // while mpv is unpaused and its audio clock is observable: a paused player, or one whose
+      // file has not begun (or failed to load), has no output that could start, so it waits
+      // instead of failing the file to the Mac.
       let now = Date()
-      audioStartupClock.markCanProgress(at: now)
       speakerClock.markBlocked(position: clockPosition)
-      let audioTime = snapshot.audioPTS
-      if let audioTime, AirPlayPCMResourceLoader.audioClockHasAdvanced(
+      guard snapshot.isPaused == false, let audioTime = snapshot.audioPTS else {
+        audioStartupClock.markBlocked()
+        return
+      }
+      audioStartupClock.markCanProgress(at: now)
+      if AirPlayPCMResourceLoader.audioClockHasAdvanced(
         from: lastMPVAudioTime, to: audioTime, epsilon: Self.audioClockMotionEpsilon) {
         log("mpv audio output running at \(String(format: "%.3f", audioTime))")
         let reason = pendingHoldReason ?? "mpv audio output running"
         pendingHoldReason = nil
         beginHold(reason, realign: true)
         return
-      } else if let audioTime {
-        lastMPVAudioTime = audioTime
       }
+      lastMPVAudioTime = audioTime
       // Observe clock progress before applying the deadline: the next 250 ms sample may arrive just
       // after the threshold even though the audio clock started moving before it.
       if audioStartupClock.hasExpired(at: now, timeout: Self.holdTimeout) {

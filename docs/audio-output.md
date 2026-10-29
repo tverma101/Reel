@@ -27,7 +27,9 @@ selected, Reel engages the bridge again when the next supported file loads.
   has not started. Stall detection follows both mpv's audio clock and AVPlayer's media clock, so a
   low-frame-rate picture does not pause sound while audio is advancing. If mpv's audio clock stalls,
   the speaker pauses and re-aligns when it resumes. If the selected route reports playback but its
-  media clock stops, Reel returns audio to the Mac so the file keeps playing.
+  media clock stops, Reel returns audio to the Mac so the file keeps playing. A file opened paused,
+  or one whose playback has not yet begun, waits indefinitely for the speaker instead of counting
+  against the startup deadline; only actively playing audio that never starts counts as a failure.
 - **Long pauses and recovery.** While an AirPlay route remains selected, Reel rebuilds the routed
   audio item after a pause of at least 30 seconds. If the item failed while paused, Reel checks the
   current route and makes a fresh attempt on resume. Closing the receiver picker also retries after
