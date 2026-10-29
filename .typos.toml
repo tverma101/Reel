@@ -23,6 +23,8 @@ extend-ignore-re = [
 ]
 
 [default.extend-words]
+# ISO 639-2 `mis` means an uncoded language; it is an intentional subtitle subtag.
+"mis" = "mis"
 "abitrate" = "abitrate"
 "splitted" = "splitted"
 "writeable" = "writeable"
