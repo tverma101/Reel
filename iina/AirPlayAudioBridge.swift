@@ -167,14 +167,21 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
     return Int64(min(Double(maximumFrames), boundedSeconds * sampleRate))
   }
 
-  /// Limit AVFoundation's requested byte range to the available WAV stream without overflow.
-  static func requestedRange(start: Int64, requestedLength: Int,
+  /// AVFoundation may have already received part of a request. Resume at currentOffset
+  /// while keeping the original requestedOffset + requestedLength as the exclusive end.
+  static func requestedRange(start: Int64, currentOffset: Int64, requestedLength: Int,
                              allDataToEnd: Bool, contentLength: Int64) -> Range<Int64>? {
     guard start >= 0, start < contentLength else { return nil }
-    if allDataToEnd { return start..<contentLength }
-    guard requestedLength > 0 else { return nil }
-    let count = min(Int64(requestedLength), contentLength - start)
-    return start..<(start + count)
+    let end: Int64
+    if allDataToEnd {
+      end = contentLength
+    } else {
+      guard requestedLength > 0 else { return nil }
+      end = start + min(Int64(requestedLength), contentLength - start)
+    }
+    let next = max(start, currentOffset)
+    guard next < end else { return nil }
+    return next..<end
   }
   private static let chunkFrames = Int64(sampleRate / 4)
   /// How far ahead of the speaker the stream is kept. AVFoundation pulls this much decoded audio
@@ -290,7 +297,8 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
       return true
     }
     guard let range = Self.requestedRange(
-      start: dataRequest.requestedOffset, requestedLength: dataRequest.requestedLength,
+      start: dataRequest.requestedOffset, currentOffset: dataRequest.currentOffset,
+      requestedLength: dataRequest.requestedLength,
       allDataToEnd: dataRequest.requestsAllDataToEndOfResource, contentLength: contentLength
     ) else {
       if dataRequest.requestedOffset < 0 {

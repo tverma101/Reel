@@ -57,21 +57,42 @@ check(Loader.playheadFrame(for: .nan) == nil, "NaN playhead")
 check(Loader.playheadFrame(for: 0.25) == 12_000, "valid playhead")
 check(Loader.checkedByteOffset(Int64.max) ==
       Loader.headerLength + Loader.maximumFrames * Loader.bytesPerFrame, "frame-to-byte overflow")
-check(Loader.requestedRange(start: 10, requestedLength: 5,
+check(Loader.requestedRange(start: 10, currentOffset: 10, requestedLength: 5,
       allDataToEnd: false, contentLength: 100) == 10..<15, "ordinary range")
-check(Loader.requestedRange(start: 98, requestedLength: 1000,
+check(Loader.requestedRange(start: 98, currentOffset: 98, requestedLength: 1000,
       allDataToEnd: false, contentLength: 100) == 98..<100, "truncated at EOF")
-check(Loader.requestedRange(start: 98, requestedLength: 1,
+check(Loader.requestedRange(start: 98, currentOffset: 98, requestedLength: 1,
       allDataToEnd: true, contentLength: 100) == 98..<100, "all-data-to-end")
-check(Loader.requestedRange(start: -1, requestedLength: 5,
+check(Loader.requestedRange(start: -1, currentOffset: -1, requestedLength: 5,
       allDataToEnd: false, contentLength: 100) == nil, "negative offset")
-check(Loader.requestedRange(start: 100, requestedLength: 5,
+check(Loader.requestedRange(start: 100, currentOffset: 100, requestedLength: 5,
       allDataToEnd: false, contentLength: 100) == nil, "EOF")
-check(Loader.requestedRange(start: 90, requestedLength: 0,
+check(Loader.requestedRange(start: 90, currentOffset: 90, requestedLength: 0,
       allDataToEnd: false, contentLength: 100) == nil, "zero length")
-check(Loader.requestedRange(start: Int64.max - 3, requestedLength: Int.max,
+check(Loader.requestedRange(start: Int64.max - 3, currentOffset: Int64.max - 3, requestedLength: Int.max,
       allDataToEnd: false, contentLength: Int64.max) == (Int64.max - 3)..<Int64.max,
       "huge request length arithmetic overflow")
+check(Loader.requestedRange(start: 10, currentOffset: 0, requestedLength: 5,
+      allDataToEnd: false, contentLength: 100) == 10..<15,
+      "initial currentOffset may be zero for a nonzero requestedOffset")
+check(Loader.requestedRange(start: 10, currentOffset: 12, requestedLength: 5,
+      allDataToEnd: false, contentLength: 100) == 12..<15,
+      "partially supplied request must resume at currentOffset")
+check(Loader.requestedRange(start: 10, currentOffset: 15, requestedLength: 5,
+      allDataToEnd: false, contentLength: 100) == nil,
+      "fully supplied request must not replay bytes")
+check(Loader.requestedRange(start: 10, currentOffset: 20, requestedLength: 5,
+      allDataToEnd: false, contentLength: 100) == nil,
+      "past-end currentOffset must not exceed original requested range")
+check(Loader.requestedRange(start: 98, currentOffset: 99, requestedLength: 1000,
+      allDataToEnd: false, contentLength: 100) == 99..<100,
+      "partial request truncated at WAV EOF")
+check(Loader.requestedRange(start: 90, currentOffset: 95, requestedLength: 1,
+      allDataToEnd: true, contentLength: 100) == 95..<100,
+      "all-data-to-end resumes from supplied offset")
+check(Loader.requestedRange(start: Int64.max - 3, currentOffset: Int64.max - 2,
+      requestedLength: Int.max, allDataToEnd: false, contentLength: Int64.max) ==
+      (Int64.max - 2)..<Int64.max, "partial huge range must not overflow")
 print("AirPlay PCM bounds and progress checks passed")
 '''
 
@@ -99,4 +120,8 @@ mutated_offset = OFFSET.replace("min(max(0, frame), maximumFrames)", "max(0, fra
 assert mutated_offset != OFFSET
 negative = run(offset=mutated_offset)
 assert negative.returncode != 0, "unbounded offset unexpectedly passed"
-print("Both unsafe-code negative controls failed as expected")
+mutated_range = RANGE.replace("let next = max(start, currentOffset)", "let next = start")
+assert mutated_range != RANGE
+negative = run(requested_range=mutated_range)
+assert negative.returncode != 0 and "partially supplied request" in negative.stdout, negative.stdout
+print("All three unsafe-code negative controls failed as expected")
