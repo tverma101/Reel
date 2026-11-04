@@ -33,6 +33,9 @@ jobs:
           python3 other/check_airplay_volume.py
           python3 other/check_airplay_file_transition.py
           python3 other/check_airplay_pause_recovery.py
+          python3 other/check_airplay_route_callbacks.py
+          python3 other/check_airplay_timing_restore.py
+          python3 other/check_airplay_bridge_responsiveness.py
 
       - name: Set up Go
         uses: actions/setup-go@v7
