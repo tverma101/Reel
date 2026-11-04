@@ -482,6 +482,8 @@ private final class AirPlayPlayheadFeeder: @unchecked Sendable {
   private var observedPosition: Double?
   private var lastFedPosition: Double?
   private var pendingSeekPosition: Double?
+  /// Fences queued callbacks from AVPlayer items that were already replaced.
+  private var generation: UInt64 = 0
 
   /// Read the observer's last sample without entering AVFoundation during a route transition.
   var position: Double? {
@@ -489,12 +491,15 @@ private final class AirPlayPlayheadFeeder: @unchecked Sendable {
     return observedPosition
   }
 
-  func attach(_ loader: AirPlayPCMResourceLoader?) {
+  @discardableResult
+  func attach(_ loader: AirPlayPCMResourceLoader?) -> UInt64 {
     lock.lock(); defer { lock.unlock() }
+    generation &+= 1
     self.loader = loader
     observedPosition = nil
     lastFedPosition = nil
     pendingSeekPosition = nil
+    return generation
   }
 
   func prepareForSeek(to position: Double) {
@@ -504,9 +509,14 @@ private final class AirPlayPlayheadFeeder: @unchecked Sendable {
     pendingSeekPosition = position
   }
 
-  func update(_ time: CMTime) {
+  func update(_ time: CMTime, generation: UInt64) {
     let seconds = time.seconds
     lock.lock()
+    // Removal does not wait for an in-flight periodic observer callback to finish.
+    guard generation == self.generation else {
+      lock.unlock()
+      return
+    }
     guard seconds.isFinite, seconds >= 0, let loader else {
       observedPosition = nil
       lastFedPosition = nil
@@ -1098,14 +1108,26 @@ final class AirPlayAudioBridge: NSObject {
     timeControlObservation = avPlayer.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
       DispatchQueue.main.async { self?.timeControlStatusChanged() }
     }
+    self.avPlayer = avPlayer
+    return avPlayer
+  }
+
+  /// A time callback that already started before observer removal may outlive its AVPlayer item.
+  /// Register once per item and fence those callbacks by the feeder's generation.
+  private func installPlayheadObserver(on avPlayer: AVPlayer, generation: UInt64) {
+    stopPlayheadObserver()
     let feeder = playheadFeeder
     playheadObserver = avPlayer.addPeriodicTimeObserver(
       forInterval: CMTime(value: 1, timescale: 100), queue: playheadQueue
     ) { [weak feeder] time in
-      feeder?.update(time)
+      feeder?.update(time, generation: generation)
     }
-    self.avPlayer = avPlayer
-    return avPlayer
+  }
+
+  private func stopPlayheadObserver() {
+    guard let playheadObserver, let avPlayer else { return }
+    avPlayer.removeTimeObserver(playheadObserver)
+    self.playheadObserver = nil
   }
 
   /// The player's output context exists once a picker is bound to it. These notifications are
@@ -1432,6 +1454,7 @@ final class AirPlayAudioBridge: NSObject {
     resetAudioClockMotionTracking()
     setCorrection(0)
     playheadFeeder.attach(nil)
+    stopPlayheadObserver()
     loader?.invalidate()
     loader = nil
     itemStatusObservation = nil
@@ -1460,7 +1483,7 @@ final class AirPlayAudioBridge: NSObject {
       self.failForFile("the audio could not be decoded")
     }
     self.loader = loader
-    playheadFeeder.attach(loader)
+    let observerGeneration = playheadFeeder.attach(loader)
     // Do not hold or start the speaker yet: the next tick waits until mpv's own audio output is
     // running, so this file's start cannot be postponed by a hold (see `waitingForMPVAudio`).
     waitingForMPVAudio = true
@@ -1479,6 +1502,7 @@ final class AirPlayAudioBridge: NSObject {
     let avPlayer = makePlayerIfNeeded()
     volumeChanged()
     avPlayer.replaceCurrentItem(with: item)
+    installPlayheadObserver(on: avPlayer, generation: observerGeneration)
     log("audio stream \(selection.streamIndex) of \(URL(fileURLWithPath: selection.source).lastPathComponent), \(String(format: "%.1f", loader.duration))s, origin \(selection.origin.map { String(format: "%.3f", $0) } ?? "container")")
   }
 
@@ -2335,6 +2359,7 @@ final class AirPlayAudioBridge: NSObject {
     // restores timing through libmpv. Tear down the hidden AVPlayer directly so external mpv quit
     // cannot leave its current AirPlay item audible after Reel's player has shut down.
     playheadFeeder.attach(nil)
+    stopPlayheadObserver()
     loader?.invalidate()
     loader = nil
     itemStatusObservation = nil
