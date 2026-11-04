@@ -1408,7 +1408,10 @@ final class AirPlayAudioBridge: NSObject {
     // Keep the route pending instead of tearing down and reloading the AO during audio startup.
     guard currentFileTransitionGeneration == snapshot.fileTransitionGeneration,
           currentPlaylistEntryID == snapshot.currentPlaylistEntryID else { return .pending }
-    guard let aid = player.info.aid, aid > 0 else { return .noAudio }
+    // Unknown aid is not the same as a confirmed disabled/no-audio track: MPV publishes
+    // aid and track-list on separate callbacks while opening or switching files.
+    guard let aid = player.info.aid else { return .pending }
+    guard aid > 0 else { return .noAudio }
     guard let track = player.info.currentTrack(.audio) else {
       // aid and track-list are separate events, including when a track is changed mid-file.
       return .pending
@@ -1426,7 +1429,9 @@ final class AirPlayAudioBridge: NSObject {
       return .supported(Selection(source: file, streamIndex: streamIndex, origin: rebased ? nil : 0))
     }
     let origin = rebased ? snapshot.demuxerStartTime ?? 0 : 0
-    guard let url = player.info.currentURL else { return .unsupported("there is no media URL") }
+    // MPV may publish the selected audio track before PlayerCore sees the new URL.
+    // Avoid a permanent bridgeFailedForFile from this temporary file-boundary gap.
+    guard let url = player.info.currentURL else { return .pending }
     if url.isFileURL {
       return .supported(Selection(source: url.path, streamIndex: streamIndex, origin: origin))
     }

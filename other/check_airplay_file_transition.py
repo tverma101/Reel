@@ -65,11 +65,17 @@ check(bridge.audioSelection(), "pending", "stale playlist entry crossed START_FI
 bridge.currentPlaylistEntryID = 11
 player.info.track = nil
 check(bridge.audioSelection(), "pending", "track-list temporarily precedes aid")
+player.info.aid = nil
+check(bridge.audioSelection(), "pending", "aid not yet reported")
 player.info.aid = 0
 check(bridge.audioSelection(), "none", "confirmed no-audio file")
 player.info.aid = 1
 player.info.track = Track(ffIndex: 2)
 check(bridge.audioSelection(), "supported", "new file metadata ready")
+player.info.currentURL = nil
+check(bridge.audioSelection(), "pending", "URL not yet reported")
+player.info.currentURL = URL(fileURLWithPath: "/next.mkv")
+check(bridge.audioSelection(), "supported", "metadata recovery after URL")
 player.info.track = Track(ffIndex: nil)
 check(bridge.audioSelection(), "unsupported", "unbridgeable stream still falls back")
 print("AirPlay file-transition selector passed")
@@ -94,8 +100,14 @@ for mutated, expected in [
                       ""), "stale file metadata"),
     (selector.replace("// aid and track-list are separate events, including when a track is changed mid-file.\n"
                       "      return .pending", 'return .unsupported("missing track")'), "track-list temporarily"),
+    (selector.replace("guard let aid = player.info.aid else { return .pending }",
+                      "guard let aid = player.info.aid else { return .noAudio }"),
+     "aid not yet reported"),
+    (selector.replace("guard let url = player.info.currentURL else { return .pending }",
+                      'guard let url = player.info.currentURL else { return .unsupported("no URL") }'),
+     "URL not yet reported"),
 ]:
     assert mutated != selector, "negative control did not mutate production code"
     negative = run(mutated)
     assert negative.returncode != 0 and expected in negative.stdout, negative.stdout + negative.stderr
-print("Both pre-fix negative controls failed as expected")
+print("All four pre-fix negative controls failed as expected")
