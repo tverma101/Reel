@@ -16,6 +16,18 @@ import Cocoa
 
 // MARK: - WAV stream
 
+/// A signed network media URL may contain bearer credentials in its query or path.
+/// Never include those URLs in ordinary AirPlay diagnostic logs.
+enum AirPlayAudioSourceLog {
+  static func displayName(for source: String) -> String {
+    if let scheme = URL(string: source)?.scheme?.lowercased(),
+       ["http", "https"].contains(scheme) {
+      return "network stream"
+    }
+    return URL(fileURLWithPath: source).lastPathComponent
+  }
+}
+
 enum AirPlayPCMVolume {
   static func gain(volume: Double, muted: Bool) -> Double {
     guard !muted, volume.isFinite else { return 0 }
@@ -1516,7 +1528,7 @@ final class AirPlayAudioBridge: NSObject {
     volumeChanged()
     avPlayer.replaceCurrentItem(with: item)
     installPlayheadObserver(on: avPlayer, generation: observerGeneration)
-    log("audio stream \(selection.streamIndex) of \(URL(fileURLWithPath: selection.source).lastPathComponent), \(String(format: "%.1f", loader.duration))s, origin \(selection.origin.map { String(format: "%.3f", $0) } ?? "container")")
+    log("audio stream \(selection.streamIndex) of \(AirPlayAudioSourceLog.displayName(for: selection.source)), \(String(format: "%.1f", loader.duration))s, origin \(selection.origin.map { String(format: "%.3f", $0) } ?? "container")")
   }
 
   private func itemStatusChanged(_ item: AVPlayerItem, generation: Int) {

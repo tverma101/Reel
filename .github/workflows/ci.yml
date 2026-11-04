@@ -32,6 +32,7 @@ jobs:
           python3 other/check_airplay_pcm_idle_pump.py
           python3 other/check_airplay_volume.py
           python3 other/check_airplay_file_transition.py
+          python3 other/check_airplay_log_redaction.py
           python3 other/check_airplay_pause_recovery.py
           python3 other/check_airplay_route_callbacks.py
           python3 other/check_airplay_timing_restore.py
