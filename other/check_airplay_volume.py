@@ -18,6 +18,7 @@ def extract(marker):
 
 GAIN = extract("enum AirPlayPCMVolume {")
 CHANGE = extract("  func volumeChanged() {")
+RECONCILE_BRANCH = SOURCE.split("    case .supported(let selection):", 1)[1].split("    case .noAudio:", 1)[0]
 assert "let adjusted = AirPlayPCMVolume.apply(to: data, gain: gain)" in SOURCE
 assert "dataRequest.respond(with: adjusted[skip..<(skip + length)])" in SOURCE
 assert "gain: AirPlayPCMVolume.gain(volume: player.info.volume," in SOURCE
@@ -62,15 +63,27 @@ final class Bridge {
   var player: Player? = Player()
   var loader: Loader? = Loader(gain: 1)
   var isCarrying = true
+  var gainRefreshPending = false
+  var itemSelection: Int? = 7
   var available = Selection.supported(7)
   var replacements: [Int] = []
   func audioSelection() -> Selection { available }
   func replaceItem(with selection: Int) {
+    gainRefreshPending = false
+    itemSelection = selection
     replacements.append(selection)
     loader = Loader(gain: AirPlayPCMVolume.gain(volume: player!.info.volume, muted: player!.info.isMuted))
     volumeChanged()
   }
   __CHANGE__
+  func reconcile() {
+    guard let player else { return }
+    switch available {
+    case .supported(let selection):
+      __RECONCILE__
+    case .waiting: break
+    }
+  }
 }
 let bridge = Bridge()
 bridge.player!.info.isMuted = true
@@ -95,14 +108,30 @@ waiting.player!.info.isMuted = true
 waiting.volumeChanged()
 check(waiting.avPlayer!.isMuted && waiting.avPlayer!.pauses == 1 && waiting.replacements.isEmpty,
       "unready metadata did not pause and mute old buffered audio")
+check(waiting.gainRefreshPending, "pending metadata must retain a gain refresh")
+waiting.available = .supported(7)
+waiting.reconcile()
+check(waiting.replacements == [7] && !waiting.gainRefreshPending && waiting.loader!.gain == 0,
+      "metadata recovery did not rebuild the paused and muted WAV item")
+let reverted = Bridge()
+reverted.available = .waiting
+reverted.player!.info.volume = 50
+reverted.volumeChanged()
+reverted.player!.info.volume = 100
+reverted.volumeChanged()
+reverted.available = .supported(7)
+reverted.reconcile()
+check(reverted.replacements == [7] && !reverted.gainRefreshPending,
+      "volume reverting during pending metadata left AVPlayer stopped")
 print("AirPlay PCM mute, volume and buffered-audio replacement checks passed")
 '''
 
-def run(gain, change):
+def run(gain, change, reconcile=RECONCILE_BRANCH):
     with tempfile.TemporaryDirectory(prefix="reel-airplay-volume-") as folder:
         folder = Path(folder)
         source = folder / "main.swift"
-        source.write_text(HARNESS.replace("__GAIN__", gain).replace("__CHANGE__", change))
+        source.write_text(HARNESS.replace("__GAIN__", gain).replace("__CHANGE__", change)
+                          .replace("__RECONCILE__", reconcile))
         binary = folder / "check"
         compiled = subprocess.run(["swiftc", str(source), "-o", str(binary)], capture_output=True, text=True)
         assert compiled.returncode == 0, compiled.stdout + compiled.stderr
@@ -119,4 +148,6 @@ for gain, change, message in [
 ]:
     negative = run(gain, change)
     assert negative.returncode != 0 and message in negative.stdout, negative.stdout + negative.stderr
-print("All three unsafe-volume negative controls failed as expected")
+negative = run(GAIN, CHANGE.replace("gainRefreshPending = true", ""))
+assert negative.returncode != 0 and "pending metadata" in negative.stdout, negative.stdout
+print("All four unsafe-volume negative controls failed as expected")

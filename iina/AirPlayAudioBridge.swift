@@ -154,7 +154,27 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
     guard current.isFinite, let previous, previous.isFinite, epsilon.isFinite, epsilon >= 0 else {
       return false
     }
-    return abs(current - previous) > epsilon
+    // Negative PTS is valid for some media with pre-roll, but a backward clock jump
+    // must not be mistaken for forward playback progress.
+    let advance = current - previous
+    return advance.isFinite && advance > epsilon
+  }
+
+  /// Never convert an unbounded or invalid AVPlayer timestamp directly to Int64.
+  static func playheadFrame(for seconds: Double) -> Int64? {
+    guard seconds.isFinite else { return nil }
+    let boundedSeconds = min(max(seconds, 0), Double(maximumFrames) / sampleRate)
+    return Int64(min(Double(maximumFrames), boundedSeconds * sampleRate))
+  }
+
+  /// Limit AVFoundation's requested byte range to the available WAV stream without overflow.
+  static func requestedRange(start: Int64, requestedLength: Int,
+                             allDataToEnd: Bool, contentLength: Int64) -> Range<Int64>? {
+    guard start >= 0, start < contentLength else { return nil }
+    if allDataToEnd { return start..<contentLength }
+    guard requestedLength > 0 else { return nil }
+    let count = min(Int64(requestedLength), contentLength - start)
+    return start..<(start + count)
   }
   private static let chunkFrames = Int64(sampleRate / 4)
   /// How far ahead of the speaker the stream is kept. AVFoundation pulls this much decoded audio
@@ -236,8 +256,8 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
 
   /// Called from the bridge or AVPlayer observer queue with the current speaker playhead.
   func setPlayhead(seconds: Double) {
-    guard seconds.isFinite else { return }
-    shared.playhead = Int64(max(0, seconds) * Self.sampleRate)
+    guard let frame = Self.playheadFrame(for: seconds) else { return }
+    shared.playhead = frame
     queue.async { [weak self] in self?.schedulePump() }
   }
 
@@ -269,14 +289,18 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
       loadingRequest.finishLoading()
       return true
     }
-    let start = dataRequest.requestedOffset
-    let end = dataRequest.requestsAllDataToEndOfResource
-      ? contentLength : min(contentLength, start + Int64(dataRequest.requestedLength))
-    guard start < end else {
-      loadingRequest.finishLoading()
+    guard let range = Self.requestedRange(
+      start: dataRequest.requestedOffset, requestedLength: dataRequest.requestedLength,
+      allDataToEnd: dataRequest.requestsAllDataToEndOfResource, contentLength: contentLength
+    ) else {
+      if dataRequest.requestedOffset < 0 {
+        loadingRequest.finishLoading(with: NSError(domain: NSURLErrorDomain, code: NSURLErrorBadURL))
+      } else {
+        loadingRequest.finishLoading()
+      }
       return true
     }
-    let request = Request(loading: loadingRequest, start: start, end: end)
+    let request = Request(loading: loadingRequest, start: range.lowerBound, end: range.upperBound)
     requestCancellationLock.lock()
     requestCancellations[ObjectIdentifier(loadingRequest)] = request.cancellation
     requestCancellationLock.unlock()
@@ -430,7 +454,7 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
   }
 
   private static func byteOffset(ofFrame frame: Int64) -> Int64 {
-    headerLength + max(0, frame) * bytesPerFrame
+    headerLength + min(max(0, frame), maximumFrames) * bytesPerFrame
   }
 
   static func header(frameCount: Int64) -> Data {
@@ -902,6 +926,8 @@ final class AirPlayAudioBridge: NSObject {
                                              qos: .userInitiated)
   private var playheadObserver: Any?
   private var itemSelection: Selection?
+  /// A gain change muted the old item while track metadata was still pending.
+  private var gainRefreshPending = false
   private var itemGeneration = 0
   private var syncTimer: Timer?
   private var mpvSnapshotTimer: Timer?
@@ -1233,7 +1259,11 @@ final class AirPlayAudioBridge: NSObject {
     case .pending:
       break
     case .supported(let selection):
-      if selection != itemSelection { replaceItem(with: selection) }
+      let gain = AirPlayPCMVolume.gain(volume: player.info.volume, muted: player.info.isMuted)
+      // The selection may match although a volume change paused its previous WAV item.
+      if selection != itemSelection || gainRefreshPending || loader?.gain != gain {
+        replaceItem(with: selection)
+      }
     case .noAudio:
       if itemSelection != nil { replaceItem(with: nil) }
     case .unsupported:
@@ -1385,6 +1415,7 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   private func replaceItem(with selection: Selection?) {
+    gainRefreshPending = false
     rebuildItemAfterSeek = false
     let hadItem = itemSelection != nil
     if selection == nil {
@@ -1960,16 +1991,20 @@ final class AirPlayAudioBridge: NSObject {
   func volumeChanged() {
     guard let avPlayer, let player else { return }
     let gain = AirPlayPCMVolume.gain(volume: player.info.volume, muted: player.info.isMuted)
-    if let loader, loader.gain != gain, isCarrying {
-      // AVFoundation and the receiver may have already buffered seconds of the old gain.
-      // Replace the stream so mute and volume changes also discard those buffered samples.
+    if let loader, (loader.gain != gain || gainRefreshPending), isCarrying {
+      // AVFoundation and the receiver may have buffered the old gain; discard that item.
       avPlayer.pause()
       avPlayer.isMuted = true
-      guard case .supported(let selection) = audioSelection() else { return }
+      guard case .supported(let selection) = audioSelection() else {
+        // The track list and aid may arrive separately during a file transition. Remember
+        // this paused item even if the user restores the original gain before metadata settles.
+        gainRefreshPending = true
+        return
+      }
       replaceItem(with: selection)
       return
     }
-    // PCM already carries the gain; applying it here too would square the requested volume.
+    // The PCM already carries the gain; don't apply it twice at AVPlayer.
     avPlayer.volume = 1
     avPlayer.isMuted = gain == 0
   }
