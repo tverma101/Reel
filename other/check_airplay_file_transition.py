@@ -76,6 +76,13 @@ player.info.currentURL = nil
 check(bridge.audioSelection(), "pending", "URL not yet reported")
 player.info.currentURL = URL(fileURLWithPath: "/next.mkv")
 check(bridge.audioSelection(), "supported", "metadata recovery after URL")
+player.info.currentURL = URL(string: "HTTPS://media.example.test/audio.mp4")
+player.mpv.airPlayPlaybackSnapshot.streamOpenFilename = "HTTPS://media.example.test/audio.mp4"
+check(bridge.audioSelection(), "supported", "uppercase HTTP URL must remain bridgeable")
+player.mpv.airPlayPlaybackSnapshot.streamOpenFilename = "file:///unexpected-audio.mp4"
+check(bridge.audioSelection(), "unsupported", "unsupported opened stream scheme")
+player.mpv.airPlayPlaybackSnapshot.streamOpenFilename = nil
+player.info.currentURL = URL(fileURLWithPath: "/next.mkv")
 player.info.track = Track(ffIndex: nil)
 check(bridge.audioSelection(), "unsupported", "unbridgeable stream still falls back")
 print("AirPlay file-transition selector passed")
@@ -106,8 +113,12 @@ for mutated, expected in [
     (selector.replace("guard let url = player.info.currentURL else { return .pending }",
                       'guard let url = player.info.currentURL else { return .unsupported("no URL") }'),
      "URL not yet reported"),
+    (selector.replace('guard let openedScheme = URL(string: opened)?.scheme?.lowercased(),\n'
+                      '          ["http", "https"].contains(openedScheme) else {',
+                      'guard opened.hasPrefix("http://") || opened.hasPrefix("https://") else {'),
+     "uppercase HTTP URL"),
 ]:
     assert mutated != selector, "negative control did not mutate production code"
     negative = run(mutated)
     assert negative.returncode != 0 and expected in negative.stdout, negative.stdout + negative.stderr
-print("All four pre-fix negative controls failed as expected")
+print("All five pre-fix negative controls failed as expected")

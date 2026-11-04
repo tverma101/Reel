@@ -1440,7 +1440,10 @@ final class AirPlayAudioBridge: NSObject {
     }
     // A hook such as ytdl can hand mpv a different stream from the page that was opened.
     let opened = snapshot.streamOpenFilename ?? url.absoluteString
-    guard opened.hasPrefix("http://") || opened.hasPrefix("https://") else {
+    // URL schemes are case-insensitive. MPV/FFmpeg accept HTTP and HTTPS in either case,
+    // so do not permanently reject a valid stream based on prefix capitalization.
+    guard let openedScheme = URL(string: opened)?.scheme?.lowercased(),
+          ["http", "https"].contains(openedScheme) else {
       return .unsupported("mpv opened the stream as \(opened.prefix(16))…")
     }
     return .supported(Selection(source: opened, streamIndex: streamIndex, origin: origin))
