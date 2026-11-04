@@ -29,6 +29,7 @@ jobs:
           bash other/check_subdl_search_parser.sh
           python3 other/check_airplay_resource_bounds.py
           python3 other/check_airplay_playhead_epoch.py
+          python3 other/check_airplay_pcm_idle_pump.py
           python3 other/check_airplay_volume.py
           python3 other/check_airplay_file_transition.py
           python3 other/check_airplay_pause_recovery.py

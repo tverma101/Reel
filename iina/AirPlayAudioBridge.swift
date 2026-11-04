@@ -332,18 +332,14 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
     }
   }
 
-  /// Each call supersedes any pump still waiting, so there is only ever one chain of work.
-  private func schedulePump(after delay: Double = 0) {
+  /// Each call supersedes a queued pump. New range requests, cancellation, and playhead
+  /// progress schedule work; an already-buffered stream does not need a periodic wakeup.
+  private func schedulePump() {
     pumpToken &+= 1
     let token = pumpToken
-    let work: () -> Void = { [weak self] in
+    queue.async { [weak self] in
       guard let self, self.pumpToken == token else { return }
       self.pump()
-    }
-    if delay > 0 {
-      queue.asyncAfter(deadline: .now() + delay, execute: work)
-    } else {
-      queue.async(execute: work)
     }
   }
 
@@ -360,7 +356,8 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
     let burst = Self.burstFrames * Self.bytesPerFrame
     // The newest request first: after a seek it is the range AVFoundation is waiting for.
     guard let request = requests.last(where: { $0.offset < max(limit, $0.start + burst) }) else {
-      schedulePump(after: 0.25)
+      // No request needs bytes yet. Wait for the next progress sample or range callback,
+      // rather than polling four times a second for the lifetime of a paused stream.
       return
     }
     guard serve(request) else {
