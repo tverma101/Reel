@@ -25,16 +25,16 @@
 "input.already_exists" = "Název již existuje.";
 
 // Guide Window
-"guide.highlights" = "Co je v IINA nového";
+"guide.highlights" = "Co je v Reel nového";
 "guide.basic_settings" = "Základní nastavení";
 "guide.faq" = "Nejčastější dotazy";
 
 // Initial Window
-"initial.announcement" = "Používáte verzi %@ aplikace IINA";
-"initial.beta.desc" = "Pokud se chcete vrátit k vydané verzi, zrušte výběr „Dostávat beta aktualizace“ v Nastavení > Obecné, a nainstalujte stabilní verzi z naší <a href=\"https://iina.io\">oficiální webové stránky</a>.";
-"initial.nightly.desc" = "Noční sestavení nejsou doporučena pro každodenní použití. V současné době nepodporují automatické aktualizace. Stáhněte si prosím ručně novější sestavení z naší <a href=\"https://nightly.iina.io\">noční webové stránky</a>.";
+"initial.announcement" = "Používáte verzi %@ aplikace Reel";
+"initial.beta.desc" = "Pokud se chcete vrátit k vydané verzi, zrušte výběr „Dostávat beta aktualizace“ v Nastavení > Obecné, a nainstalujte stabilní verzi z naší <a href=\"https://github.com/tverma101/Reel\">oficiální webové stránky</a>.";
+"initial.nightly.desc" = "Noční sestavení nejsou doporučena pro každodenní použití. V současné době nepodporují automatické aktualizace. Stáhněte si prosím ručně novější sestavení z naší <a href=\"https://github.com/tverma101/Reel/actions\">noční webové stránky</a>.";
 "initial.debug.desc" = "Ladící sestavení obvykle nejsou optimalizována pro výkon, nejsou tedy doporučena pro každodenní použití. Ladící sestavení nepodporují automatické aktualizace.";
-"initial.bug_report" = "Nahlaste na <a href=\"https://github.com/iina/iina/issues\">GitHub</a>.";
+"initial.bug_report" = "Nahlaste na <a href=\"https://github.com/tverma101/Reel/issues\">GitHub</a>.";
 
 // Inspector Window
 "inspector.error" = "Chyba";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "Přidat filtr";
 "alert.add_filter.message" = "Zadejte řetězec filtru ve formátu mpv příkazu vf nebo af.";
 
-"alert.keybinding_config.error" = "Chyba analýzy konfiguračního souboru klávesových zkratek „%@“! Vraťte se k výchozímu IINA nastavení klávesových zkratek. Zkontrolujte prosím vaši konfiguraci.";
+"alert.keybinding_config.error" = "Chyba analýzy konfiguračního souboru klávesových zkratek „%@“! Vraťte se k výchozímu Reel nastavení klávesových zkratek. Zkontrolujte prosím vaši konfiguraci.";
 "alert.delete_keybindingset.title" = "Smazat sadu klávesových zkratek";
 "alert.delete_keybindingset.message" = "Opravdu chcete smazat tuto sadu klávesových zkratek?";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "Nelze se přihlásit. Zkontrolujte uživatelské jméno, heslo a připojení k síti.\n\n%@";
 "alert.sub.save_downloaded.title" = "Uložit stažené titulky";
 
-"alert.set_default.title" = "Nastavit IINA jako výchozí aplikaci";
-"alert.set_default.message" = "IINA bude nastavena jako výchozí aplikace pro všechny typy souborů, které podporuje.";
+"alert.set_default.title" = "Nastavit Reel jako výchozí aplikaci";
+"alert.set_default.message" = "Reel bude nastavena jako výchozí aplikace pro všechny typy souborů, které podporuje.";
 "alert.set_default.success" = "Provedeno u %d úspěšně, %d selhalo.";
 
 "alert.add_watch.title" = "Přidat možnost sledování";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "Soubor balíčku nelze nalézt.";
 "plugin.install_error.cannot_download" = "Stahování plug-inu selhalo.\n\nVýstup:%@\n";
 "plugin.install_error.cannot_unpackage" = "Rozbalování plug-inu selhalo.\n\nVýstup:%@\n";
-"plugin.install_error.cannot_load" = "IINA nemůže načíst tento plug-in. Může být v chybném formátu.";
+"plugin.install_error.cannot_load" = "Reel nemůže načíst tento plug-in. Může být v chybném formátu.";
 "plugin.check_for_updates" = "Vyhledávat aktualizace";
 "plugin.updating" = "Stahuje se aktualizace…";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "Pozastavit";
 "settings.pauseresumeWhen" = "Pozastavit/pokračovat, když";
 "settings.playWhenEnteringFullScreen.label" = "Přehrát při spuštění režimu celé obrazovky";
-"settings.playlistAutoAdd.desc" = "Vyžaduje restartování IINA.";
+"settings.playlistAutoAdd.desc" = "Vyžaduje restartování Reel.";
 "settings.playlistAutoAdd.label" = "Automaticky přidat do playlistu soubory ze stejné složky";
 "settings.playlistAutoPlayNext.label" = "Přehrát další položku automaticky";
 "settings.playlistShowMetadata.label" = "Zobrazit umělce a název skladby pro zvukové soubory, pokud jsou dostupné";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "Cílové maximum";
 "settings.videoThreads.desc" = "Výchozí: 0 (Automaticky)";
 "settings.videoThreads.label" = "Počet vláken";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "Vyžaduje restartování IINA.";
+"settings.httpProxy.desc" = "Vyžaduje restartování Reel.";
 "settings.httpProxy.label" = "HTTP proxy";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "Načtených sekund předem";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Povolit mpv youtube-dl skript";
 "settings.ytdlRawOptions.desc" = "Formát <název>=<hodnota>[,<název>=<hodnota>[,…]]";
 "settings.ytdlRawOptions.label" = "Pokročilé možnosti";
-"settings.ytdlSearchPath.desc" = "IINA prohledá youtube-dl v této složce. Vyžaduje restartování IINA.";
+"settings.ytdlSearchPath.desc" = "Reel prohledá youtube-dl v této složce. Vyžaduje restartování Reel.";
 "settings.ytdlSearchPath.label" = "Vlastní cesta youtube-dl";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "Pokud je povoleno, IINA automaticky vyhledá online titulky pouze pro videa bez načtených titulků a delší než 20 minut.";
+"settings.autoSearchOnlineSub.desc" = "Pokud je povoleno, Reel automaticky vyhledá online titulky pouze pro videa bez načtených titulků a delší než 20 minut.";
 "settings.autoSearchOnlineSub.label" = "Vyhledat online titulky automaticky";
 "settings.displayInLetterBox.label" = "Zobrazit titulky v rámečcích během režimu celé obrazovky";
 "settings.subAlignX.items.0" = "Vlevo";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "Použít levé/pravé tlačítko pro";
 "settings.controlBarAutoHideTimeout.label" = "Automaticky skrýt po";
 "settings.controlBarStickToCenter.label" = "Přichytit ke středu při táhnutí";
-"settings.disableAnimations.desc" = "Pokud je v macOS ve volbách zpřístupnění zapnuta funkce omezení pohybu, IINA omezí pohyblivé prvky uživatelského rozhraní, o nichž je známo, že způsobují problémy osobám s vestibulárními poruchami. Pokud by to nebylo dostatečné, lze toto nastavení použít k dalšímu omezení pohybu eliminováním animací uživatelského rozhraní.";
+"settings.disableAnimations.desc" = "Pokud je v macOS ve volbách zpřístupnění zapnuta funkce omezení pohybu, Reel omezí pohyblivé prvky uživatelského rozhraní, o nichž je známo, že způsobují problémy osobám s vestibulárními poruchami. Pokud by to nebylo dostatečné, lze toto nastavení použít k dalšímu omezení pohybu eliminováním animací uživatelského rozhraní.";
 "settings.disableAnimations.label" = "Zakázat animace";
 "settings.disableOSDFileStartMsg.label" = "Otevření souboru";
 "settings.disableOSDPauseResumeMsgs.label" = "Pozastavení/pokračování";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "Okno";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "Následující nastavení vyžadují restartování IINA.";
+"settings.enableAdvancedSettings.desc" = "Následující nastavení vyžadují restartování Reel.";
 "settings.enableAdvancedSettings.label" = "Povolit pokročilá nastavení";
 "settings.enableLogging.label" = "Povolit protokolování do souboru";
 "settings.logLevel.desc" = "Prohlížet protokoly výběrem nabídky Okno > Prohlížeč protokolů.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "Nepodařilo se načíst stránku.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "Písmo";
-"settings.$GetBrowserExtensionsForIINA" = "Získat rozšíření IINA pro prohlížeč";
+"settings.$GetBrowserExtensionsForIINA" = "Získat rozšíření Reel pro prohlížeč";
 "settings.$GetPlugins" = "Získat plug-iny…";
 "settings.$Hardware" = "Hardware";
 "settings.$Height" = "Výška";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "Ovladač na obrazovce";
 "settings.$OnScreenDisplay" = "Zprávy na obrazovce";
 "settings.$OnlineSubtitles" = "Online titulky";
-"settings.$OpenLinksOrCurrentWebpage" = "Otevřete odkazy v aplikaci IINA jedním kliknutím. Webová stránka musí být podporována youtube-dl.";
+"settings.$OpenLinksOrCurrentWebpage" = "Otevřete odkazy v aplikaci Reel jedním kliknutím. Webová stránka musí být podporována youtube-dl.";
 "settings.$OpenLogDirectory" = "Otevřít adresář protokolů";
 "settings.$OpenLogWindow" = "Otevřít prohlížeč protokolů";
 "settings.$OrSelectFrom" = "Nebo vyberte z dostupných plug-inů";
@@ -983,7 +983,7 @@
 "settings.$Percent" = " %";
 "settings.$PictureinnPicture" = "Obraz v obrazu";
 "settings.$Playlist" = "Playlist";
-"settings.$PleaseSelectTheMediaTypes" = "Vyberte druhy souborů, pro které chcete nastavit IINA jako výchozí aplikaci.";
+"settings.$PleaseSelectTheMediaTypes" = "Vyberte druhy souborů, pro které chcete nastavit Reel jako výchozí aplikaci.";
 "settings.$Position" = "Umístění";
 "settings.$PreferredLanguage" = "Preferovaný jazyk";
 "settings.$RestoreAlerts" = "Obnovit upozornění";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "Snímky obrazovky";
-"settings.$SetIINAAsTheDefault" = "Nastavit IINA jako výchozí aplikaci";
+"settings.$SetIINAAsTheDefault" = "Nastavit Reel jako výchozí aplikaci";
 "settings.$Settings" = "Nastavení";
 "settings.$Shadow" = "Stín";
 "settings.$ShowInFinder" = "Zobrazit v aplikaci Finder";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "kraji obrazovky";
 "settings.$toThe" = "k";
 "settings.$top" = "hornímu";
-"settings.$ytdlWarning" = "Online Media plug-in má další funkce, jako je přepínání kvality a stahování videa. IINA použije plug-in, pokud je nainstalován a povolen. Nastavení níže se použijí pouze v případě, že plug-in není k dispozici.";
+"settings.$ytdlWarning" = "Online Media plug-in má další funkce, jako je přepínání kvality a stahování videa. Reel použije plug-in, pokud je nainstalován a povolen. Nastavení níže se použijí pouze v případě, že plug-in není k dispozici.";

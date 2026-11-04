@@ -2,6 +2,7 @@
 extend-exclude = [
     ".git/",
     "deps/",
+    "Packages/IINAWhisper/whisper.xcframework/**",
     "iina.xcodeproj/",
     "iina/Assets.xcassets/Symbols/**/*.svg",
     "**/*.strings",
@@ -16,10 +17,14 @@ extend-ignore-re = [
     "V\\[alue\\]",
     "ba!",
     # Ignore the token declaration in AssrtSubtitle.
-    "5IzWrb.*"
+    "5IzWrb.*",
+    # Preserve this generated Interface Builder localization key.
+    '\bBIz-NQ-0qD\.title\b'
 ]
 
 [default.extend-words]
+# ISO 639-2 `mis` means an uncoded language; it is an intentional subtitle subtag.
+"mis" = "mis"
 "abitrate" = "abitrate"
 "splitted" = "splitted"
 "writeable" = "writeable"

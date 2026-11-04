@@ -1,11 +1,5 @@
 [
   {
-    "name": "AirPlay",
-    "url": "https://github.com/ozykhan/iina-airplay",
-    "desc": "Cast the current file to an Apple TV over AirPlay; IINA stays the remote.",
-    "id": "dev.faruk.iina-airplay"
-  },
-  {
     "name": "Anime4K",
     "url": "https://github.com/yorkyang2333/iina-anime4k",
     "desc": "Apply Anime4K shaders for real-time anime upscaling.",
@@ -88,6 +82,12 @@
     "url": "https://github.com/bbeny123/iina-jump-to-frame",
     "desc": "Navigate video by specific frame number.",
     "id": "io.iina.jump-to-frame"
+  },
+  {
+    "name": "Keystone",
+    "url": "https://github.com/lenadweb/iina-plugin-keystone",
+    "desc": "Vertical and horizontal keystone correction for projectors, adjusted live from the sidebar or the keyboard.",
+    "id": "io.github.lenadweb.keystone"
   },
   {
     "name": "ListenBrainz Scrobbler",

@@ -87,6 +87,8 @@ class MPVTrack: NSObject {
   var demuxChannelCount: Int?
   var demuxChannels: String?
   var demuxSamplerate: Int?
+  /// FFmpeg stream index for tracks demuxed from this media source.
+  var ffIndex: Int?
   var demuxFps: Double?
 
 
@@ -177,10 +179,17 @@ class MPVTrack: NSObject {
     self.init(id: id, type: type, isDefault: isDefault, isForced: isForced, isImage: isImage,
               isSelected: isSelected, isExternal: isExternal)
     srcId = MPVController.nodeValueAsInt(dict["src-id"])
-    title = dict["title"] as? String
+    // MP4 track names can be stored as metadata/name instead of mpv's title.
+    let metadata = dict["metadata"] as? [String: Any]
+    title = [dict["title"] as? String, metadata?["name"] as? String]
+      .compactMap { $0 }
+      .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     lang = dict["lang"] as? String
     codec = dict["codec"] as? String
     externalFilename = dict["external-filename"] as? String
+    if let value = dict["ff-index"] as? Int64, value >= 0 {
+      ffIndex = Int(exactly: value)
+    }
     isAlbumart = dict["albumart"] as? Bool ?? false
     decoderDesc = dict["decoder-desc"] as? String
     demuxW = MPVController.nodeValueAsInt(dict["demux-w"])

@@ -30,11 +30,11 @@
 "guide.faq" = "よくある質問";
 
 // Initial Window
-"initial.announcement" = "IINAバージョン%@を使用しています";
-"initial.beta.desc" = "リリースバージョンにロールバックする場合は、設定 > 一般 の \"ベータ版のアップデート通知を受け取る\" のチェックを外し、<a href=\"https://iina.io\">公式Webサイト</a> から安定版リリースをインストールしてください。";
-"initial.nightly.desc" = "Nightlyを常用することは推奨されません。Nightlyビルドは、現在自動アップデートに対応していません。新しいビルドは<a href=\"https://nightly.iina.io\">Nightly Webサイト</a>から手動でダウンロードしてください。";
+"initial.announcement" = "Reelバージョン%@を使用しています";
+"initial.beta.desc" = "リリースバージョンにロールバックする場合は、設定 > 一般 の \"ベータ版のアップデート通知を受け取る\" のチェックを外し、<a href=\"https://github.com/tverma101/Reel\">公式Webサイト</a> から安定版リリースをインストールしてください。";
+"initial.nightly.desc" = "Nightlyを常用することは推奨されません。Nightlyビルドは、現在自動アップデートに対応していません。新しいビルドは<a href=\"https://github.com/tverma101/Reel/actions\">Nightly Webサイト</a>から手動でダウンロードしてください。";
 "initial.debug.desc" = "デバッグビルドは通常パフォーマンスが最適化されていないので、常用することは推奨されません。デバッグビルドは自動アップデートに対応していません。";
-"initial.bug_report" = "<a href=\"https://github.com/iina/iina/issues\">GitHub issues</a> で報告してください。";
+"initial.bug_report" = "<a href=\"https://github.com/tverma101/Reel/issues\">GitHub issues</a> で報告してください。";
 
 // Inspector Window
 "inspector.error" = "エラー";
@@ -172,7 +172,7 @@
 "preference.enable_adv_settings" = "詳細設定を有効にする";
 
 "preference.sub_override_level.no" = "いいえ";
-"preference.sub_override_level.force" = "強制的";
+"preference.sub_override_level.force" = "強制";
 "preference.sub_override_level.scale" = "サイズ";
 "preference.sub_override_level.strip" = "ストリップ";
 "preference.sub_override_level.yes" = "はい";
@@ -303,8 +303,8 @@
 "alert.sub.cannot_login" = "ログインできません。ユーザ名とパスワード、ネットワークの状況を確認してください。\n\n%@";
 "alert.sub.save_downloaded.title" = "ダウンロードした字幕を保存";
 
-"alert.set_default.title" = "IINAをデフォルトのアプリに設定";
-"alert.set_default.message" = "対応するすべてのファイル形式に、IINAをデフォルトのアプリとして設定します。";
+"alert.set_default.title" = "Reelをデフォルトのアプリに設定";
+"alert.set_default.message" = "対応するすべてのファイル形式に、Reelをデフォルトのアプリとして設定します。";
 "alert.set_default.success" = "完了しました（成功: %d件、失敗: %d件）。";
 
 "alert.add_watch.title" = "視聴プロパティを追加";
@@ -342,7 +342,7 @@
 "alert.clear_history.message" = "すべての再生履歴を削除してもよろしいですか?";
 
 "alert.clear_watch_later.title" = "保存済みの再生進行状況を消去";
-"alert.clear_watch_later.message" = "すべての保存済みの再生進行状況（\"あとで見る\"データ）を消去してもよろしいですか?";
+"alert.clear_watch_later.message" = "すべての保存済みの再生進行状況（\"あとで再生\"データ）を削除してもよろしいですか?";
 
 "alert.restore_alerts.title" = "非表示にした警告を復元";
 "alert.restore_alerts.message" = "すべての非表示にした警告を復元してもよろしいですか?";
@@ -493,7 +493,7 @@
 "plugin.install_error.file_not_found" = "パッケージファイルが見つかりません。";
 "plugin.install_error.cannot_download" = "プラグインをダウンロードできませんでした。\n\n出力:%@\n";
 "plugin.install_error.cannot_unpackage" = "プラグインパッケージを展開できませんでした。\n\n出力:%@\n";
-"plugin.install_error.cannot_load" = "IINAはこのプラグインを読み込めません。フォーマットが正しくない可能性があります。";
+"plugin.install_error.cannot_load" = "Reelはこのプラグインを読み込めません。フォーマットが正しくない可能性があります。";
 "plugin.check_for_updates" = "アップデートを確認";
 "plugin.updating" = "アップデートをダウンロード中…";
 
@@ -612,13 +612,13 @@
 "settings.allowScreenSaverForAudio.desc" = "システムのスリープを防ぎます。";
 "settings.allowScreenSaverForAudio.label" = "\"ミュージックモード\" またはオーディオのみの再生中を除く";
 "settings.alwaysOpenInNewWindow.label" = "複数のプレイヤーウインドウを開くことを許可";
-"settings.autoRepeat.label" = "ファイルを手動で開いたときに繰り返し再生";
+"settings.autoRepeat.label" = "手動で開いたファイルの繰り返し再生";
 "settings.autoSwitchToMusicMode.label" = "オーディオファイルを再生中は自動的に \"ミュージックモード\" に切り替える";
-"settings.blackOutMonitor.label" = "フルスクリーン時はほかのディスプレイの表示を消す";
+"settings.blackOutMonitor.label" = "フルスクリーン時にはほかのディスプレイの表示を消す";
 "settings.defaultRepeatMode.items.0" = "プレイリストを繰り返し再生";
 "settings.defaultRepeatMode.items.1" = "1個のファイルを繰り返し再生";
 "settings.fullScreenWhenOpen.label" = "フルスクリーンにする";
-"settings.groupSimultaneousOpensInPlaylist.label" = "複数ファイルを同時に開くときにプレイリストにメディアをグループ化";
+"settings.groupSimultaneousOpensInPlaylist.label" = "複数ファイルを同時に開くときにプレイリストのメディアをグループ化";
 "settings.keepOpenOnFileEnd.label" = "再生終了後もウインドウを閉じない";
 "settings.pauseWhenGoesToSleep.label" = "スリープ時に一時停止";
 "settings.pauseWhenInactive.label" = "ウインドウが非アクティブ/アクティブになるとき";
@@ -627,7 +627,7 @@
 "settings.pauseWhenOpen.label" = "一時停止";
 "settings.pauseresumeWhen" = "次のとき再生を一時停止/再開";
 "settings.playWhenEnteringFullScreen.label" = "フルスクリーンにしたとき再生";
-"settings.playlistAutoAdd.desc" = "変更を有効にするにはIINAの再起動が必要です。";
+"settings.playlistAutoAdd.desc" = "変更を有効にするにはReelの再起動が必要です。";
 "settings.playlistAutoAdd.label" = "同じフォルダに自動的にファイルを追加";
 "settings.playlistAutoPlayNext.label" = "次の項目を自動的に再生";
 "settings.playlistShowMetadata.label" = "利用可能なときはオーディオファイルのアーティスト名とトラック名を表示";
@@ -647,12 +647,12 @@
 "settings.screenshotShowPreview.label" = "スクリーンショット撮影後にプレビューを表示";
 "settings.trackAllFilesInRecentOpenMenu.desc" = "その他の場合、手動で開いたファイルだけがメニューに表示されます。";
 "settings.trackAllFilesInRecentOpenMenu.label" = "再生したすべてのファイルを \"最近使った項目を開く\" で追跡";
-"settings.useLegacyFullScreen.label" = "古いフルスクリーン表示を使用";
+"settings.useLegacyFullScreen.label" = "従来のフルスクリーン表示を使用";
 
 // Settings - Video
 "settings.enableHdrSupport.desc" = "HDRビデオを再生中は、デフォルトでHDRモードを有効にします。";
 "settings.enableHdrSupport.label" = "HDRモードを有効にする";
-"settings.enableLiveText.desc" = "認識されたテキストを、一時停止中のビデオフレームにオーバレイ表示します。macOS 13以降が必要です。";
+"settings.enableLiveText.desc" = "認識されたテキストを、一時停止中のビデオフレームにオーバーレイ表示します。macOS 13以降が必要です。";
 "settings.enableLiveText.label" = "テキスト認識表示";
 "settings.enableToneMapping.label" = "トーンマッピングを有効にする";
 "settings.forceDedicatedGPU.desc" = "レンダリングに外部GPUを常に使用します（搭載されている場合）。パフォーマンスが向上しますが、バッテリー駆動時間が短くなる可能性があります。";
@@ -667,10 +667,10 @@
 "settings.loadIccProfile.desc" = "現在のディスプレイ用ICCプロファイルを読み込み、ビデオRGBを画面出力に変換するために使用します。（SDRモードに対してだけ）";
 "settings.loadIccProfile.label" = "ICCプロファイルを読み込む";
 "settings.toneMappingAlgorithm.label" = "アルゴリズム";
-"settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
-"settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
-"settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "ディスプレイの測定済み最大輝度。IINAはデフォルトでこの値を検出します。検出できない場合には、ディスプレイの伝達特性に基づき、目標とする最大輝度を適切な値に設定します。ディスプレイ輝度を手動で指定するには、この設定を有効にしてください。";
+"settings.toneMappingAlgorithm.desc" = "対象のディスプレイでトーンマッピングを使用するためのアルゴリズムです。";
+"settings.toneMappingParamOverride.desc" = "トーンマッピングアルゴリズムを調整するためのパラメータです。デフォルトでは、特定のデフォルト値に設定されています。この設定を有効にすると、これをオーバーライドできます。";
+"settings.toneMappingParamOverride.label" = "調整パラメータ";
+"settings.toneMappingTargetPeak.desc" = "ディスプレイの測定済み最大輝度。Reelはデフォルトでこの値を検出します。検出できない場合には、ディスプレイの伝達特性に基づき、目標とする最大輝度を適切な値に設定します。ディスプレイ輝度を手動で指定するには、この設定を有効にしてください。";
 "settings.toneMappingTargetPeak.label" = "ターゲットピーク値";
 "settings.videoThreads.desc" = "デフォルト: 0 （自動）";
 "settings.videoThreads.label" = "スレッド数";
@@ -683,9 +683,9 @@
 "settings.gaplessAudio.desc" = "ギャップレスオーディオ";
 "settings.gaplessAudio.items.0" = "無効";
 "settings.gaplessAudio.items.0.desc" = "連続したオーディオファイルを再生する場合は、ファイル変更時に無音または中断が生じることがあります。";
-"settings.gaplessAudio.items.1" = "弱め";
+"settings.gaplessAudio.items.1" = "弱い";
 "settings.gaplessAudio.items.1.desc" = "デコーダ出力のオーディオフォーマットを変更した場合、オーディオデバイスが閉じられたあと再度開かれるため、ギャップレス再生が中断されます。";
-"settings.gaplessAudio.items.2" = "強め";
+"settings.gaplessAudio.items.2" = "強い";
 "settings.gaplessAudio.items.2.desc" = "オーディオデバイスは、最初に再生するファイルで選択したパラメータを使用して開かれたあと、ギャップレス再生のため開かれたままになります。後続のファイルについては再サンプリングされる場合があります。";
 "settings.gaplessAudio.label" = "ギャップレスオーディオ";
 "settings.maxVolume.desc" = "（100-1000）";
@@ -773,7 +773,7 @@
 "settings.defaultCacheSize.desc" = "デフォルト: 153,600";
 "settings.defaultCacheSize.label" = "キャッシュバッファのサイズ（KiB）";
 "settings.enableCache.label" = "ネットワークデータのプリフェッチとバッファリング";
-"settings.httpProxy.desc" = "有効にするにはIINAを再起動する必要があります。";
+"settings.httpProxy.desc" = "有効にするにはReelを再起動する必要があります。";
 "settings.httpProxy.label" = "HTTPプロキシ";
 "settings.secPrefech.desc" = "デフォルト: 36,000";
 "settings.secPrefech.label" = "プリフェッチ秒数";
@@ -791,7 +791,7 @@
 // Settings - Subtitles
 "settings.autoSearchOnlineSub.desc" = "有効にすると、字幕が読み込まれていない再生時間が20分以上の動画については、自動的にオンライン字幕を検索します。";
 "settings.autoSearchOnlineSub.label" = "オンライン字幕を自動的に検索";
-"settings.displayInLetterBox.label" = "フルスクリーン時はレターボックス内に字幕を表示";
+"settings.displayInLetterBox.label" = "フルスクリーン時にはレターボックス内に字幕を表示";
 "settings.subAlignX.items.0" = "左揃え";
 "settings.subAlignX.items.1" = "中央揃え";
 "settings.subAlignX.items.2" = "右揃え";
@@ -800,7 +800,7 @@
 "settings.subAlignY.items.2" = "下";
 "settings.subAutoLoadIINA.items.0" = "無効";
 "settings.subAutoLoadIINA.items.1" = "メディアのファイル名を含む字幕";
-"settings.subAutoLoadIINA.items.2" = "IINAによりインテリジェントに検出";
+"settings.subAutoLoadIINA.items.2" = "Reelによりインテリジェントに検出";
 "settings.subAutoLoadIINA.label" = "自動読み込み";
 "settings.subAutoLoadPriorityString.desc" = "文字列リストをカンマ区切りで入力してください。";
 "settings.subAutoLoadPriorityString.label" = "次の文字列をファイル名に含む字幕を優先";
@@ -817,9 +817,9 @@
 "settings.subLang.desc" = "このオプションはISO 639-2言語コードで保存され、mpvとopensubtitlesの両方で使用できます。";
 "settings.subOverrideLevel.items.0" = "はい";
 "settings.subOverrideLevel.items.0.desc" = "このセクションのすべてのスタイル設定を適用します。";
-"settings.subOverrideLevel.items.1" = "強制的";
+"settings.subOverrideLevel.items.1" = "強制";
 "settings.subOverrideLevel.items.1.desc" = "すべての字幕スタイルを適用します。";
-"settings.subOverrideLevel.items.2" = "ストリップ";
+"settings.subOverrideLevel.items.2" = "取り除く";
 "settings.subOverrideLevel.items.2.desc" = "すべてのASSタグとスタイルを字幕から完全に取り除きます。";
 "settings.subOverrideLevel.items.3" = "サイズ";
 "settings.subOverrideLevel.items.3.desc" = "このセクションのスタイル設定に加えて、サイズ設定を適用します。";
@@ -883,7 +883,7 @@
 "settings.windowBehaviorWhenPip.label" = "ウインドウ";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "以下の設定を有効にするには、IINAを再起動する必要があります。";
+"settings.enableAdvancedSettings.desc" = "以下の設定を有効にするには、Reelを再起動する必要があります。";
 "settings.enableAdvancedSettings.label" = "詳細設定を有効にする";
 "settings.enableLogging.label" = "ファイルへのログ記録を有効にする";
 "settings.logLevel.desc" = "メニューから ウインドウ > ログビューア を選択してログを表示します。";
@@ -897,7 +897,7 @@
 
 // Settings - Inline labels
 "settings.$ASSSubtitles" = "ASS字幕";
-"settings.$About" = "IINAについて";
+"settings.$About" = "Reelについて";
 "settings.$Accessibility" = "アクセシビリティ";
 "settings.$AdditionalMpvOptions" = "mpvの追加オプション";
 "settings.$AdditionalMpvOptions.desc" = "key=valueフォーマットのオプションをペーストすると、両方のフィールドに自動的に入力されます。";
@@ -933,13 +933,13 @@
 "settings.$DefaultApplication" = "デフォルトのアプリケーション";
 "settings.$DefaultEncoding" = "デフォルトのエンコーディング";
 "settings.$DeleteAllPlaybackHistories" = "再生履歴と\"最近開いた項目\"のエントリーをすべて削除します。";
-"settings.$DeleteAllWatchLater" = "Delete all files in the \"watch later\" folder. These files contain all saved playback progress and settings applied during playback.";
+"settings.$DeleteAllWatchLater" = "\"あとで再生\"フォルダ内のすべてのファイルを削除します。これらのファイルには、保存済みの再生進行状況や、再生中に適用した設定がすべて含まれています。";
 "settings.$DoNotResize" = "サイズを変更しない";
 "settings.$DuplicateCurrentSet" = "現在の設定を複製…";
 "settings.$FailedToLoadThePage" = "ページを読み込みできませんでした。";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "フォント";
-"settings.$GetBrowserExtensionsForIINA" = "IINAのブラウザ拡張機能を使う";
+"settings.$GetBrowserExtensionsForIINA" = "Reelのブラウザ拡張機能を使う";
 "settings.$GetPlugins" = "プラグインを取得…";
 "settings.$Hardware" = "ハードウェア";
 "settings.$Height" = "高さ";
@@ -956,7 +956,7 @@
 "settings.$Installing" = "インストール中";
 "settings.$KeyBindingSet" = "キーバインドの設定";
 "settings.$Layout" = "レイアウト";
-"settings.$LegacyOpenSubAlert" = "⚠️ 古いOpenSubtitlesへの対応は推奨されません。代わりにOpenSubtitlesプラグインを使用してください。ログインが必要な場合は、以前の設定ウインドウからアクセスしてください。";
+"settings.$LegacyOpenSubAlert" = "⚠️ 従来のOpenSubtitlesへの対応は推奨されません。代わりにOpenSubtitlesプラグインを使用してください。ログインが必要な場合は、以前の設定ウインドウからアクセスしてください。";
 "settings.$LiveText" = "テキスト認識表示";
 "settings.$Logging" = "ログ記録";
 "settings.$Login" = "ログイン";
@@ -974,7 +974,7 @@
 "settings.$OnScreenController" = "オンスクリーンコントローラ";
 "settings.$OnScreenDisplay" = "オンスクリーンディスプレイ（OSD）";
 "settings.$OnlineSubtitles" = "オンライン字幕";
-"settings.$OpenLinksOrCurrentWebpage" = "ワンクリックで、リンク先や今開いているWebページをIINAで開くことができます。youtube-dlに対応したWebサイトでのみ動作します。";
+"settings.$OpenLinksOrCurrentWebpage" = "ワンクリックで、リンク先や今開いているWebページをReelで開くことができます。youtube-dlに対応したWebサイトでのみ動作します。";
 "settings.$OpenLogDirectory" = "ログディレクトリを開く";
 "settings.$OpenLogWindow" = "ログビューアを開く";
 "settings.$OrSelectFrom" = "または利用可能なプラグインから選択";
@@ -984,7 +984,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "ピクチャインピクチャ";
 "settings.$Playlist" = "プレイリスト";
-"settings.$PleaseSelectTheMediaTypes" = "IINAをデフォルトの再生アプリケーションに設定したいメディアの種類を選択してください。";
+"settings.$PleaseSelectTheMediaTypes" = "Reelをデフォルトの再生アプリケーションに設定したいメディアの種類を選択してください。";
 "settings.$Position" = "配置";
 "settings.$PreferredLanguage" = "優先言語";
 "settings.$RestoreAlerts" = "通知を復元";
@@ -996,7 +996,7 @@
 警告: この設定を使用する理由はあまりありません。HDMIは非圧縮マルチチャンネルPCMに対応しており、またロスレスDTS-HDもFFmpegのDCAデコーダでデコードすることができます。出力デバイスがS/PDIFに未対応の場合、この設定を有効にしていると、再生が始まらない可能性があります。";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "スクリーンショット";
-"settings.$SetIINAAsTheDefault" = "IINAをデフォルトのアプリケーションに設定";
+"settings.$SetIINAAsTheDefault" = "Reelをデフォルトのアプリケーションに設定";
 "settings.$Settings" = "設定";
 "settings.$Shadow" = "シャドウ";
 "settings.$ShowInFinder" = "Finderに表示";

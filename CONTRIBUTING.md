@@ -1,76 +1,106 @@
-# Contributing
+# Contributing to Reel
 
-Thanks for your interest in contributing to IINA!
+Reel is an independent fork of [IINA](https://github.com/iina/iina). It is a
+separate project: it is not affiliated with, endorsed by, or connected to the
+IINA project, and it has no standing to speak for IINA or to redirect IINA's
+contributors. Issues, pull requests, and discussions in this repository belong
+to Reel.
 
-## Before You Start
+## License and attribution
 
-1. **Check the [issue tracker](https://github.com/iina/iina/issues)** to avoid duplicate work and get community input before coding.
-2. **Open a Design Proposal issue** to discuss your idea:
-   - **Required** for UI changes (e.g., sidebar items, toolbar buttons, layout). Including a mockup is recommended.
-   - **Recommended** if the change contains other interactive elements (e.g., new preferences, dialogs) or is large (spanning multiple files, affecting multiple components).
-   - **Optional** for small, self-contained fixes.
-3. **Link your design proposal** in your pull request description. PRs without one (when required) may be closed without review.
+Reel is distributed under the same [GNU General Public License, version
+3](LICENSE) as IINA. The upstream license and attribution notices stay intact;
+this fork also preserves the licenses for bundled third-party components.
+Anything you contribute here is published under that same license, and:
 
-By submitting a pull request,
-- You give the IINA team permission to take over and modify your code at any time,
-  for the sole purpose of merging it into IINA.
-- You agree that your contributions are licensed under the GPLv3 license.
-  In the case of a future IINA release in the App Store,
-  you agree that you will not pursue any license violations that results
-  solely from the conflict between the GPLv3 license and the App Store's terms of service.
+- If your change fixes a general upstream bug, that does not make it a
+  contribution to IINA. Send upstream fixes upstream, by the upstream
+  project's process. General bugs do not belong to the fork.
+- A fork owes its upstream more than attribution. Credit for IINA belongs to
+  Collider Li and the IINA contributors, and it stays in place — see
+  [FORK.md](FORK.md).
+- If you contribute code here, you keep your copyright in it. Nothing in this
+  repository assigns your work to the IINA project or to this fork's
+  maintainers.
 
-## Contribution Workflow
+## Before you start
 
-- Follow [README.md](README.md) to set up your environment, including [downloading the pre-compiled dylibs](README.md#using-the-pre-compiled-libraries).
-- Use the [latest public version of Xcode](https://itunes.apple.com/us/app/xcode/id497799835). Around June, a branch for the next macOS version may appear, but main development stays on `develop`.
-- Test thoroughly, including any features that share code with your changes.
-- Rebase on top of `develop` before opening your PR to avoid merge conflicts.
-- Submit separate PRs for unrelated changes.
+1. **Search the issue tracker** to avoid duplicate work.
+2. **Open an issue first** for anything that changes behavior, the user
+   interface, or preferences. Required for UI changes; recommended for
+   anything larger than a small, self-contained fix. Include a mockup for UI
+   changes.
+3. **Check the build works** before opening a pull request. A change that does
+   not compile is not reviewable.
+
+## Contribution workflow
+
+- Follow [README.md](README.md) to set up your environment, including
+  downloading the pre-compiled dylibs.
+- Use the latest public version of Xcode. IINA may not build with any other
+  version, and Reel inherits that requirement.
+- Test thoroughly, including any features that share code with your change.
+- Rebase on top of `main` before opening a pull request to avoid merge
+  conflicts.
+- Submit separate pull requests for unrelated changes.
 - Only include files you intentionally changed. Watch for spurious diffs in:
-  - `project.pbxproj` — may change if signed with a different developer account. Changes from adding/removing files are fine.
-  - `xib` files — discard changes you didn't make.
+  - `project.pbxproj` — may change if signed with a different developer
+    account. Changes from adding or removing files are fine.
+  - `xib` files — discard changes you did not make.
+- If your change should also go to upstream, open a separate pull request
+  there and say so, so the two changes can be reasoned about independently.
 
-## Localizations
+## Translations
 
-We use [Crowdin](https://crowdin.com/project/iina) for localization.
-You must localize any new strings, and only update strings in `Base.lproj` and `en.lproj`.
-Do not include translations for languages other than English.
-(New English strings on `develop` sync to Crowdin automatically, and we fetch translations before each release.)
+Reel does not have its own localization project, and this repository does not
+point a translation service at upstream's. Translations are inherited from
+upstream: English strings live in `iina/Base.lproj` and `iina/en.lproj`, which
+this repository keeps in lockstep, and the other locales come from upstream.
 
-## AI Usage
+- Add new English strings to both `iina/Base.lproj` and `iina/en.lproj`.
+- Do not add translations for languages other than English.
+- Do not change translated wording in other locales. The only allowed edit to
+  those files is replacing the inherited product name with Reel and first-party
+  issue, website, or release links with this fork’s GitHub pages; do not add or
+  rewrite translations.
 
-AI tools are permitted, but low-quality AI-generated code will likely be rejected. If you use AI:
+## AI usage
 
-- You must be responsible for confirming that the code complies with IINA's GPLv3 license.
-- Disclose the AI usage in the PR description.
-  Failure to do while submitting obviously AI-generated code may result in your PR being closed without review.
-- Keep the PR description concise and justify your design choices.
+AI tools are permitted, but low-quality AI-generated code will likely be
+rejected. If you use AI:
+
+- You are responsible for confirming the code complies with GPLv3.
+- Disclose the AI usage in the pull request description. Failure to do so while
+  submitting obviously AI-generated code may result in the pull request being
+  closed.
+- Keep the description concise and justify your design choices.
 - Test thoroughly and remove excessive comments.
 
-## Design Guidelines and Code Conventions
+## Design guidelines and code conventions
 
-- In general, follow the [macOS Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines/macos/)
-  and match built-in macOS app behavior.
-- Use system controls with proper font weight, size, and color.
-- Leave margins everywhere. Use animations where appropriate.
-- Give users more choices when possible.
-- Do not introduce new `xib` files, and avoid changing existing ones.
-  Use the helpers in `UIHelper` (for creating common UI components) and
-  `ConstraintsSugar.swift` (for setting up AutoLayout constraints) instead.
-- Add comments only when necessary.
-- In your Xcode settings, use 2-space indentation and remove trailing spaces automatically.
-- No fixed style guide, but we may request changes for consistency with surrounding code.
+In general, follow the [macOS Human Interface
+Guidelines](https://developer.apple.com/design/human-interface-guidelines/macos/)
+and match built-in macOS app behavior. Use system controls with proper font
+weight, size, and color. Give users more choices where possible. Keep margins
+everywhere. If you introduce a new `xib` file or change an existing one, use
+the helpers in `UIHelper` (for creating common UI components) and
+`ConstraintsSugar.swift` (for placing subviews) instead. Add comments only
+where the code is not self-explanatory. There is no fixed style guide, but
+changes to existing code should read like the code around them.
 
 ## Architecture
 
 All new code should follow these guidelines:
 
 - Only `VideoView` and `MPVController` may call mpv APIs directly.
-- `PlayerCore` encapsulates playback logic. Avoid setting options/properties directly through `MPVController`.
+- `PlayerCore` encapsulates playback logic. Avoid setting options or properties
+  directly through `MPVController`.
 - Window logic belongs in `MainWindowController`:
   - `windowDidLoad()` — one-time setup.
-  - `windowDidOpen()` — runs each time the window appears (e.g., resetting UI). The window may not be loaded yet.
-  - `windowWillClose()` — release resources and deinitialize.
-- These files are generated by `other/parse_doc.rb` and **must not** be edited directly: `MPVCommand`, `MPVOption`, `MPVProperty`.
+  - `windowDidOpen()` — runs each time the window appears (for example,
+    resetting the UI).
+  - `windowWillClose()` — releases resources and deinitializes.
+- These files are generated by `other/parse_doc.rb` and **must not be edited
+  directly**: `MPVCommand`, `MPVOption`, `MPVProperty`.
 
 If you think this document can be improved, please open an issue.

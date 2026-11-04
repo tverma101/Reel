@@ -23,10 +23,10 @@
 "LNk-io-MM7.title" = "Pamięć podręczna:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "RwW-JS-iTv"; */
-"RwW-JS-iTv.title" = "Program IINA musi zostać zrestartowany aby efekt został zastosowany.";
+"RwW-JS-iTv.title" = "Program Reel musi zostać zrestartowany aby efekt został zastosowany.";
 
 /* Class = "NSTextFieldCell"; title = "IINA will search youtube-dl in this folder. Restart needed."; ObjectID = "YqE-yV-BvQ"; */
-"YqE-yV-BvQ.title" = "IINA będzie szukać youtube-dl w tym folderze. Wymagany restart.";
+"YqE-yV-BvQ.title" = "Reel będzie szukać youtube-dl w tym folderze. Wymagany restart.";
 
 /* Class = "NSMenuItem"; title = "Auto"; ObjectID = "aNr-lv-K0r"; */
 "aNr-lv-K0r.title" = "Automatycznie";

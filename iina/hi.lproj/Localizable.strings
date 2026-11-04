@@ -30,11 +30,11 @@
 "guide.faq" = "अक्सर पूछे जाने वाले प्रश्न";
 
 // Initial Window
-"initial.announcement" = "आप IINA का %@ संस्करण उपयोग कर रहे हैं";
-"initial.beta.desc" = "अगर आप रिलीज़ संस्करण पर वापस जाना चाहते हैं, तो सेटिंग्स > सामान्य से \"बीटा अपडेट प्राप्त करें\" को अनचेक करें और हमारी <a href=\"https://iina.io\">आधिकारिक वेबसाइट</a> से एक स्थिर रिलीज़ इंस्टॉल करें।";
-"initial.nightly.desc" = "रोज़मर्रा के उपयोग के लिए नाइटली का इस्तेमाल करने की सिफारिश नहीं की जाती। फिलहाल, नाइटली बिल्ड ऑटो अपडेट को सपोर्ट नहीं करते हैं। कृपया हमारी <a href=\"https://nightly.iina.io\">नाइटली वेबसाइट</a> से नए बिल्ड मैन्युअल रूप से डाउनलोड करें।";
+"initial.announcement" = "आप Reel का %@ संस्करण उपयोग कर रहे हैं";
+"initial.beta.desc" = "अगर आप रिलीज़ संस्करण पर वापस जाना चाहते हैं, तो सेटिंग्स > सामान्य से \"बीटा अपडेट प्राप्त करें\" को अनचेक करें और हमारी <a href=\"https://github.com/tverma101/Reel\">आधिकारिक वेबसाइट</a> से एक स्थिर रिलीज़ इंस्टॉल करें।";
+"initial.nightly.desc" = "रोज़मर्रा के उपयोग के लिए नाइटली का इस्तेमाल करने की सिफारिश नहीं की जाती। फिलहाल, नाइटली बिल्ड ऑटो अपडेट को सपोर्ट नहीं करते हैं। कृपया हमारी <a href=\"https://github.com/tverma101/Reel/actions\">नाइटली वेबसाइट</a> से नए बिल्ड मैन्युअल रूप से डाउनलोड करें।";
 "initial.debug.desc" = "डीबग बिल्ड आमतौर पर परफॉर्मेंस के लिए ऑप्टिमाइज़ नहीं होते हैं, इसलिए उन्हें रोज़मर्रा के उपयोग के लिए इस्तेमाल करने की सिफारिश नहीं की जाती। डीबग बिल्ड ऑटो अपडेट को सपोर्ट नहीं करते हैं।";
-"initial.bug_report" = "<a href=\"https://github.com/iina/iina/issues\">गिटहब इश्यूज़</a> पर रिपोर्ट करें।";
+"initial.bug_report" = "<a href=\"https://github.com/tverma101/Reel/issues\">गिटहब इश्यूज़</a> पर रिपोर्ट करें।";
 
 // Inspector Window
 "inspector.error" = "त्रुटि";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "नया फ़िल्टर";
 "alert.add_filter.message" = "कृपया mpv के vf या af कमांड के प्रारूप में एक फिल्टर स्ट्रिंग दर्ज करें।";
 
-"alert.keybinding_config.error" = "कीबाइंडिंग कॉन्फ़िगरेशन फ़ाइल पार्स करने में त्रुटि \"%@\"! IINA डिफ़ॉल्ट कीबाइंडिंग सेटिंग में गिरावट। कृपया अपना कॉन्फ़िगरेशन जांचें।";
+"alert.keybinding_config.error" = "कीबाइंडिंग कॉन्फ़िगरेशन फ़ाइल पार्स करने में त्रुटि \"%@\"! Reel डिफ़ॉल्ट कीबाइंडिंग सेटिंग में गिरावट। कृपया अपना कॉन्फ़िगरेशन जांचें।";
 "alert.delete_keybindingset.title" = "Delete Key Binding Set";
 "alert.delete_keybindingset.message" = "Are you sure to delete this key binding set?";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "लॉग इन नहीं कर सकता। कृपया अपना उपयोगकर्ता नाम, पासवर्ड और नेटवर्क स्थिति जांचें। \n\n%@";
 "alert.sub.save_downloaded.title" = "डाउनलोड किए गए उपशीर्षक को सहेजें";
 
-"alert.set_default.title" = "डिफ़ॉल्ट ऐप के रूप में IINA की स्थापना";
-"alert.set_default.message" = "IINA सभी फ़ाइल प्रकारों के लिए डिफ़ॉल्ट ऐप के रूप में सेट किया जाएगा जो इसका समर्थन करता है।";
+"alert.set_default.title" = "डिफ़ॉल्ट ऐप के रूप में Reel की स्थापना";
+"alert.set_default.message" = "Reel सभी फ़ाइल प्रकारों के लिए डिफ़ॉल्ट ऐप के रूप में सेट किया जाएगा जो इसका समर्थन करता है।";
 "alert.set_default.success" = "%d सफलता के साथ समाप्त हुआ और %d विफल रहा।";
 
 "alert.add_watch.title" = "वॉच प्रॉपर्टी जोड़ें";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "Cannot find the package file.";
 "plugin.install_error.cannot_download" = "Failed to download the plugin.\n\nOutput:%@\n";
 "plugin.install_error.cannot_unpackage" = "Failed to unpackage the plugin.\n\nOutput:%@\n";
-"plugin.install_error.cannot_load" = "IINA cannot load this plugin. It might be in the wrong format.";
+"plugin.install_error.cannot_load" = "Reel cannot load this plugin. It might be in the wrong format.";
 "plugin.check_for_updates" = "अद्यतन के लिए जाँच";
 "plugin.updating" = "Downloading update…";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "ठहरें";
 "settings.pauseresumeWhen" = "ठहरें / रिज्यूम कब";
 "settings.playWhenEnteringFullScreen.label" = "जब पूर्ण स्क्रीन में प्रवेश किया है तब खेलें";
-"settings.playlistAutoAdd.desc" = "प्रभावी होने के लिए IINA को पुनः आरंभ करने की आवश्यकता है।";
+"settings.playlistAutoAdd.desc" = "प्रभावी होने के लिए Reel को पुनः आरंभ करने की आवश्यकता है।";
 "settings.playlistAutoAdd.label" = "स्वचालित रूप से एक ही फ़ोल्डर में फ़ाइलें जोड़ें";
 "settings.playlistAutoPlayNext.label" = "स्वचालित रूप से अगला आइटम चलाएं";
 "settings.playlistShowMetadata.label" = "Show artist and track name for audio files when available";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "Target peak";
 "settings.videoThreads.desc" = "डिफ़ॉल्ट: 0 (ऑटो)";
 "settings.videoThreads.label" = "धागों की संख्या";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "प्रभावी होने के लिए IINA को पुनः आरंभ करने की आवश्यकता है।";
+"settings.httpProxy.desc" = "प्रभावी होने के लिए Reel को पुनः आरंभ करने की आवश्यकता है।";
 "settings.httpProxy.label" = "एचटीटीपी प्रॉक्सी";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "प्रीफ़ैच करने के लिए सेकंड";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Enable mpv's youtube-dl script";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "कच्चे विकल्प";
-"settings.ytdlSearchPath.desc" = "IINA इस फोल्डर में youtube-dl सर्च करेगा। पुनः आरंभ करने की आवश्यकता है।";
+"settings.ytdlSearchPath.desc" = "Reel इस फोल्डर में youtube-dl सर्च करेगा। पुनः आरंभ करने की आवश्यकता है।";
 "settings.ytdlSearchPath.label" = "कस्टम youtube-dl पाथ";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "If enabled, IINA will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
+"settings.autoSearchOnlineSub.desc" = "If enabled, Reel will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
 "settings.autoSearchOnlineSub.label" = "ऑनलाइन उपशीर्षक खोजें";
 "settings.displayInLetterBox.label" = "पूर्ण स्क्रीन में रहते हुए लेटरबॉक्स में उपशीर्षक प्रदर्शित करें";
 "settings.subAlignX.items.0" = "बाएं";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "तल";
 "settings.subAutoLoadIINA.items.0" = "अक्षम";
 "settings.subAutoLoadIINA.items.1" = "मीडिया फ़ाइल नाम वाले उपशीर्षक";
-"settings.subAutoLoadIINA.items.2" = "IINA द्वारा समझदारी से पता लगाएं";
+"settings.subAutoLoadIINA.items.2" = "Reel द्वारा समझदारी से पता लगाएं";
 "settings.subAutoLoadIINA.label" = "ऑटो लोड";
 "settings.subAutoLoadPriorityString.desc" = "कृपया तार के अल्पविराम से अलग की गई सूची दर्ज करें।";
 "settings.subAutoLoadPriorityString.label" = "फ़ाइल नाम युक्त होने पर उपशीर्षक में प्राथमिकता होती है";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "के लिए बाएँ/दाएँ बटन का उपयोग करें";
 "settings.controlBarAutoHideTimeout.label" = "Auto hide after";
 "settings.controlBarStickToCenter.label" = "खींचते समय केंद्र पर स्नैप करें";
-"settings.disableAnimations.desc" = "When the macOS Reduce Motion accessibility setting is enabled IINA will reduce user interface animations that are known to cause problems for those with vestibular disorders. Should that be insufficient, this setting can be used to reduce motion further by eliminating user interface animations.";
+"settings.disableAnimations.desc" = "When the macOS Reduce Motion accessibility setting is enabled Reel will reduce user interface animations that are known to cause problems for those with vestibular disorders. Should that be insufficient, this setting can be used to reduce motion further by eliminating user interface animations.";
 "settings.disableAnimations.label" = "Disable animations";
 "settings.disableOSDFileStartMsg.label" = "File start";
 "settings.disableOSDPauseResumeMsgs.label" = "ठहरें / रिज्यूम";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "खिड़की";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "निम्नलिखित सेटिंग्स को प्रभावी होने के लिए IINA को पुनः आरंभ करने की आवश्यकता होगी।";
+"settings.enableAdvancedSettings.desc" = "निम्नलिखित सेटिंग्स को प्रभावी होने के लिए Reel को पुनः आरंभ करने की आवश्यकता होगी।";
 "settings.enableAdvancedSettings.label" = "उन्नत सेटिंग्स सक्षम करें";
 "settings.enableLogging.label" = "लॉगिंग करने देना";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "Failed to load the page.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "फ़ॉन्ट";
-"settings.$GetBrowserExtensionsForIINA" = "IINA के लिए ब्राउज़र एक्सटेंशन प्राप्त करें";
+"settings.$GetBrowserExtensionsForIINA" = "Reel के लिए ब्राउज़र एक्सटेंशन प्राप्त करें";
 "settings.$GetPlugins" = "Get Plugins…";
 "settings.$Hardware" = "Hardware";
 "settings.$Height" = "ऊंचाई";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "स्क्रीन नियंत्रक पर";
 "settings.$OnScreenDisplay" = "स्क्रीन डिस्प्ले पर";
 "settings.$OnlineSubtitles" = "ऑनलाइन उपशीर्षक";
-"settings.$OpenLinksOrCurrentWebpage" = "एक क्लिक के साथ IINA में लिंक या वर्तमान वेबपेज खोलें। वेबसाइट को youtube-dl द्वारा समर्थित होना चाहिए।";
+"settings.$OpenLinksOrCurrentWebpage" = "एक क्लिक के साथ Reel में लिंक या वर्तमान वेबपेज खोलें। वेबसाइट को youtube-dl द्वारा समर्थित होना चाहिए।";
 "settings.$OpenLogDirectory" = "Open Log Directory";
 "settings.$OpenLogWindow" = "Open the log viewer";
 "settings.$OrSelectFrom" = "Or select from available plugins";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "पिक्चर-इन-पिक्चर";
 "settings.$Playlist" = "प्लेलिस्ट";
-"settings.$PleaseSelectTheMediaTypes" = "कृपया उन मीडिया प्रकारों का चयन करें जिन्हें आप IINA को डिफ़ॉल्ट एप्लिकेशन के रूप में बनाना चाहते हैं।";
+"settings.$PleaseSelectTheMediaTypes" = "कृपया उन मीडिया प्रकारों का चयन करें जिन्हें आप Reel को डिफ़ॉल्ट एप्लिकेशन के रूप में बनाना चाहते हैं।";
 "settings.$Position" = "स्थिति";
 "settings.$PreferredLanguage" = "पसंदीदा भाषा";
 "settings.$RestoreAlerts" = "Restore Alerts";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "स्क्रीनशॉट";
-"settings.$SetIINAAsTheDefault" = "Set IINA as the Default Application";
+"settings.$SetIINAAsTheDefault" = "Set Reel as the Default Application";
 "settings.$Settings" = "सेटिंग्स";
 "settings.$Shadow" = "साया";
 "settings.$ShowInFinder" = "खोजक में पता चलता है";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "स्क्रीन के किनारे";
 "settings.$toThe" = "को";
 "settings.$top" = "चोटी";
-"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";

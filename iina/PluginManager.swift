@@ -20,6 +20,72 @@ class PluginManager {
   }
 
   @MainActor
+  private func acquireUnloadPermit(for plugin: JavascriptPlugin) async throws -> PluginUnloadPermit? {
+    guard plugin.identifier == BundledAirPlayPluginManager.identifier else { return nil }
+    guard !AppDelegate.shared.isApplicationTerminating else {
+      throw PluginOperationCancellationError.applicationTerminating
+    }
+    let permit = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<PluginUnloadPermit?, Error>) in
+      PlayerCore.acquirePluginUnloadPermit(identifier: plugin.identifier) { result in
+        switch result {
+        case .success(let permit): continuation.resume(returning: permit)
+        case .failure(let error): continuation.resume(throwing: error)
+        }
+      }
+    }
+    guard !AppDelegate.shared.isApplicationTerminating else {
+      permit?.release(reloadDeferredContexts: false)
+      throw PluginOperationCancellationError.applicationTerminating
+    }
+    return permit
+  }
+
+  /// Replaces a managed package only after preserving the previous directory as a recoverable
+  /// sibling. Model state is changed only after the old package has moved successfully.
+  @MainActor
+  private func commitReplacement(of oldPlugin: JavascriptPlugin,
+                                 with newPlugin: JavascriptPlugin,
+                                 at position: Int,
+                                 preserveEnabledState: Bool) throws {
+    guard !oldPlugin.isExternal else {
+      throw NSError(domain: "PluginReinstall", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey:
+                      "Remove the external developer plugin before installing another package with the same identifier."])
+    }
+    let backupRoot = Utility.pluginsURL.appendingPathComponent(
+      ".plugin-reinstall-backup.\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.moveItem(at: oldPlugin.root, to: backupRoot)
+
+    guard JavascriptPlugin.plugins.indices.contains(position),
+          JavascriptPlugin.plugins[position] === oldPlugin else {
+      do {
+        try FileManager.default.moveItem(at: backupRoot, to: oldPlugin.root)
+      } catch {
+        oldPlugin.commitEnabledState(false)
+        Logger.log("Unable to restore plugin package after canceled replacement: \(error.localizedDescription)",
+                   level: .error)
+        throw error
+      }
+      throw NSError(domain: "PluginReinstall", code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "The installed plugin changed during replacement."])
+    }
+
+    oldPlugin.commitEnabledState(false)
+    JavascriptPlugin.plugins.remove(at: position)
+    JavascriptPlugin.plugins.insert(newPlugin, at: position)
+    newPlugin.commitEnabledState(preserveEnabledState, forceReload: true)
+    JavascriptPlugin.savePluginOrder()
+    DispatchQueue.global(qos: .utility).async {
+      do {
+        try FileManager.default.removeItem(at: backupRoot)
+      } catch {
+        Logger.log("Unable to remove replaced plugin backup at \(backupRoot.path): \(error.localizedDescription)",
+                   level: .error)
+      }
+    }
+  }
+
+  @MainActor
   func showPermissionsSheet(forPlugin plugin: JavascriptPlugin, previousPlugin: JavascriptPlugin? = nil) async -> Bool {
     let alert = NSAlert()
     let permissionListView = PrefPluginPermissionListView()
@@ -71,12 +137,33 @@ class PluginManager {
         permissionCleared = await showPermissionsSheet(forPlugin: newPlugin, previousPlugin: plugin)
       }
       if permissionCleared {
-        if let pos = plugin.remove() {
-          JavascriptPlugin.plugins.insert(newPlugin, at: pos)
+        let wasEnabled = plugin.enabled
+        let permit: PluginUnloadPermit?
+        do {
+          permit = try await acquireUnloadPermit(for: plugin)
+        } catch {
+          newPlugin.remove()
+          handleInstallationError(error)
+          return (.cancelled, nil)
+        }
+        defer { permit?.release() }
+        guard let pos = JavascriptPlugin.plugins.firstIndex(where: { $0 === plugin }) else {
+          newPlugin.remove()
+          return (.cancelled, nil)
         }
         newPlugin.normalizePath()
-        newPlugin.reloadGlobalInstance()
-        PlayerCore.reloadPluginForAll(newPlugin, forced: true)
+        guard !newPlugin.root.lastPathComponent.hasPrefix(".temp.") else {
+          newPlugin.remove()
+          return (.cancelled, nil)
+        }
+        do {
+          try commitReplacement(of: plugin, with: newPlugin, at: pos,
+                                preserveEnabledState: wasEnabled)
+        } catch {
+          newPlugin.remove()
+          handleInstallationError(error)
+          return (.cancelled, nil)
+        }
         return (.installed, newPlugin)
       }
       return (.cancelled, nil)
@@ -88,6 +175,12 @@ class PluginManager {
 
   @MainActor
   func handleInstallationError(_ error: Error) {
+    guard PluginOperationErrorPolicy.shouldShowInstallationError(
+      error, whileTerminating: AppDelegate.shared.isApplicationTerminating) else {
+      Logger.log("Suppressing plugin installation cancellation during application termination.", level: .verbose)
+      return
+    }
+
     let message: String
     if let pluginError = error as? JavascriptPlugin.PluginError {
       switch pluginError {
@@ -137,12 +230,44 @@ class PluginManager {
       }
       // uninstall the old plugins
       let oldPlugin = JavascriptPlugin.plugins[pos]
-      oldPlugin.enabled = false
-      oldPlugin.remove()
-      // install the new plugin
+      guard !oldPlugin.isExternal else {
+        plugin.remove()
+        handleInstallationError(NSError(
+          domain: "PluginReinstall",
+          code: 1,
+          userInfo: [NSLocalizedDescriptionKey: "Remove the external developer plugin before installing another package with the same identifier."]
+        ))
+        return .cancelled
+      }
+      let wasEnabled = oldPlugin.enabled
+      let permit: PluginUnloadPermit?
+      do {
+        permit = try await acquireUnloadPermit(for: oldPlugin)
+      } catch {
+        plugin.remove()
+        handleInstallationError(error)
+        return .cancelled
+      }
+      defer { permit?.release() }
+      guard JavascriptPlugin.plugins.indices.contains(pos), JavascriptPlugin.plugins[pos] === oldPlugin else {
+        plugin.remove()
+        return .cancelled
+      }
+      // Normalize the staged package while the previous package is still recoverable. Since its
+      // canonical path is occupied, it receives a unique suffix and keeps the list position below.
       plugin.normalizePath()
-      JavascriptPlugin.plugins.insert(plugin, at: pos)
-      plugin.enabled = true
+      guard !plugin.root.lastPathComponent.hasPrefix(".temp.") else {
+        plugin.remove()
+        return .cancelled
+      }
+      do {
+        try commitReplacement(of: oldPlugin, with: plugin, at: pos,
+                              preserveEnabledState: wasEnabled)
+      } catch {
+        plugin.remove()
+        handleInstallationError(error)
+        return .cancelled
+      }
       return .reinstalled
     } else {
       plugin.normalizePath()
@@ -175,8 +300,18 @@ class PluginManager {
     guard await Dialogs.ask("plugin_uninstall", titleArgs: [plugin.name]).show(in: window) else {
       return false
     }
-    plugin.enabled = false
-    plugin.remove()
+    let permit: PluginUnloadPermit?
+    do {
+      permit = try await acquireUnloadPermit(for: plugin)
+    } catch {
+      handleInstallationError(error)
+      return false
+    }
+    defer { permit?.release() }
+    guard JavascriptPlugin.plugins.contains(where: { $0 === plugin }) else { return false }
+    plugin.commitEnabledState(false)
+    _ = plugin.remove()
+    JavascriptPlugin.savePluginOrder()
     return true
   }
 }

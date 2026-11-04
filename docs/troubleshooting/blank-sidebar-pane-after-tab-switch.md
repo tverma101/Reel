@@ -32,11 +32,11 @@ reported blank pane still needs repeated runtime observation.
 ## Fix
 
 Sidebar controllers now load when shown, after window setup. The quick setting pane uses playback
-state and preference values already held by IINA for its initial controls, rather than synchronous
+state and preference values already held by Reel for its initial controls, rather than synchronous
 mpv reads while constructing the pane. Later property notifications refresh the playback state.
 
 The override now asks AppKit to transition the child views using one supported slide option,
-selected from tab direction. It uses no animation for the first switch, when IINA's animation
+selected from tab direction. It uses no animation for the first switch, when Reel's animation
 setting is disabled, or when macOS Reduce Motion is enabled. There is no custom layer animation or
 cleanup timer to survive into a later resize.
 

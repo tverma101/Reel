@@ -30,11 +30,11 @@
 "guide.faq" = "常见问题";
 
 // Initial Window
-"initial.announcement" = "您正在使用 IINA 的 %@ 版本";
-"initial.beta.desc" = "如果你想回滚到发布版本，请从“设置” > “通用” 中取消勾选 “接收测试版本（Beta）更新”，并从我们的<a href=\"https://iina.io\">官方网站</a>安装一个稳定版本。";
-"initial.nightly.desc" = "我们不建议将 Nightly 作为日常使用的版本。目前 Nightly 不支持自动更新。请从我们的<a href=\"https://nightly.iina.io\"> Nightly 网站</a>手动下载更新的版本。";
+"initial.announcement" = "您正在使用 Reel 的 %@ 版本";
+"initial.beta.desc" = "如果你想回滚到发布版本，请从“设置” > “通用” 中取消勾选 “接收测试版本（Beta）更新”，并从我们的<a href=\"https://github.com/tverma101/Reel\">官方网站</a>安装一个稳定版本。";
+"initial.nightly.desc" = "我们不建议将 Nightly 作为日常使用的版本。目前 Nightly 不支持自动更新。请从我们的<a href=\"https://github.com/tverma101/Reel/actions\"> Nightly 网站</a>手动下载更新的版本。";
 "initial.debug.desc" = "调试版本（Debug）通常没有对性能进行优化，所以不建议日常用。调试版本（Debug）不支持自动更新。";
-"initial.bug_report" = "通过<a href=\"https://github.com/iina/iina/issues\">GitHub issues</a>报告。";
+"initial.bug_report" = "通过<a href=\"https://github.com/tverma101/Reel/issues\">GitHub issues</a>报告。";
 
 // Inspector Window
 "inspector.error" = "错误";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "添加新滤镜";
 "alert.add_filter.message" = "请输入符合 mpv 的 vf 或 af 格式的滤镜字符串。";
 
-"alert.keybinding_config.error" = "无法读取快捷键配置文件“%@”！已回退至 IINA 默认的键位设置。请检查你的快捷键配置。";
+"alert.keybinding_config.error" = "无法读取快捷键配置文件“%@”！已回退至 Reel 默认的键位设置。请检查你的快捷键配置。";
 "alert.delete_keybindingset.title" = "删除快捷键配置";
 "alert.delete_keybindingset.message" = "您确定要删除此快捷键配置？";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "无法登录。请检查您的用户名、密码及网络状态。\n\n%@";
 "alert.sub.save_downloaded.title" = "保存已下载字幕";
 
-"alert.set_default.title" = "正在将 IINA 设为默认程序";
-"alert.set_default.message" = "IINA 将作为默认程序打开所有支持文件类型。";
+"alert.set_default.title" = "正在将 Reel 设为默认程序";
+"alert.set_default.message" = "Reel 将作为默认程序打开所有支持文件类型。";
 "alert.set_default.success" = "已完成。%d 成功，%d 失败。";
 
 "alert.add_watch.title" = "添加监视属性";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "找不到软件包文件。";
 "plugin.install_error.cannot_download" = "下载插件失败。\n\n输出: %@\n";
 "plugin.install_error.cannot_unpackage" = "解包插件失败。\n\n输出: %@\n";
-"plugin.install_error.cannot_load" = "IINA无法加载此插件，可能是格式错误。";
+"plugin.install_error.cannot_load" = "Reel无法加载此插件，可能是格式错误。";
 "plugin.check_for_updates" = "检查更新";
 "plugin.updating" = "下载更新中……";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "暂停";
 "settings.pauseresumeWhen" = "自动暂停/播放";
 "settings.playWhenEnteringFullScreen.label" = "进入全屏后播放";
-"settings.playlistAutoAdd.desc" = "重启 IINA 后生效。";
+"settings.playlistAutoAdd.desc" = "重启 Reel 后生效。";
 "settings.playlistAutoAdd.label" = "自动添加同文件夹中的其他视频";
 "settings.playlistAutoPlayNext.label" = "自动播放播放列表中下一个项目";
 "settings.playlistShowMetadata.label" = "显示音频文件的曲目和艺术家信息";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "目标峰值";
 "settings.videoThreads.desc" = "默认：0（自动）";
 "settings.videoThreads.label" = "线程数";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "重启 IINA 后生效。";
+"settings.httpProxy.desc" = "重启 Reel 后生效。";
 "settings.httpProxy.label" = "HTTP 代理";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "预读取秒数";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "启用mpv的youtube-dl脚本";
 "settings.ytdlRawOptions.desc" = "格式: <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "额外参数";
-"settings.ytdlSearchPath.desc" = "IINA 会在此文件夹中搜索 youtube-dl。需要重新启动。";
+"settings.ytdlSearchPath.desc" = "Reel 会在此文件夹中搜索 youtube-dl。需要重新启动。";
 "settings.ytdlSearchPath.label" = "自定义 youtube-dl 路径";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "启用该选项时，IINA 只会针对没有加载字幕、长度超过 20 分钟的视频自动搜索在线字幕。";
+"settings.autoSearchOnlineSub.desc" = "启用该选项时，Reel 只会针对没有加载字幕、长度超过 20 分钟的视频自动搜索在线字幕。";
 "settings.autoSearchOnlineSub.label" = "自动搜索在线字幕";
 "settings.displayInLetterBox.label" = "全屏时将字幕显示在黑边";
 "settings.subAlignX.items.0" = "左";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "底部";
 "settings.subAutoLoadIINA.items.0" = "禁用";
 "settings.subAutoLoadIINA.items.1" = "包含媒体文件名的字幕";
-"settings.subAutoLoadIINA.items.2" = "由 IINA 智能选择";
+"settings.subAutoLoadIINA.items.2" = "由 Reel 智能选择";
 "settings.subAutoLoadIINA.label" = "自动加载";
 "settings.subAutoLoadPriorityString.desc" = "请输入一系列逗号分隔的字符串。";
 "settings.subAutoLoadPriorityString.label" = "优先加载文件名含有以下字符串的字幕";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "左/右箭头按钮的功能";
 "settings.controlBarAutoHideTimeout.label" = "自动隐藏延迟";
 "settings.controlBarStickToCenter.label" = "拖动时吸附到窗口中心";
-"settings.disableAnimations.desc" = "当启用 macOS 的减少动态效果辅助功能设置时，IINA 将减少已知会对前庭障碍患者造成问题的用户界面动画。如果这还不够，可以使用此设置通过消除用户界面动画来进一步减少动态效果。";
+"settings.disableAnimations.desc" = "当启用 macOS 的减少动态效果辅助功能设置时，Reel 将减少已知会对前庭障碍患者造成问题的用户界面动画。如果这还不够，可以使用此设置通过消除用户界面动画来进一步减少动态效果。";
 "settings.disableAnimations.label" = "禁用动画";
 "settings.disableOSDFileStartMsg.label" = "文件开始";
 "settings.disableOSDPauseResumeMsgs.label" = "暂停 / 继续";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "窗口";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "以下所有设置需要重启 IINA 才会生效。";
+"settings.enableAdvancedSettings.desc" = "以下所有设置需要重启 Reel 才会生效。";
 "settings.enableAdvancedSettings.label" = "启用高级设置";
 "settings.enableLogging.label" = "记录日志";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "无法加载此页面";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "字体";
-"settings.$GetBrowserExtensionsForIINA" = "获取 IINA 的浏览器插件";
+"settings.$GetBrowserExtensionsForIINA" = "获取 Reel 的浏览器插件";
 "settings.$GetPlugins" = "获取插件…";
 "settings.$Hardware" = "硬件";
 "settings.$Height" = "高";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "播放控制条";
 "settings.$OnScreenDisplay" = "屏幕显示 (OSD)";
 "settings.$OnlineSubtitles" = "在线字幕";
-"settings.$OpenLinksOrCurrentWebpage" = "一键在 IINA 中打开网页中的链接或当前页面。网站需要 youtube-dl 的支持。";
+"settings.$OpenLinksOrCurrentWebpage" = "一键在 Reel 中打开网页中的链接或当前页面。网站需要 youtube-dl 的支持。";
 "settings.$OpenLogDirectory" = "打开日志目录";
 "settings.$OpenLogWindow" = "打开日志查看器";
 "settings.$OrSelectFrom" = "Or select from available plugins";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "画中画";
 "settings.$Playlist" = "播放列表";
-"settings.$PleaseSelectTheMediaTypes" = "请选择希望将 IINA 设为默认应用程序的文件类型。";
+"settings.$PleaseSelectTheMediaTypes" = "请选择希望将 Reel 设为默认应用程序的文件类型。";
 "settings.$Position" = "位置";
 "settings.$PreferredLanguage" = "偏好语言";
 "settings.$RestoreAlerts" = "重置警告提醒";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari浏览器";
 "settings.$Screenshots" = "截图";
-"settings.$SetIINAAsTheDefault" = "将 IINA 设为默认应用";
+"settings.$SetIINAAsTheDefault" = "将 Reel 设为默认应用";
 "settings.$Settings" = "设置";
 "settings.$Shadow" = "阴影";
 "settings.$ShowInFinder" = "在访达中显示";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "侧";
 "settings.$toThe" = "距离屏幕";
 "settings.$top" = "顶";
-"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";

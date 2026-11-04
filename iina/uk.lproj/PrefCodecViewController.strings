@@ -86,7 +86,7 @@
 "baO-xy-7hD.title" = "нит";
 
 /* Class = "NSTextFieldCell"; title = "Measured peak brightness of the display. If set to 0, IINA detects this value. If detection fails, IINA sets the target peak to 400."; ObjectID = "aTt-aZ-rjK"; */
-"aTt-aZ-rjK.title" = "Вимірювана пікова яскравість дисплея. Якщо встановлено 0, IINA автоматично визначає це значення. Якщо автовизначення не вдалося, IINA встановлює пікову яскравість 400.";
+"aTt-aZ-rjK.title" = "Вимірювана пікова яскравість дисплея. Якщо встановлено 0, Reel автоматично визначає це значення. Якщо автовизначення не вдалося, Reel встановлює пікову яскравість 400.";
 
 /* Class = "NSTextFieldCell"; title = "Algorithm:"; ObjectID = "qzI-rq-PqO"; */
 "qzI-rq-PqO.title" = "Алгоритм:";

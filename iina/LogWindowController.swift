@@ -30,6 +30,7 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
   private let scrollView = NSScrollView()
 
   @objc private dynamic var logs: [Logger.Log] = []
+  private var recentLogHistory = Logger.makeLogBuffer()
   private let arrayController = NSArrayController()
   private var isWindowVisible: Bool {
     window?.occlusionState.contains(.visible) ?? false
@@ -136,6 +137,9 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
         let item = NSMenuItem(title: level.description, action: #selector(logLevelChanged), keyEquivalent: "")
         item.tag = level.rawValue
         item.image = indicatorIcon(withColor: level.color)
+        if #available(macOS 27.0, *) {
+          item.preferredImageVisibility = .visible
+        }
         logLevelMenu.addItem(item)
       }
       subsystemMenu.delegate = self
@@ -147,6 +151,11 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
     }
 
     super.showWindow(sender)
+    let visible = isWindowVisible
+    Logger.setLogWindowVisible(visible)
+    if visible {
+      flushBuffer()
+    }
   }
 
   private func setupTableView() {
@@ -299,6 +308,9 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
         subsystem.added = true
         let item = NSMenuItem.init(title: subsystem.rawValue, action: #selector(subsystemChanged), keyEquivalent: "")
         item.image = subsystem.image
+        if #available(macOS 27.0, *) {
+          item.preferredImageVisibility = .visible
+        }
         // 3 = dummy + clear selection item + separator
         menu.insertItem(item, at: index + 3)
       }
@@ -420,15 +432,12 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
   }
 
   private func flushBuffer() {
-    let toFlush: [Logger.Log] = Logger.$buffer.withLock {
-      let copy = $0
-      $0.removeAll(keepingCapacity: true)
-      return copy
-    }
+    let toFlush = Logger.drainBuffer()
 
     if !toFlush.isEmpty {
       checkIfAtBottom()
-      logs.append(contentsOf: toFlush)
+      recentLogHistory.append(contentsOf: toFlush)
+      logs = recentLogHistory.elements
       if following {
         scrollToBottom()
       }
@@ -436,9 +445,12 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
   }
 
   @objc private func occlusionChanged(_ note: Notification) {
-    if isWindowVisible {
+    let visible = isWindowVisible
+    Logger.setLogWindowVisible(visible)
+    if visible {
       flushBuffer()
     } else {
+      flushTimer?.invalidate()
       flushTimer = nil
     }
   }

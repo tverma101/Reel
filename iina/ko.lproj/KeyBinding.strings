@@ -26,7 +26,7 @@
 "cmd.playlist-shuffle" = "임의 재생";
 "cmd.write-watch-later-config" = "이어보기 정보 기록";
 "cmd.stop" = "재생 중단";
-"cmd.quit" = "IINA 종료";
+"cmd.quit" = "Reel 종료";
 "cmd.quit-watch-later" = "이어보기 정보 저장후 종료";
 "cmd.screenshot" = "스크린샷";
 "cmd.screenshot-to-file" = "파일로 스크린샷 저장";

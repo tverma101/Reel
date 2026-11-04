@@ -75,12 +75,16 @@ enum OSDMessage {
   case showTime(Double) // percentage
   case volume(Double)
   case speed(Double)
+  case speedBar(Double)
+  case speedBarOnly(Double)
   case aspect(String)
   case crop(String)
   case rotate(Int)
   case deinterlace(Bool)
   case hwdec(Bool)
   case audioDelay(Double)
+  case audioDelayBarOnly(Double)
+  case audioDelayMessage(Double)
   case subDelay(Double)
   case subScale(Double)
   case subHidden
@@ -140,7 +144,7 @@ enum OSDMessage {
     case .pause: return Preference.bool(for: .disableOSDPauseResumeMsgs)
     case .resume: return Preference.bool(for: .disableOSDPauseResumeMsgs)
     case .seek: return Preference.bool(for: .disableOSDSeekMsg)
-    case .speed: return Preference.bool(for: .disableOSDSpeedMsg)
+    case .speed, .speedBar, .speedBarOnly: return Preference.bool(for: .disableOSDSpeedMsg)
     default: return false
     }
   }
@@ -198,6 +202,15 @@ enum OSDMessage {
         .normal
       )
 
+    case .speedBar(let value):
+      return (
+        String(format: NSLocalizedString("osd.speed", comment: "Speed: %@x"), value.groupedStringUpTo6Decimals),
+        .withProgress((value / 4).clamped(to: 0...1))
+      )
+
+    case .speedBarOnly(let value):
+      return ("", .withProgress((value / 4).clamped(to: 0...1)))
+
     case .aspect(var value):
       if value == "Default" {
         value = Constants.String.default
@@ -250,6 +263,19 @@ enum OSDMessage {
         }
         return (text, .withProgress(toPercent(value, 10)))
       }
+
+    case .audioDelayBarOnly(let value):
+      return ("", .withProgress(value == 0 ? 0.5 : toPercent(value, 10)))
+
+    case .audioDelayMessage(let value):
+      if value == 0 {
+        return (NSLocalizedString("osd.audio_delay.nodelay", comment: "Audio Delay: No Delay"), .normal)
+      }
+      let valueStr = abs(value).groupedStringUpTo6Decimals
+      let text = value > 0
+        ? String(format: NSLocalizedString("osd.audio_delay.later", comment: "Audio Delay: %@s Later"), valueStr)
+        : String(format: NSLocalizedString("osd.audio_delay.earlier", comment: "Audio Delay: %@s Earlier"), valueStr)
+      return (text, .normal)
 
     case .secondSubDelay(let value):
       if value == 0 {

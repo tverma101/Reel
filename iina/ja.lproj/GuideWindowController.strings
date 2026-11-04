@@ -2,7 +2,7 @@
 "FJS-b9-ATj.title" = "Webサイト";
 
 /* Class = "NSTextFieldCell"; title = "Failed to load highlights. Please visit our website https://iina.io for more information."; ObjectID = "oaH-Na-skD"; */
-"oaH-Na-skD.title" = "ハイライト情報を読み込めませんでした。詳しくは https://iina.io にアクセスしてください。";
+"oaH-Na-skD.title" = "ハイライト情報を読み込めませんでした。詳しくは https://github.com/tverma101/Reel にアクセスしてください。";
 
 /* Class = "NSButtonCell"; title = "Continue"; ObjectID = "pRW-Nk-MIQ"; */
 "pRW-Nk-MIQ.title" = "続ける";

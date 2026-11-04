@@ -92,6 +92,7 @@ expectNotPerfect("The.Matrix.1999.1080p.Sinners.2003.1080p.srt", "The.Matrix.199
 expectNotPerfect("Dune.2160p.Part.Two.2024.2160p.WEB-DL.srt", "Dune.2021.2160p.WEB-DL.DDP5.1.HDR.HEVC-NTb", "sequel hidden after a tag")
 expectNotPerfect("Show.S01E02.1080p.S01E07.720p.WEB-DL.srt", "Show.S01E02", "wrong episode after a tag")
 expectNotPerfect("S.h.o.w.S01E02.2160p.Entirely.Other.Series.S01E09.1080p.srt", "Show.S01E02", "wrong show after a tag")
+expectNotPerfect("Movie.Title.2019.1080p.WEB-DL.Some.Other.Film.srt", "Movie.Title.2019.1080p", "second title after release tags")
 expectNotPerfect("The.Matrix.1080p.Sinners.srt", "The.Matrix.1999.1080p", "anchor omitted entirely")
 expectNotPerfect("Sinners.2021.1080p.The.Matrix.srt", "The.Matrix.1999.1080p", "anchor belongs to another film")
 

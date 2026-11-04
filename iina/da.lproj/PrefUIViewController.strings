@@ -32,7 +32,7 @@
 "92n-Uq-o4G.title" = "Bund";
 
 /* Class = "NSTextFieldCell"; title = "When the macOS Reduce Motion accessibility setting is enabled IINA will reduce user interface animations that are known to cause problems for those with vestibular disorders. Should that be insufficient, this setting can be used to reduce motion further by eliminating user interface animations."; ObjectID = "9IR-Sf-wMq"; */
-"9IR-Sf-wMq.title" = "Når indstillingen \"Formindsk bevægelse\" i macOS er slået til, så vil IINA formindske animationer i brugerfladen der typisk forårsager problemer for dem der har vestibulære lidelser. Hvis dette er utilstrækkeligt kan denne indstilling bruges til at formindske bevægelser yderligere ved at fjerne animationer i brugerfladen.";
+"9IR-Sf-wMq.title" = "Når indstillingen \"Formindsk bevægelse\" i macOS er slået til, så vil Reel formindske animationer i brugerfladen der typisk forårsager problemer for dem der har vestibulære lidelser. Hvis dette er utilstrækkeligt kan denne indstilling bruges til at formindske bevægelser yderligere ved at fjerne animationer i brugerfladen.";
 
 /* Class = "NSMenuItem"; title = "% of screen"; ObjectID = "AE4-BD-wZi"; */
 "AE4-BD-wZi.title" = "% af skærm";

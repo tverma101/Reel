@@ -22,10 +22,29 @@ fileprivate extension Process {
   }
 }
 
+private final class JavascriptPromiseCompletion {
+  private let lock = NSLock()
+  private var didSettle = false
+
+  @discardableResult
+  func settle(on queue: DispatchQueue, _ action: @escaping () -> Void) -> Bool {
+    lock.lock()
+    guard !didSettle else {
+      lock.unlock()
+      return false
+    }
+    didSettle = true
+    lock.unlock()
+    queue.async(execute: action)
+    return true
+  }
+}
+
 @objc protocol JavascriptAPIUtilsExportable: JSExport {
   func fileInPath(_ file: String) -> Bool
   func resolvePath(_ path: String) -> String?
   func exec(_ file: String, _ args_: Any, _ cwd: JSValue?, _ stdoutHook_: JSValue?, _ stderrHook_: JSValue?) -> JSValue?
+  func execWithTimeout(_ file: String, _ args_: Any, _ timeoutSeconds: Double) -> JSValue?
   func ask(_ title: String) -> Bool
   func prompt(_ title: String) -> String?
   func chooseFile(_ title: String, _ options: [String: Any]) -> Any
@@ -93,6 +112,23 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
   }
 
   func exec(_ file: String, _ args_: Any, _ cwd: JSValue?, _ stdoutHook_: JSValue?, _ stderrHook_: JSValue?) -> JSValue? {
+    execute(file, args_, cwd, stdoutHook_, stderrHook_, timeoutSeconds: nil)
+  }
+
+  func execWithTimeout(_ file: String, _ args_: Any, _ timeoutSeconds: Double) -> JSValue? {
+    guard timeoutSeconds.isFinite, timeoutSeconds > 0, timeoutSeconds <= 86_400 else {
+      throwError(withMessage: "The exec timeout must be between 0 and 86400 seconds")
+      return nil
+    }
+    return execute(file, args_, nil, nil, nil, timeoutSeconds: timeoutSeconds)
+  }
+
+  private func execute(_ file: String,
+                       _ args_: Any,
+                       _ cwd: JSValue?,
+                       _ stdoutHook_: JSValue?,
+                       _ stderrHook_: JSValue?,
+                       timeoutSeconds: TimeInterval?) -> JSValue? {
     guard permitted(to: .accessFileSystem) else {
       return nil
     }
@@ -155,6 +191,23 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
         }
       }
 
+      let pluginIdentifier = self.pluginInstance.plugin.identifier
+      // AirPlay's long-lived `serve` process can occupy both ordinary permits
+      // for its plugin. Reserve a separate, globally bounded lane only for the
+      // bundled helper's timed `stop` command so it can always request teardown.
+      let isAirPlayStopCommand = timeoutSeconds != nil &&
+        pluginIdentifier == BundledAirPlayPluginManager.identifier &&
+        URL(fileURLWithPath: path).lastPathComponent == "airplay-helper" &&
+        args.first == "stop"
+      let admission = BoundedProcessExecutionAdmission.shared
+      let executionPermit = isAirPlayStopCommand
+        ? admission.acquireLifecycleControl(forPluginIdentifier: pluginIdentifier)
+        : admission.acquire(forPluginIdentifier: pluginIdentifier)
+      guard let executionPermit else {
+        reject.call(withArguments: [-3, "Too many plugin processes are already active for this plugin or application"])
+        return
+      }
+
       let (stdout, stderr) = (Pipe(), Pipe())
       let process = Process()
       process.environment = ["LC_ALL": "en_US.UTF-8"]
@@ -166,45 +219,86 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
       process.standardOutput = stdout
       process.standardError = stderr
 
-      var stdoutContent = ""
-      var stderrContent = ""
-      var stdoutHook: JSValue?
-      var stderrHook: JSValue?
-      if let hookVal = stdoutHook_, hookVal.isObject {
-        stdoutHook = hookVal
-      }
-      if let hookVal = stderrHook_, hookVal.isObject {
-        stderrHook = hookVal
-      }
-
-      stdout.fileHandleForReading.readabilityHandler = { file in
-        guard let output = String(data: file.availableData, encoding: .utf8) else { return }
-        stdoutContent += output
-        stdoutHook?.call(withArguments: [output])
-      }
-      stderr.fileHandleForReading.readabilityHandler = { file in
-        guard let output = String(data: file.availableData, encoding: .utf8) else { return }
-        stderrContent += output
-        stderrHook?.call(withArguments: [output])
-      }
-      Logger.log("Executing \(path) \(args.joined(separator: " "))", subsystem: pluginInstance.subsystem)
+      let stdoutHook: JSValue? = stdoutHook_.flatMap { $0.isObject ? $0 : nil }
+      let stderrHook: JSValue? = stderrHook_.flatMap { $0.isObject ? $0 : nil }
+      // All JS hooks and Promise callbacks for this plugin share its serial JS
+      // queue. Process waits use a separate bounded-concurrency queue below.
+      let outputCallbackQueue = self.pluginInstance.queue
+      let processWaitQueue = PluginProcessExecutionQueues.processWait
+      let subsystem = self.pluginInstance.subsystem
+      let completionQueue = self.pluginInstance.queue
+      let outputGroup = DispatchGroup()
+      let stdoutReader = ProcessOutputStreamReader(
+        fileHandle: stdout.fileHandleForReading,
+        completionGroup: outputGroup,
+        callbackQueue: outputCallbackQueue) { output in
+          stdoutHook?.call(withArguments: [output])
+        }
+      let stderrReader = ProcessOutputStreamReader(
+        fileHandle: stderr.fileHandleForReading,
+        completionGroup: outputGroup,
+        callbackQueue: outputCallbackQueue) { output in
+          stderrHook?.call(withArguments: [output])
+        }
+      stdoutReader.start()
+      stderrReader.start()
+      Logger.log("Executing \(path) \(args.joined(separator: " "))", subsystem: subsystem)
       do {
         try process.run()
       } catch {
+        stdoutReader.stop(suppressPendingCallbacks: true)
+        stderrReader.stop(suppressPendingCallbacks: true)
+        outputGroup.notify(queue: processWaitQueue) {
+          executionPermit.release()
+        }
         reject.call(withArguments: ["Execution failed reporting: \(error.localizedDescription)"])
         return
       }
 
-      self.pluginInstance.queue.async {
+      let promiseCompletion = JavascriptPromiseCompletion()
+      let timeoutDeadline = timeoutSeconds.map { DispatchTime.now() + $0 }
+      let timeoutWork: BoundedProcessTimeoutToken? = timeoutDeadline.map { deadline in
+        BoundedProcessTimeout.schedule(for: process, deadline: deadline) {
+          guard let timeoutSeconds else { return }
+          promiseCompletion.settle(on: completionQueue) {
+            reject.call(withArguments: [-4, "Process timed out after \(timeoutSeconds) seconds"])
+          }
+        }
+      }
+
+      processWaitQueue.async {
         process.waitUntilExit()
-        stderr.fileHandleForReading.readabilityHandler = nil
-        stdout.fileHandleForReading.readabilityHandler = nil
-        DispatchQueue.main.async {
-          resolve.call(withArguments: [[
-            "status": process.terminationStatus,
-            "stdout": stdoutContent,
-            "stderr": stderrContent
-          ] as [String: Any]])
+        timeoutWork?.cancel()
+        // Process exit does not guarantee either pipe has delivered EOF. Give
+        // both readers and their hooks a bounded window to drain. Process
+        // completion runs off the plugin JS queue so one long process cannot
+        // block settlement of unrelated calls.
+        let streamsReachedEOF = outputGroup.wait(timeout: .now() + .seconds(2)) == .success
+        stdoutReader.stop(suppressPendingCallbacks: !streamsReachedEOF)
+        stderrReader.stop(suppressPendingCallbacks: !streamsReachedEOF)
+        if !streamsReachedEOF {
+          Logger.log("Timed out draining plugin process output after 2 seconds", subsystem: subsystem)
+          // Suppression makes callback completion independent from a hook
+          // already inside JavaScript. Wait only for the pipe readers to finish
+          // their nonblocking finalization before releasing their state.
+          outputGroup.wait()
+        }
+        let result: [String: Any] = [
+          "status": process.terminationStatus,
+          "stdout": stdoutReader.text,
+          "stderr": stderrReader.text
+        ]
+        // Snapshot output before queuing JS settlement. The resolver closure
+        // retains only the bounded result and admission permit, never Process,
+        // readers, or pipe handles. If an admitted hook never returns, JSCore
+        // cannot safely be re-entered to settle its Promise; the process and
+        // reader lifecycle still completes and total retained calls stay capped.
+        let didQueueSettlement = promiseCompletion.settle(on: completionQueue) {
+          defer { executionPermit.release() }
+          resolve.call(withArguments: [result])
+        }
+        if !didQueueSettlement {
+          completionQueue.async { executionPermit.release() }
         }
       }
     }

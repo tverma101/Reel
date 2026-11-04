@@ -7,8 +7,249 @@
 //
 
 import Foundation
+import Dispatch
 import Just
 import PromiseKit
+
+private struct OpenSubResponseTooLargeError: LocalizedError {
+  let maximumBytes: Int
+
+  var errorDescription: String? {
+    "Open Subtitles response exceeded the \(maximumBytes)-byte download limit"
+  }
+}
+
+private struct OpenSubUntrustedRedirectError: LocalizedError {
+  var errorDescription: String? { "Open Subtitles redirected a request to an untrusted host" }
+}
+
+/// Collects a URL response incrementally and stops the transfer before retaining more than the
+/// configured response limit. A fresh session lets this helper receive delegate callbacks while
+/// preserving the injected/default session configuration and restricting redirects to trusted hosts.
+private final class OpenSubBoundedDataTask: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+  typealias Completion = (Data?, URLResponse?, Error?, URLSessionTask?) -> Void
+
+  private let lock = NSLock()
+  private let configuration: URLSessionConfiguration
+  private let request: URLRequest
+  private let maximumBytes: Int
+  private let allowsURL: (URL) -> Bool
+  private let cancellation: SubtitleAudioMatcher.Cancellation
+  private let identifier: UUID
+  private let completion: Completion
+  private var session: URLSession?
+  private var task: URLSessionDataTask?
+  private var response: URLResponse?
+  private var receivedData = Data()
+  private var exceededLimit = false
+  private var failure: Error?
+  private var finished = false
+
+  init(configuration: URLSessionConfiguration,
+       request: URLRequest,
+       maximumBytes: Int,
+       cancellation: SubtitleAudioMatcher.Cancellation,
+       identifier: UUID,
+       allowsURL: @escaping (URL) -> Bool = { _ in true },
+       completion: @escaping Completion) {
+    self.configuration = configuration
+    self.request = request
+    self.maximumBytes = maximumBytes
+    self.cancellation = cancellation
+    self.identifier = identifier
+    self.allowsURL = allowsURL
+    self.completion = completion
+  }
+
+  func start() {
+    let activeSession = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    let activeTask = activeSession.dataTask(with: request)
+    lock.lock()
+    session = activeSession
+    task = activeTask
+    lock.unlock()
+
+    guard cancellation.register(activeTask, identifier: identifier) else {
+      activeTask.cancel()
+      complete(error: CancellationError())
+      return
+    }
+    activeTask.resume()
+  }
+
+  func urlSession(_ session: URLSession,
+                  dataTask: URLSessionDataTask,
+                  didReceive response: URLResponse,
+                  completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+    lock.lock()
+    self.response = response
+    let trustedURL = response.url.map(allowsURL) ?? false
+    if !trustedURL { failure = OpenSubUntrustedRedirectError() }
+    let declaredTooLarge = response.expectedContentLength > Int64(maximumBytes)
+    if declaredTooLarge { exceededLimit = true }
+    let alreadyFinished = finished
+    lock.unlock()
+    completionHandler(!alreadyFinished && trustedURL && !declaredTooLarge ? .allow : .cancel)
+  }
+
+  func urlSession(_ session: URLSession,
+                  task: URLSessionTask,
+                  willPerformHTTPRedirection response: HTTPURLResponse,
+                  newRequest request: URLRequest,
+                  completionHandler: @escaping (URLRequest?) -> Void) {
+    guard let url = request.url, allowsURL(url) else {
+      lock.lock()
+      failure = OpenSubUntrustedRedirectError()
+      lock.unlock()
+      completionHandler(nil)
+      complete(error: OpenSubUntrustedRedirectError())
+      return
+    }
+    completionHandler(request)
+  }
+
+  func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    lock.lock()
+    guard !finished, !exceededLimit, failure == nil else {
+      lock.unlock()
+      return
+    }
+    guard data.count <= maximumBytes - receivedData.count else {
+      exceededLimit = true
+      let activeTask = task
+      lock.unlock()
+      activeTask?.cancel()
+      return
+    }
+    receivedData.append(data)
+    lock.unlock()
+  }
+
+  func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    complete(error: error)
+  }
+
+  private func complete(error: Error?) {
+    lock.lock()
+    guard !finished else {
+      lock.unlock()
+      return
+    }
+    finished = true
+    let resultData = exceededLimit ? nil : receivedData
+    let resultResponse = response
+    let resultTask = task
+    let resultSession = session
+    let transferFailure = failure
+    let resultError: Error? = exceededLimit ? OpenSubResponseTooLargeError(maximumBytes: maximumBytes) :
+      (transferFailure ?? error)
+    receivedData.removeAll(keepingCapacity: false)
+    task = nil
+    session = nil
+    lock.unlock()
+
+    resultSession?.finishTasksAndInvalidate()
+    completion(resultData, resultResponse, resultError, resultTask)
+  }
+}
+
+private final class OpenSubPromiseCompletionGate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var isSettled = false
+
+  func settle(_ action: () -> Void) {
+    lock.lock()
+    guard !isSettled else {
+      lock.unlock()
+      return
+    }
+    isSettled = true
+    lock.unlock()
+    action()
+  }
+}
+
+/// A timer-backed delay whose scheduled work and cancellation callback are retired on whichever
+/// terminal event wins. The timer handler holds the delay alive while pending; `settle` breaks that
+/// cycle and the cancellation registration together.
+private final class OpenSubCancellableDelay: @unchecked Sendable {
+  private let lock = NSLock()
+  private let cancellation: SubtitleAudioMatcher.Cancellation
+  private let completion: (Error?) -> Void
+  private var timer: DispatchSourceTimer?
+  private var cancellationHandlerID: UUID?
+  private var settled = false
+
+  init(seconds: TimeInterval,
+       cancellation: SubtitleAudioMatcher.Cancellation,
+       completion: @escaping (Error?) -> Void) {
+    self.seconds = max(0, seconds)
+    self.cancellation = cancellation
+    self.completion = completion
+  }
+
+  private let seconds: TimeInterval
+
+  func start() {
+    guard !cancellation.isCancelled else {
+      settle(CancellationError())
+      return
+    }
+
+    let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+    // Keep the resumed source dormant until cancellation registration is complete, so even a
+    // zero-length delay cannot win before its cancellation handler exists.
+    timer.schedule(deadline: .distantFuture)
+    timer.setEventHandler { [self] in settle(nil) }
+
+    lock.lock()
+    guard !settled else {
+      lock.unlock()
+      timer.setEventHandler {}
+      timer.cancel()
+      return
+    }
+    self.timer = timer
+    lock.unlock()
+
+    // Resume before registering: a pre-cancelled token invokes its handler synchronously, and
+    // cancelling a suspended DispatchSourceTimer is not a valid lifecycle.
+    timer.resume()
+    let handlerID = cancellation.onCancel { [weak self] in
+      self?.settle(CancellationError())
+    }
+
+    lock.lock()
+    let alreadySettled = settled
+    if !alreadySettled {
+      cancellationHandlerID = handlerID
+      timer.schedule(deadline: .now() + seconds)
+    }
+    lock.unlock()
+    if alreadySettled { cancellation.removeCancellationHandler(handlerID) }
+  }
+
+  private func settle(_ error: Error?) {
+    lock.lock()
+    guard !settled else {
+      lock.unlock()
+      return
+    }
+    settled = true
+    let activeTimer = timer
+    timer = nil
+    let handlerID = cancellationHandlerID
+    cancellationHandlerID = nil
+    lock.unlock()
+
+    if let activeTimer {
+      activeTimer.setEventHandler {}
+      activeTimer.cancel()
+    }
+    cancellation.removeCancellationHandler(handlerID)
+    completion(error)
+  }
+}
 
 /// [Open Subtitles](https://www.opensubtitles.com/)
 /// [REST API](https://opensubtitles.stoplight.io/docs/opensubtitles-api/e3750fd63a100-getting-started/)
@@ -95,6 +336,12 @@ class OpenSubClient {
   ///     [login](https://opensubtitles.stoplight.io/docs/opensubtitles-api/73acf79accc0a-login)
   ///     method Open Subtitles may direct the client to use a different host for further API requests.
   private var apiBaseURL: URL
+
+  /// Configuration used by quota-bearing downloads; each bounded transfer owns and invalidates a
+  /// delegate session so its response can be capped as bytes arrive.
+  private let downloadSession: URLSession
+
+  private static let maximumSubtitleResponseBytes = 10 * 1024 * 1024
   
   /// Hostname to initially use to access the REST API.
   private let apiDefaultHostname = "api.opensubtitles.com"
@@ -138,7 +385,7 @@ class OpenSubClient {
   /// Management of API request
   /// [rate limits](https://opensubtitles.stoplight.io/docs/opensubtitles-api/6ef2e232095c7-best-practices#limits)
   /// imposed on clients by Open Subtitles.
-  private var rateLimiter = RateLimiter()
+  private let rateLimiter = RateLimiter()
 
   /// Authorization [JSON Web Token](https://en.wikipedia.org/wiki/JSON_Web_Token) returned by the
   /// [login](https://opensubtitles.stoplight.io/docs/opensubtitles-api/73acf79accc0a-login) method.
@@ -180,20 +427,25 @@ class OpenSubClient {
   /// - Parameter fileId: File ID of the subtitle file to download (obtained from search results).
   /// - Returns: A `DownloadResponse` containing a temporary link to the subtitle file and information such as requests
   ///            remaining before download quota is reached.
-  func download(fileId: Int) -> Promise<DownloadResponse> {
-    return after(seconds: rateLimiter.delayBeforeCall()).then { [self] in
-      Promise { resolver in
-        let data = ["file_id": String(fileId)]
-        let url = apiURL("download")
-        Just.post(url, data: data, headers: formHeaders(), asyncCompletionHandler: { [self] result in
-          logHTTPResult(result)
-          do {
-            let response = try decodeResponse(DownloadResponse.self, from: result)
-            resolver.fulfill(response)
-          } catch {
-            resolver.reject(error)
-          }
-        })
+  func download(fileId: Int,
+                cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<DownloadResponse> {
+    guard !cancellation.isCancelled else { return Promise(error: CancellationError()) }
+    return cancellableRateLimitDelay(cancellation).then { [self] in
+      guard !cancellation.isCancelled else { throw CancellationError() }
+      var request = URLRequest(url: apiURL("download"))
+      request.httpMethod = "POST"
+      formHeaders().forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+      do {
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["file_id": String(fileId)])
+      } catch {
+        throw error
+      }
+      return cancellableRequest(request, cancellation: cancellation).map { [self] result in
+        guard !cancellation.isCancelled else { throw CancellationError() }
+        // The typed decoder below consumes the small response shape it needs. Avoid creating a
+        // second JSON object graph or pretty-printed copy merely for request logs.
+        logHTTPResult(result, includeResponseBody: false)
+        return try decodeResponse(DownloadResponse.self, from: result)
       }
     }
   }
@@ -207,38 +459,78 @@ class OpenSubClient {
   /// - Parameter url: Link to subtitle file contents returned by the `Download` method.
   /// - Returns: A [Data](https://developer.apple.com/documentation/foundation/data) object containing the
   ///            file contents
-  func downloadFileContents(_ url: URL) -> Promise<Data> {
-    return after(seconds: rateLimiter.delayBeforeCall()).then { [self] in
-      Promise { resolver in
-        Just.get(url, headers: formHeaders(), asyncCompletionHandler: { [self] result in
-          logHTTPResult(result)
-          if let error = result.error {
-            resolver.reject(error)
-            return
+  func downloadFileContents(_ url: URL,
+                            cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<Data> {
+    guard Self.isTrustedOpenSubtitlesURL(url) else {
+      return Promise(error: Error.callFailed(statusCode: nil, message: "Untrusted subtitle download URL"))
+    }
+    guard !cancellation.isCancelled else { return Promise(error: CancellationError()) }
+    return cancellableRateLimitDelay(cancellation).then { [self] in
+      guard !cancellation.isCancelled else { throw CancellationError() }
+      // The API returns a short-lived file URL. Do not forward the account JWT or API key to
+      // the file server; the URL itself authorizes this download.
+      var request = URLRequest(url: url)
+      request.httpMethod = "GET"
+      request.setValue("*/*", forHTTPHeaderField: "Accept")
+      request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+      return cancellableRequest(request, cancellation: cancellation,
+                                maximumBytes: Self.maximumSubtitleResponseBytes).map { [self] result in
+        guard !cancellation.isCancelled else { throw CancellationError() }
+        // Subtitle bytes are untrusted data and do not belong in logs. In particular, do not try
+        // to parse a JSON-shaped subtitle as a complete object graph just for diagnostics.
+        logHTTPResult(result, includeResponseBody: false)
+        if let error = result.error { throw error }
+        guard result.ok else {
+          // When downloading fails, Open Subtitles normally returns a text message instead of JSON.
+          guard let text = boundedTextPreview(result) else {
+            throw Error.callFailed(statusCode: result.statusCode)
           }
-          guard result.ok else {
-            // When downloading fails, Open Subtitles normally returns an error message as the
-            // response content. As this is not a part of the REST API, the contents is not JSON.
-            guard let text = result.text else {
-              // No error message, generate a message based on HTTP status code.
-              resolver.reject(Error.callFailed(statusCode: result.statusCode))
-              return
-            }
-            // Sometimes the response content is a HTML error page instead of a simple text message.
-            if let error = formErrorIfHtmlResponse(result) {
-              resolver.reject(error)
-              return
-            }
-            resolver.reject(Error.callFailed(statusCode: result.statusCode, message: text))
-            return
-          }
-          guard let content = result.content else {
-            resolver.reject(Error.contentMissing(statusCode: result.statusCode))
-            return
-          }
-          resolver.fulfill(content)
-        })
+          if let error = formErrorIfHtmlResponse(result) { throw error }
+          throw Error.callFailed(statusCode: result.statusCode, message: text)
+        }
+        guard let content = result.content else {
+          throw Error.contentMissing(statusCode: result.statusCode)
+        }
+        return content
       }
+    }
+  }
+
+  /// Creates a URLSession task only after checking cancellation, then registers that exact task so
+  /// the per-search token can cancel both the quota request and the subsequent file transfer.
+  private func cancellableRequest(_ request: URLRequest,
+                                 cancellation: SubtitleAudioMatcher.Cancellation,
+                                 maximumBytes: Int = 2 * 1024 * 1024) -> Promise<HTTPResult> {
+    Promise { resolver in
+      let completionGate = OpenSubPromiseCompletionGate()
+      guard !cancellation.isCancelled else {
+        completionGate.settle { resolver.reject(CancellationError()) }
+        return
+      }
+      guard let requestURL = request.url?.absoluteURL,
+            Self.isTrustedOpenSubtitlesURL(requestURL) else {
+        completionGate.settle {
+          resolver.reject(Error.callFailed(statusCode: nil, message: "Untrusted Open Subtitles request URL"))
+        }
+        return
+      }
+      let identifier = UUID()
+      let boundedTask = OpenSubBoundedDataTask(configuration: downloadSession.configuration,
+                                               request: request,
+                                               maximumBytes: maximumBytes,
+                                               cancellation: cancellation,
+                                               identifier: identifier,
+                                               allowsURL: { Self.isTrustedOpenSubtitlesURL($0) }) { data, response, error, task in
+        defer { cancellation.finish(identifier) }
+        guard !cancellation.isCancelled else {
+          completionGate.settle { resolver.reject(CancellationError()) }
+          return
+        }
+        completionGate.settle {
+          resolver.fulfill(HTTPResult(data: data, response: response, error: error, task: task))
+        }
+      }
+      boundedTask.start()
     }
   }
 
@@ -246,18 +538,20 @@ class OpenSubClient {
   /// method.
   /// - Returns: A `LanguagesResponse` containing a list of the supported language codes.
   func languages() -> Promise<LanguagesResponse> {
-    return after(seconds: rateLimiter.delayBeforeCall()).then { [self] in
-      Promise { resolver in
-        let url = apiURL("infos/languages")
-        Just.get(url, headers: formHeaders(), asyncCompletionHandler: { [self] result in
-          logHTTPResult(result)
-          do {
-            let response = try self.decodeResponse(LanguagesResponse.self, from: result)
-            resolver.fulfill(response)
-          } catch {
-            resolver.reject(error)
-          }
-        })
+    languages(cancellation: SubtitleAudioMatcher.Cancellation())
+  }
+
+  func languages(cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<LanguagesResponse> {
+    guard !cancellation.isCancelled else { return Promise(error: CancellationError()) }
+    return cancellableRateLimitDelay(cancellation).then { [self] in
+      guard !cancellation.isCancelled else { throw CancellationError() }
+      var request = URLRequest(url: apiURL("infos/languages"))
+      request.httpMethod = "GET"
+      formHeaders().forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+      return cancellableRequest(request, cancellation: cancellation).map { result in
+        guard !cancellation.isCancelled else { throw CancellationError() }
+        self.logHTTPResult(result, includeResponseBody: false)
+        return try self.decodeResponse(LanguagesResponse.self, from: result)
       }
     }
   }
@@ -285,34 +579,35 @@ class OpenSubClient {
   ///   - password: Account password.
   /// - Returns: account details.
   func login(username: String, password: String) -> Promise<LoginResponse> {
-    return after(seconds: rateLimiter.delayBeforeCall()).then { [self] in
-      Promise { resolver in
-        let data = ["username": username, "password": password]
-        let url = apiURL("login")
-        Just.post(url, data: data, headers: formHeaders(), asyncCompletionHandler: { [self] result in
-          logHTTPResult(result)
-          do {
-            let response = try self.decodeResponse(LoginResponse.self, from: result)
-            resolver.fulfill(response)
-            // Use a fresh rate limiter to avoid delaying the next request.
-            rateLimiter = RateLimiter()
-            token = response.token
-            tokenExpiration = Date() + tokenLifetime
-            // Open Subtitles may direct the client to use a different host for further requests.
-            guard let hostname = response.baseUrl else {
-              return
-            }
-            guard let baseURL = OpenSubClient.formBaseURL(hostname: hostname) else {
-              // Should not occur. Malformed data returned by Open Subtitles? As login was
-              // apparently successful we will treat this as a warning.
-              log("Unable to form URL from: \(hostname)", level: .warning)
-              return
-            }
-            apiBaseURL = baseURL
-          } catch {
-            resolver.reject(error)
+    login(username: username, password: password, cancellation: SubtitleAudioMatcher.Cancellation())
+  }
+
+  func login(username: String, password: String,
+             cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<LoginResponse> {
+    guard !cancellation.isCancelled else { return Promise(error: CancellationError()) }
+    return cancellableRateLimitDelay(cancellation).then { [self] in
+      guard !cancellation.isCancelled else { throw CancellationError() }
+      var request = URLRequest(url: apiURL("login"))
+      request.httpMethod = "POST"
+      formHeaders().forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+      request.httpBody = try JSONSerialization.data(withJSONObject: ["username": username, "password": password])
+      return cancellableRequest(request, cancellation: cancellation).map { result in
+        guard !cancellation.isCancelled else { throw CancellationError() }
+        self.logHTTPResult(result, includeResponseBody: false)
+        let response = try self.decodeResponse(LoginResponse.self, from: result)
+        if let hostname = response.baseUrl {
+          guard let baseURL = OpenSubClient.formBaseURL(hostname: hostname) else {
+            self.log("Rejecting unsupported API host returned by Open Subtitles: \(hostname)", level: .warning)
+            throw Error.callFailed(statusCode: nil, message: "Unsupported API host")
           }
-        })
+          self.apiBaseURL = baseURL
+        }
+        // Reset the synchronized quota state without replacing the limiter while other calls may
+        // be consulting it concurrently.
+        self.rateLimiter.reset()
+        self.token = response.token
+        self.tokenExpiration = Date() + self.tokenLifetime
+        return response
       }
     }
   }
@@ -321,21 +616,24 @@ class OpenSubClient {
   /// - Parameter timeout: The timeout to to use for the request.
   /// - Returns: A `LogoutResponse`
   func logout(timeout: TimeInterval? = nil) -> Promise<LogoutResponse> {
-    return after(seconds: rateLimiter.delayBeforeCall()).then { [self] in
-      Promise { resolver in
-        let headers = formHeaders()
-        let url = apiURL("logout")
-        Just.delete(url, headers: headers, timeout: timeout, asyncCompletionHandler: { [self] result in
-          logHTTPResult(result)
-          // Whether or not the logout request was successful consider the user as having logged out.
-          abandonUserSession()
-          do {
-            let response = try self.decodeResponse(LogoutResponse.self, from: result)
-            resolver.fulfill(response)
-          } catch {
-            resolver.reject(error)
-          }
-        })
+    logout(timeout: timeout, cancellation: SubtitleAudioMatcher.Cancellation())
+  }
+
+  func logout(timeout: TimeInterval?,
+              cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<LogoutResponse> {
+    guard !cancellation.isCancelled else { return Promise(error: CancellationError()) }
+    return cancellableRateLimitDelay(cancellation).then { [self] in
+      guard !cancellation.isCancelled else { throw CancellationError() }
+      var request = URLRequest(url: apiURL("logout"))
+      request.httpMethod = "DELETE"
+      formHeaders().forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+      if let timeout { request.timeoutInterval = timeout }
+      return cancellableRequest(request, cancellation: cancellation).map { result in
+        guard !cancellation.isCancelled else { throw CancellationError() }
+        self.logHTTPResult(result, includeResponseBody: false)
+        // Whether or not the logout request was successful consider the user as having logged out.
+        self.abandonUserSession()
+        return try self.decodeResponse(LogoutResponse.self, from: result)
       }
     }
   }
@@ -346,45 +644,54 @@ class OpenSubClient {
   /// Find available subtitles matching the query and
   /// [hash code](https://trac.opensubtitles.org/projects/opensubtitles/wiki/HashSourceCodes)
   /// (if available) in the given languages.
-  /// - Note: This method does not adhere to the recommended REST API
-  ///         [Best Practice](https://opensubtitles.stoplight.io/docs/opensubtitles-api/6ef2e232095c7-best-practices#performance)
-  ///         of sending parameters in alphabetical order because the `Just` parameter is an unordered Swift dictionary.
-  /// - Note: This method does not adhere to the recommended REST API
-  ///         [Best Practice](https://opensubtitles.stoplight.io/docs/opensubtitles-api/6ef2e232095c7-best-practices#performance)
-  ///         of using "+" instead "%20" for space in the URL encoding because `Just` does not provide a way to control the
-  ///         percent encoding.
+  /// - Note: Query parameters are sent in alphabetical order.
   /// - Parameters:
   ///   - languages: Language code(s).
   ///   - hash: Moviehash of the movie file.
   ///   - query:File name or text search.
   /// - Returns: A `SubtitlesResponse` object.
   func subtitles(languages: [String], hash: String?, query: String?) -> Promise<SubtitlesResponse> {
-    return after(seconds: rateLimiter.delayBeforeCall()).then { [self] in
-      Promise { resolver in
-        // As per REST API best practices, attempt to send GET parameters in alphabetical order.
-        // Unfortunately, Just.get takes a Swift dictionary therefore order is not guaranteed.
-        var params = ["languages": languages.sorted().joined(separator: ",")]
-        if let hash = hash {
-          params["moviehash"] = hash
-        }
-        if let query = query {
-          params["query"] = query
-        }
-        let url = apiURL("subtitles")
-        Just.get(url, params: params, headers: formHeaders(), asyncCompletionHandler: { [self] result in
-          logHTTPResult(result)
-          do {
-            let response = try self.decodeResponse(SubtitlesResponse.self, from: result)
-            resolver.fulfill(response)
-          } catch {
-            resolver.reject(error)
-          }
-        })
+    subtitles(languages: languages, hash: hash, query: query,
+              cancellation: SubtitleAudioMatcher.Cancellation())
+  }
+
+  func subtitles(languages: [String], hash: String?, query: String?,
+                 cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<SubtitlesResponse> {
+    guard !cancellation.isCancelled else { return Promise(error: CancellationError()) }
+    return cancellableRateLimitDelay(cancellation).then { [self] in
+      guard !cancellation.isCancelled else { throw CancellationError() }
+      // As per REST API best practices, send GET parameters in alphabetical order.
+      var params = ["languages": languages.sorted().joined(separator: ",")]
+      if let hash { params["moviehash"] = hash }
+      if let query { params["query"] = query }
+      var components = URLComponents(url: apiURL("subtitles"), resolvingAgainstBaseURL: true)!
+      components.queryItems = params.keys.sorted().map { URLQueryItem(name: $0, value: params[$0]) }
+      var request = URLRequest(url: components.url!)
+      request.httpMethod = "GET"
+      formHeaders().forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+      return cancellableRequest(request, cancellation: cancellation).map { result in
+        guard !cancellation.isCancelled else { throw CancellationError() }
+        self.logHTTPResult(result, includeResponseBody: false)
+        return try self.decodeResponse(SubtitlesResponse.self, from: result)
       }
     }
   }
 
   // MARK: - Supporting Methods
+
+  /// Waits for the current quota window while allowing the search token to retire the timer and
+  /// its cancellation callback immediately when the operation is cancelled.
+  private func cancellableRateLimitDelay(_ cancellation: SubtitleAudioMatcher.Cancellation) -> Promise<Void> {
+    Promise { resolver in
+      OpenSubCancellableDelay(seconds: rateLimiter.delayBeforeCall(), cancellation: cancellation) { error in
+        if let error {
+          resolver.reject(error)
+        } else {
+          resolver.fulfill(())
+        }
+      }.start()
+    }
+  }
 
   /// Abandons the current the user session.
   ///
@@ -465,11 +772,27 @@ class OpenSubClient {
   /// - Parameter hostname: Host to send REST API requests to.
   /// - Returns: Base `URL` to append a method name to.
   private static func formBaseURL(hostname: String) -> URL? {
+    let hostname = hostname.lowercased()
+    guard hostname == "api.opensubtitles.com" || hostname == "vip-api.opensubtitles.com" else {
+      return nil
+    }
     var components = URLComponents()
     components.scheme = "https"
     components.host = hostname
     components.path = "/api/v1/"
     return components.url
+  }
+
+  /// Only Open Subtitles HTTPS hosts may receive API-returned subtitle links. File URLs do not
+  /// need account credentials, so an unexpected host must never receive a download request.
+  private static func isTrustedOpenSubtitlesURL(_ url: URL) -> Bool {
+    guard url.scheme?.lowercased() == "https",
+          let host = url.host?.lowercased(),
+          url.user == nil, url.password == nil,
+          url.port == nil || url.port == 443 else {
+      return false
+    }
+    return host == "opensubtitles.com" || host.hasSuffix(".opensubtitles.com")
   }
 
   /// Form an error if the given API response content is HTML.
@@ -481,10 +804,10 @@ class OpenSubClient {
   /// - Returns: A `callFailed` error or `nil`
   private func formErrorIfHtmlResponse(_ result: HTTPResult) -> Error? {
     guard let contentHeader = result.headers["Content-Type"], contentHeader.contains("text/html"),
-          let text = result.text else {
+          let text = boundedTextPreview(result) else {
       return nil
     }
-    log("Found HTML instead of JSON:\n\(text.trimmingCharacters(in: .whitespacesAndNewlines))")
+    log("Found HTML instead of JSON (bounded preview):\n\(text.trimmingCharacters(in: .whitespacesAndNewlines))")
     guard let start = text.range(of: "<title>"), let end = text.range(of: "</title>"),
           start.upperBound < end.lowerBound else {
       // Not expected to occur. All error pages seen in testing included a title.
@@ -513,6 +836,15 @@ class OpenSubClient {
     return headers
   }
 
+  /// Error responses are useful to inspect, but logging an entire provider body creates avoidable
+  /// large strings and log records. Decode only a small UTF-8 preview from the already bounded body.
+  private func boundedTextPreview(_ result: HTTPResult, maximumBytes: Int = 2_048) -> String? {
+    guard let content = result.content, !content.isEmpty else { return nil }
+    let previewData = content.prefix(maximumBytes)
+    let preview = String(decoding: previewData, as: UTF8.self)
+    return content.count > previewData.count ? preview + "…" : preview
+  }
+
   private func log(_ message: @autoclosure () -> String, level: Logger.Level = .debug) {
     Logger.log(message, level: level, subsystem: Logger.Sub.opensubapi)
   }
@@ -523,7 +855,7 @@ class OpenSubClient {
   /// result returned by Open Subtitles is sometimes not matching up with the REST API documentation.
   /// - Important: This method redacts sensitive authentication and authorization data replacing it with `<private>`.
   /// - Parameter result: `HTTPResult` returned by [Just](https://github.com/dduan/Just).
-  private func logHTTPResult(_ result: HTTPResult) {
+  private func logHTTPResult(_ result: HTTPResult, includeResponseBody: Bool = true) {
     let options: JSONSerialization.WritingOptions = [.prettyPrinted]
     let privateValue = "<private>"
     if let request = result.request {
@@ -563,16 +895,18 @@ class OpenSubClient {
     if let error = result.error {
       log("Error: \(error)")
     }
+    if !includeResponseBody {
+      if !result.headers.isEmpty {
+        let headers = result.headers.map { "\($0.key): \($0.value)" }.sorted().joined(separator: "\n")
+        log("HTTP response headers:\n" + headers)
+      }
+      log("HTTP response body omitted")
+      return
+    }
     guard var resultJson = result.json as? [String: Any] else {
       if !result.headers.isEmpty {
-        var message = ""
-        for (header, value) in result.headers {
-          if !message.isEmpty {
-            message += "\n"
-          }
-          message += "\(header): \(value)"
-        }
-        log("HTTP response headers:\n" + message)
+        let headers = result.headers.map { "\($0.key): \($0.value)" }.sorted().joined(separator: "\n")
+        log("HTTP response headers:\n" + headers)
       }
       return
     }
@@ -593,6 +927,13 @@ class OpenSubClient {
   }
   
   private init() {
+    downloadSession = .shared
+    apiBaseURL = OpenSubClient.formBaseURL(hostname: apiDefaultHostname)!
+  }
+
+  /// Internal initializer for deterministic URLProtocol-based tests.
+  init(downloadSession: URLSession) {
+    self.downloadSession = downloadSession
     apiBaseURL = OpenSubClient.formBaseURL(hostname: apiDefaultHostname)!
   }
 
@@ -631,6 +972,12 @@ class OpenSubClient {
   /// And indicates these headers are based on the Internet-Draft [RateLimit header fields for HTTP](https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/).
   class RateLimiter {
 
+    /// The API uses short quota windows. Preserve a full daily reset window, but never allow an
+    /// untrusted response header to hold a request past one day.
+    static let maximumResetInterval: TimeInterval = 24 * 60 * 60
+
+    private let lock = NSLock()
+
     /// Number of requests remaining in the quota for the current window.
     private var remaining = Int.max
 
@@ -644,18 +991,34 @@ class OpenSubClient {
     /// exceeded the time remaining until the current window ends and the quota resets is calculated and returned.
     /// - Returns: Time to wait in seconds.
     func delayBeforeCall() -> TimeInterval {
+      lock.lock()
       // No delay needed if the current time is outside of the window for which the quota given in
       // remaining is applicable.
       let now = Date().timeIntervalSince1970
-      guard resets > now else { return 0 }
+      guard resets > now else {
+        lock.unlock()
+        return 0
+      }
       remaining -= 1
       // No delay needed if quota has not been exceeded.
-      guard remaining < 0 else { return 0 }
+      guard remaining < 0 else {
+        lock.unlock()
+        return 0
+      }
       // Must wait until outside the current window and the quota resets.
       let delay = (resets - now).rounded(.up)
+      lock.unlock()
       let delayAsString = String(format: "%.f", delay)
       shared.log("Rate limit quota reached, waiting \(delayAsString)s before sending request")
       return delay
+    }
+
+    /// Clears the current quota state after login changes the applicable throttling scope.
+    func reset() {
+      lock.lock()
+      remaining = Int.max
+      resets = 0
+      lock.unlock()
     }
 
     /// Process rate limit headers if present in the response headers.
@@ -675,9 +1038,19 @@ class OpenSubClient {
         shared.log("Malformed rate limits: \(remainingString), \(resetString)", level: .warning)
         return
       }
+      // Bound the server-controlled delay to one day. This still permits the daily quota windows
+      // used by the service while preventing pathological or malicious headers from scheduling
+      // multi-year waits.
+      let boundedReset = min(reset, Int(Self.maximumResetInterval))
+      if boundedReset != reset {
+        shared.log("Capping Open Subtitles rate-limit reset from \(reset)s to \(boundedReset)s", level: .warning)
+      }
+
       // Save the time at which current window ends and the quota resets.
-      resets = Date().timeIntervalSince1970 + Double(reset)
+      lock.lock()
+      resets = Date().timeIntervalSince1970 + Double(boundedReset)
       self.remaining = remaining
+      lock.unlock()
     }
   }
 

@@ -22,12 +22,19 @@ import Foundation
 @objc
 class Logger: NSObject {
 
+  private static let maximumBufferedLogCount = 4_096
+  private static let maximumBufferedLogBytes = 4 * 1_024 * 1_024
+  private static let maximumBufferedLogEntryBytes = 512 * 1_024
+  @Atomic private static var logWindowVisible = false
+  private static let logNotificationGate = CoalescedNotificationGate()
+
   class Log: NSObject {
     @objc dynamic let subsystem: String
     @objc dynamic let level: Level
     @objc dynamic let message: String
     @objc dynamic let date: String
     let logString: String
+    let estimatedRetainedBytes: Int
 
     init(subsystem: String, level: Level, message: String, date: String, logString: String) {
       self.subsystem = subsystem
@@ -35,6 +42,7 @@ class Logger: NSObject {
       self.message = message
       self.date = date
       self.logString = logString
+      self.estimatedRetainedBytes = logString.utf8.count * 2 + 128
     }
 
     override var description: String {
@@ -42,7 +50,26 @@ class Logger: NSObject {
     }
   }
 
-  @Atomic static var buffer: [Logger.Log] = []
+  @Atomic private static var buffer = makeLogBuffer()
+
+  static func makeLogBuffer() -> BoundedLogBuffer<Log> {
+    BoundedLogBuffer(maximumCount: maximumBufferedLogCount,
+                     maximumBytes: maximumBufferedLogBytes,
+                     maximumEntryBytes: maximumBufferedLogEntryBytes,
+                     byteCount: { $0.estimatedRetainedBytes })
+  }
+
+  private static func appendToBuffer(_ log: Log) {
+    $buffer.withLock { $0.append(log) }
+  }
+
+  static func drainBuffer() -> [Log] {
+    $buffer.withLock { $0.drain() }
+  }
+
+  static func setLogWindowVisible(_ visible: Bool) {
+    logWindowVisible = visible
+  }
 
   class Subsystem: RawRepresentable {
     let rawValue: String
@@ -281,11 +308,12 @@ class Logger: NSObject {
     let string = formatMessage(message, level, subsystem, true, date)
     let log = Log(subsystem: subsystem.rawValue, level: level, message: message, date: dateFormatter.string(from: date), logString: string)
 
-    $buffer.withLock {
-      $0.append(log)
-    }
-    Task { @MainActor in
-      NotificationCenter.default.post(name: .iinaLogAppended, object: nil)
+    appendToBuffer(log)
+    if logWindowVisible {
+      logNotificationGate.schedule(on: .main) {
+        guard logWindowVisible else { return }
+        NotificationCenter.default.post(name: .iinaLogAppended, object: nil)
+      }
     }
 
     print(string, terminator: "")

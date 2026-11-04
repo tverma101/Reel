@@ -26,8 +26,8 @@
 "cmd.playlist-shuffle" = "Shuffle";
 "cmd.write-watch-later-config" = "Onthoud geschiedenis";
 "cmd.stop" = "Stop";
-"cmd.quit" = "Stop IINA";
-"cmd.quit-watch-later" = "Stop IINA (bewaar afspeelpositie)";
+"cmd.quit" = "Stop Reel";
+"cmd.quit-watch-later" = "Stop Reel (bewaar afspeelpositie)";
 "cmd.screenshot" = "Schermafbeelding";
 "cmd.screenshot-to-file" = "Schermafbeelding naar bestand";
 "cmd.loadfile" = "Laad bestand";

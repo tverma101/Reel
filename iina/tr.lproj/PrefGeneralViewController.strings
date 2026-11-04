@@ -20,13 +20,13 @@
 "55O-ik-ql6.title" = "“Son Kullanılanları Aç” menüsünü etkinleştir";
 
 /* Class = "NSButtonCell"; title = "Minimized/un-minimized"; ObjectID = "5Y9-bX-K0f"; */
-"5Y9-bX-K0f.title" = "IINA küçüldüğünde/eski haline geldiğinde";
+"5Y9-bX-K0f.title" = "Reel küçüldüğünde/eski haline geldiğinde";
 
 /* Class = "NSTextFieldCell"; title = "Playlist:"; ObjectID = "6TV-DG-503"; */
 "6TV-DG-503.title" = "Oynatma listesi:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "8kU-8g-VgX"; */
-"8kU-8g-VgX.title" = "Etkili olabilmesi için IINA’nın yeniden başlatılması gerekir.";
+"8kU-8g-VgX.title" = "Etkili olabilmesi için Reel’nın yeniden başlatılması gerekir.";
 
 /* Class = "NSButtonCell"; title = "Only in \"music mode\""; ObjectID = "AVe-9Z-RgQ"; */
 "AVe-9Z-RgQ.title" = "Yalnızca “müzik kipi”ndeyken";
@@ -101,7 +101,7 @@
 "g2A-Kf-vct.title" = "Tam ekrandan çıkınca duraklat";
 
 /* Class = "NSTextFieldCell"; title = "At launch:"; ObjectID = "gqT-CB-Puw"; */
-"gqT-CB-Puw.title" = "IINA başlatıldığında:";
+"gqT-CB-Puw.title" = "Reel başlatıldığında:";
 
 /* Class = "NSButtonCell"; title = "Check for updates"; ObjectID = "hWC-KJ-FuC"; */
 "hWC-KJ-FuC.title" = "Güncellemeleri denetle";

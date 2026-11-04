@@ -26,7 +26,7 @@
 "6TV-DG-503.title" = "Zoznam:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "8kU-8g-VgX"; */
-"8kU-8g-VgX.title" = "Vyžaduje sa reštartovať IINA, pre správne fungovanie.";
+"8kU-8g-VgX.title" = "Vyžaduje sa reštartovať Reel, pre správne fungovanie.";
 
 /* Class = "NSButtonCell"; title = "Only in \"music mode\""; ObjectID = "AVe-9Z-RgQ"; */
 "AVe-9Z-RgQ.title" = "Iba v \"režime hudby\"";

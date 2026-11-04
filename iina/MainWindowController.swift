@@ -369,7 +369,7 @@ class MainWindowController: PlayerWindowController {
       }
     case PK.enableLiveText.rawValue:
       if #available(macOS 13, *), let newValue = change[.newKey] as? Bool {
-        let buttons = oscToolbarView.subviews as! [NSButton]
+        let buttons = oscToolbarView.subviews.compactMap { $0 as? NSButton }
         if let btn = buttons.first(where: { $0.tag == Preference.ToolBarButton.liveText.rawValue }) {
           btn.image = newValue ? Preference.ToolBarButton.liveText.alternateImage() : Preference.ToolBarButton.liveText.image()
         }
@@ -913,6 +913,14 @@ class MainWindowController: PlayerWindowController {
     oscToolbarView.views.forEach { oscToolbarView.removeView($0) }
     let liveTextEnabled = Preference.bool(for: .enableLiveText)
     for buttonType in effectiveButtons {
+      if buttonType == .airPlay {
+        // Apple's speaker picker, bound to this player only: other apps keep their own output.
+        let picker = player.airPlayAudio.makePickerView()
+        picker.translatesAutoresizingMaskIntoConstraints = false
+        picker.size(width: Preference.ToolBarButton.frameSize, height: Preference.ToolBarButton.frameSize)
+        oscToolbarView.addView(picker, in: .trailing)
+        continue
+      }
       let button = NSButton()
       OSCToolbarButton.setStyle(of: button, buttonType: buttonType, reducedWidth: false)
       if buttonType == .liveText && liveTextEnabled {
@@ -934,7 +942,7 @@ class MainWindowController: PlayerWindowController {
   @objc
   private func updateOSCToolbarButtons(_ notification: Notification) {
     func highlight(_ button: Preference.ToolBarButton, _ isHighlighted: Bool) {
-      let buttons = oscToolbarView.subviews as! [NSButton]
+      let buttons = oscToolbarView.subviews.compactMap { $0 as? NSButton }
       let currentButton = buttons.first(where: { $0.tag == button.rawValue })
       currentButton?.image = isHighlighted ? button.alternateImage() : button.image()
     }
@@ -1432,6 +1440,8 @@ class MainWindowController: PlayerWindowController {
     // stop playing
     if case .fullscreen(legacy: true, priorWindowedFrame: _) = fsState {
       restoreDockSettings()
+      cameraHousingWindow?.orderOut(self)
+      cameraHousingWindow = nil
     }
     player.stop()
     // stop tracking mouse event
@@ -2216,8 +2226,11 @@ class MainWindowController: PlayerWindowController {
   /// - Important: As per Apple's [Internationalization and Localization Guide](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPInternational/SupportingRight-To-LeftLanguages/SupportingRight-To-LeftLanguages.html)
   ///     timeline indicators should not flip in a right-to-left language. Thus OSD messages referencing a position within the video
   ///     must always use a left to right layout.
-  func displayOSD(_ message: OSDMessage, autoHide: Bool = true, forcedTimeout: Float? = nil, accessoryView: NSView? = nil, context: Any? = nil) {
-    guard player.displayOSD || message.alwaysEnabled, !isShowingPersistentOSD else { return }
+  @discardableResult
+  func displayOSD(_ message: OSDMessage, autoHide: Bool = true, forcedTimeout: Float? = nil, accessoryView: NSView? = nil, context: Any? = nil) -> Bool {
+    guard player.displayOSD || message.alwaysEnabled, !isShowingPersistentOSD else { return false }
+
+    osdLastMessage = message
 
     if hideOSDTimer != nil {
       hideOSDTimer!.invalidate()
@@ -2278,6 +2291,7 @@ class MainWindowController: PlayerWindowController {
       let timeout = forcedTimeout ?? Preference.float(for: .osdAutoHideTimeout)
       hideOSDTimer = Timer.scheduledTimer(timeInterval: TimeInterval(timeout), target: self, selector: #selector(self.hideOSD), userInfo: nil, repeats: false)
     }
+    return true
   }
 
   @objc
@@ -2288,6 +2302,7 @@ class MainWindowController: PlayerWindowController {
     // invokes its completion immediately, which would hide the OSD almost immediately instead of
     // fading it. Ignore the request while a hide is already under way.
     guard osdAnimationState != .willHide, osdAnimationState != .hidden else { return }
+    osdLastMessage = nil
 
     NSAnimationContext.runAnimationGroup({ (context) in
       self.osdAnimationState = .willHide
@@ -2586,8 +2601,11 @@ class MainWindowController: PlayerWindowController {
       log("Constrained window frame to be in screen: \(rect)")
     }
 
-    if player.info.justOpenedFile && !Preference.bool(for: .edgeToEdgeVideo) {
+    if player.info.justOpenedFile && !Preference.bool(for: .edgeToEdgeVideo) && Preference.bool(for: .dockedControlBarAndTitlebar) {
       rect.size.height += titleBarView.frame.height
+      if oscPosition == .bottom {
+        rect.size.height += oscBottomView.frame.height
+      }
     }
 
     if Preference.unlockWindowAspectRatio && !player.info.justOpenedFile {
@@ -2762,7 +2780,10 @@ class MainWindowController: PlayerWindowController {
   func isUITimerNeeded() -> Bool {
     let isShowingFadeableViews = animationState == .shown || animationState == .willShow
     let isShowingOSD = osdAnimationState == .shown || osdAnimationState == .willShow
-    return isShowingFadeableViews || isShowingOSD
+    if isShowingOSD, let message = osdLastMessage, case .seek(_, _, _) = message {
+      return true
+    }
+    return isShowingFadeableViews
   }
 
   override func updatePlayTime(withDuration duration: Bool, andProgressBar: Bool) {
@@ -3008,6 +3029,8 @@ class MainWindowController: PlayerWindowController {
       sidebars.show(sidebar: .plugins)
     case .liveText:
       Preference.set(!Preference.bool(for: .enableLiveText), for: .enableLiveText)
+    case .airPlay:
+      break  // An AVRoutePickerView handles its own clicks.
     }
   }
 
@@ -3034,7 +3057,7 @@ class MainWindowController: PlayerWindowController {
     }
 
     let mouseXPos = playSlider.convert(posInWindow, from: nil).x
-    let percentage = max(0, Double((mouseXPos - 3) / (playSlider.bounds.width - 6)))
+    let percentage = Double((mouseXPos - 3) / (playSlider.bounds.width - 6)).clamped(to: (0...1))
 
     timePreviewView.isHidden = false
     let previewTime = duration * percentage

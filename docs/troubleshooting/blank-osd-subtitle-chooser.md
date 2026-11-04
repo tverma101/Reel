@@ -2,7 +2,7 @@
 
 ## Symptom
 
-After an online subtitle search returns more than one result, the chooser that IINA shows on the
+After an online subtitle search returns more than one result, the chooser that Reel shows on the
 OSD sometimes appears as a large empty panel. The OSD stays up (`isShowingPersistentOSD` is true)
 and the surrounding message is correct, but the result table is gone.
 

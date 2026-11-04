@@ -19,12 +19,21 @@ execURL.resolveSymlinksInPath()
 
 let processInfo = ProcessInfo.processInfo
 
-let iinaPath = execURL.deletingLastPathComponent().appendingPathComponent("IINA").path
+let appBundleURL = execURL.deletingLastPathComponent()
+  .deletingLastPathComponent()
+  .deletingLastPathComponent()
+let appExecutableName = Bundle(url: appBundleURL)?.object(forInfoDictionaryKey: "CFBundleExecutable") as? String
+let candidateExecutableNames = [appExecutableName, "IINA", "Reel"].compactMap { $0 }
+let appExecutableURL = candidateExecutableNames
+  .map { execURL.deletingLastPathComponent().appendingPathComponent($0) }
+  .first { FileManager.default.isExecutableFile(atPath: $0.path) }
 
-guard FileManager.default.fileExists(atPath: iinaPath) else {
-  print("Cannot find IINA binary. This command line tool only works in IINA.app bundle.")
+guard let appExecutableURL else {
+  print("Cannot find the player binary. This command line tool only works in the player app bundle.")
   exit(1)
 }
+
+let iinaPath = appExecutableURL.path
 
 let task = Process()
 task.launchPath = iinaPath
@@ -59,6 +68,12 @@ if userArgs.contains(where: { $0 == "--help" || $0 == "-h" }) {
     --pip:
             Enter Picture-in-Picture after opening the media. Music mode does not
             support Picture-in-Picture.
+    --headless:
+            Load media without presenting playback windows or activating IINA. Audio is
+            muted automatically. Use for background diagnostics and batch processing.
+            Boolean values accept yes/no, true/false, on/off, or 1/0.
+    --mute | --no-mute:
+            Mute or unmute audio without changing window behavior. --headless always mutes.
     --help | -h:
             Print this message.
 
@@ -69,7 +84,59 @@ if userArgs.contains(where: { $0 == "--help" || $0 == "-h" }) {
   exit(0)
 }
 
-if userArgs.contains("--music-mode"), userArgs.contains("--pip") {
+let optionArguments = Array(userArgs.prefix(while: { $0 != "--" }))
+let separatorIndex = userArgs.firstIndex(of: "--")
+let literalArguments = separatorIndex.map { Array(userArgs.dropFirst($0 + 1)) } ?? []
+
+func validateBooleanOptions(_ arguments: [String]) {
+  for argument in arguments.prefix(while: { $0 != "--" }) {
+    let option: String
+    let value: String?
+    if let separator = argument.firstIndex(of: "=") {
+      option = String(argument[..<separator])
+      value = String(argument[argument.index(after: separator)...])
+    } else {
+      option = argument
+      value = nil
+    }
+    guard ["--headless", "--mute", "--no-mute"].contains(option) else { continue }
+    if option == "--no-mute" {
+      if value == nil { continue }
+      FileHandle.standardError.write(Data("Invalid boolean option: \(argument)\n".utf8))
+      exit(EX_USAGE)
+    }
+    guard let value else { continue }
+    switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "yes", "true", "1", "on", "no", "false", "0", "off": continue
+    default:
+      FileHandle.standardError.write(Data("Invalid boolean option: \(argument)\n".utf8))
+      exit(EX_USAGE)
+    }
+  }
+}
+
+validateBooleanOptions(optionArguments)
+
+let mediaArguments = (optionArguments + literalArguments).filter { !$0.hasPrefix("-") }
+let fileArguments = mediaArguments.filter { !Regex.url.matches($0) }
+let explicitlyUsesStdin = optionArguments.reduce(false) { usesStdin, argument in
+  switch argument {
+  case "--stdin", "--mpv--": return true
+  case "--no-stdin": return false
+  default: return usesStdin
+  }
+}
+if !fileArguments.isEmpty && !explicitlyUsesStdin {
+  for argument in fileArguments {
+    let url = URL(fileURLWithPath: argument, relativeTo: currentDirURL).standardizedFileURL
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      FileHandle.standardError.write(Data("No such input file: \(argument)\n".utf8))
+      exit(EX_NOINPUT)
+    }
+  }
+}
+
+if optionArguments.contains("--music-mode"), optionArguments.contains("--pip") {
   // Music mode does not support Picture-in-Picture. Combining these options is not permitted.
   print("Cannot specify both --music-mode and --pip")
   // Command line usage error.
@@ -79,8 +146,8 @@ if userArgs.contains("--music-mode"), userArgs.contains("--pip") {
 var isStdin = false
 var userSpecifiedStdin = false
 
-for arg in userArgs {
-  if arg == "--stdin" {
+for arg in optionArguments {
+  if arg == "--stdin" || arg == "--mpv--" {
     isStdin = true
     userSpecifiedStdin = true
   } else if arg == "--no-stdin" {
@@ -98,6 +165,23 @@ if (!userSpecifiedStdin) {
   }
   stdin.open()
   isStdin = stdin.hasBytesAvailable
+}
+
+let requestsHeadless = optionArguments.reduce(false) { enabled, argument in
+  guard let separator = argument.firstIndex(of: "=") else {
+    return argument == "--headless" ? true : enabled
+  }
+  guard argument[..<separator] == "--headless" else { return enabled }
+  switch String(argument[argument.index(after: separator)...])
+    .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+  case "yes", "true", "1", "on": return true
+  case "no", "false", "0", "off": return false
+  default: return enabled // Invalid values were rejected above.
+  }
+}
+if requestsHeadless && mediaArguments.isEmpty && !isStdin {
+  FileHandle.standardError.write(Data("Headless mode requires a media input or stdin.\n".utf8))
+  exit(EX_USAGE)
 }
 
 if let dashIndex = userArgs.firstIndex(of: "--") {

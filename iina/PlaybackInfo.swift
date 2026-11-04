@@ -8,6 +8,26 @@
 
 import Foundation
 
+struct SubtitleStyleOverrides {
+  var font: String?
+  var size: Double?
+  var textColor: String?
+  var bold: Bool?
+  var borderColor: String?
+  var borderSize: Double?
+  var backgroundColor: String?
+
+  mutating func clear(for key: Preference.Key) {
+    if key == .subTextFont { font = nil }
+    if key == .subTextSize { size = nil }
+    if key == .subTextColorString { textColor = nil }
+    if key == .subBold { bold = nil }
+    if key == .subBorderColorString { borderColor = nil }
+    if key == .subBorderSize { borderSize = nil }
+    if key == .subShadowColorString { backgroundColor = nil }
+  }
+}
+
 class PlaybackInfo {
 
   /// Enumeration representing the status of the [mpv](https://mpv.io/manual/stable/) A-B loop command.
@@ -173,6 +193,7 @@ class PlaybackInfo {
   var subPos: Double = Double(Preference.float(for: .subPos))
   var secondarySubPos: Double = 100
   var subScale: Double = 1
+  var subtitleStyleOverrides = SubtitleStyleOverrides()
 
   // cache related
   var pausedForCache: Bool = false
@@ -246,8 +267,7 @@ class PlaybackInfo {
   @Atomic var playlist: [MPVPlaylistItem] = []
 
   var isShuffled = false
-  private var cachedVideoDurationAndProgress: [String: (duration: Double?, progress: Double?)] = [:]
-  private var cachedMetadata: [String: (title: String?, album: String?, artist: String?)] = [:]
+  private var playlistInfoCache = PlaybackInfoCache()
 
   var chapters: [MPVChapter] = []
   var chapter = 0
@@ -267,7 +287,7 @@ class PlaybackInfo {
     $playlist.withLock { playlist in
       var totalDuration: Double? = 0
       for p in playlist {
-        if let duration = cachedVideoDurationAndProgress[p.filename]?.duration {
+        if let duration = playlistInfoCache.durationAndProgress(for: p.filename)?.duration {
           totalDuration! += duration > 0 ? duration : 0
         } else {
           // Cache is missing an entry, can't provide a total.
@@ -281,7 +301,7 @@ class PlaybackInfo {
   func calculateTotalDuration(_ indexes: IndexSet) -> Double {
     $playlist.withLock { playlist in
       indexes
-        .compactMap { cachedVideoDurationAndProgress[playlist[$0].filename]?.duration }
+        .compactMap { playlistInfoCache.durationAndProgress(for: playlist[$0].filename)?.duration }
         .compactMap { $0 > 0 ? $0 : 0 }
         .reduce(0, +)
     }
@@ -293,7 +313,7 @@ class PlaybackInfo {
   /// - Important: To avoid the need to lock multiple locks the cache properties are always accessed while holding the playlist lock.
   func getCachedVideoDurationAndProgress(_ file: String) -> (duration: Double?, progress: Double?)? {
     $playlist.withLock { _ in
-      cachedVideoDurationAndProgress[file]
+      playlistInfoCache.durationAndProgress(for: file)
     }
   }
 
@@ -304,7 +324,7 @@ class PlaybackInfo {
   /// - Important: To avoid the need to lock multiple locks the cache properties are always accessed while holding the playlist lock.
   func setCachedVideoDuration(_ file: String, _ duration: Double) {
     $playlist.withLock { _ in
-      cachedVideoDurationAndProgress[file]?.duration = duration
+      playlistInfoCache.setDuration(duration, for: file)
     }
   }
 
@@ -315,28 +335,80 @@ class PlaybackInfo {
   /// - Important: To avoid the need to lock multiple locks the cache properties are always accessed while holding the playlist lock.
   func setCachedVideoDurationAndProgress(_ file: String, _ value: (duration: Double?, progress: Double?)) {
     $playlist.withLock { _ in
-      cachedVideoDurationAndProgress[file] = value
+      playlistInfoCache.setDurationAndProgress(value, for: file)
     }
   }
 
-  /// Return the cached metadata for the given file if present in the cache.
-  /// - Parameter file: File to return the metadata for.
-  /// - Returns: A tuple containing the title, album and artist if found in the cache, otherwise `nil`.
+  /// Return the cached title and artist for the given file if present in the cache.
+  /// - Parameter file: File to return metadata for.
+  /// - Returns: A tuple containing the title and artist if found in the cache, otherwise `nil`.
   /// - Important: To avoid the need to lock multiple locks the cache properties are always accessed while holding the playlist lock.
-  func getCachedMetadata(_ file: String) -> (title: String?, album: String?, artist: String?)? {
+  func getCachedMetadata(_ file: String) -> (title: String?, artist: String?)? {
     $playlist.withLock { _ in
-      cachedMetadata[file]
+      playlistInfoCache.metadata(for: file)
     }
   }
 
-  /// Store the given metadata for the given file in the cache.
+  /// Store the given title and artist for the given file in the cache.
   /// - Parameters:
-  ///   - file: File to store the title, album and artist for.
-  ///   - value: A tuple containing the duration and progress for the file.
+  ///   - file: File to store metadata for.
+  ///   - value: The title and artist to cache.
   /// - Important: To avoid the need to lock multiple locks the cache properties are always accessed while holding the playlist lock.
-  func setCachedMetadata(_ file: String, _ value: (title: String?, album: String?, artist: String?)) {
+  func setCachedMetadata(_ file: String, _ value: (title: String?, artist: String?)) {
     $playlist.withLock { _ in
-      cachedMetadata[file] = value
+      playlistInfoCache.setMetadata(value, for: file)
+    }
+  }
+
+  /// Reserve and finish asynchronous sidebar metadata probes under the playlist lock.
+  func beginCachedInfoProbe(for file: String) -> UInt64? {
+    $playlist.withLock { _ in playlistInfoCache.beginProbe(for: file) }
+  }
+
+  func finishCachedInfoProbe(
+    for file: String,
+    requestID: UInt64,
+    durationAndProgress: (duration: Double?, progress: Double?)?,
+    metadata: (title: String?, artist: String?)?
+  ) {
+    $playlist.withLock { _ in
+      playlistInfoCache.finishProbe(for: file, requestID: requestID,
+                                    durationAndProgress: durationAndProgress,
+                                    metadata: metadata)
+    }
+  }
+
+  /// Update the current cache scope when a new file starts. Normal playlist changes only remove
+  /// the previous active file when it is not in the playlist, keeping this path constant-time.
+  func setActiveCachedFile(_ file: String?) {
+    $playlist.withLock { _ in
+      playlistInfoCache.setActiveFilePath(file)
+    }
+  }
+
+  var activeCachedFilePath: String? {
+    $playlist.withLock { _ in playlistInfoCache.activeFilePath }
+  }
+
+  /// Reset the row snapshot and its path caches together when opening a new playlist request.
+  func resetPlaylistSnapshot(activeFilePath: String?) {
+    $playlist.withLock { playlist in
+      playlist = []
+      playlistInfoCache.resetScope(playlistPaths: [], activeFilePath: activeFilePath)
+    }
+  }
+
+  /// Commit a refreshed playlist snapshot and prune probe results for removed paths.
+  func replacePlaylistSnapshot(_ items: [MPVPlaylistItem], generation: UInt64) {
+    $playlist.withLock { playlist in
+      playlist = items
+      playlistInfoCache.replacePlaylistPaths(items.map(\.filename), generation: generation)
+    }
+  }
+
+  func invalidatePlaylistSnapshot() {
+    $playlist.withLock { _ in
+      playlistInfoCache.invalidatePlaylistSnapshot()
     }
   }
 

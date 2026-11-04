@@ -23,10 +23,10 @@
 "LNk-io-MM7.title" = "Mezipaměť:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "RwW-JS-iTv"; */
-"RwW-JS-iTv.title" = "Vyžaduje restartování IINA.";
+"RwW-JS-iTv.title" = "Vyžaduje restartování Reel.";
 
 /* Class = "NSTextFieldCell"; title = "IINA will search youtube-dl in this folder. Restart needed."; ObjectID = "YqE-yV-BvQ"; */
-"YqE-yV-BvQ.title" = "IINA prohledá youtube-dl v této složce. Vyžaduje restartování IINA.";
+"YqE-yV-BvQ.title" = "Reel prohledá youtube-dl v této složce. Vyžaduje restartování Reel.";
 
 /* Class = "NSMenuItem"; title = "Auto"; ObjectID = "aNr-lv-K0r"; */
 "aNr-lv-K0r.title" = "Automaticky";

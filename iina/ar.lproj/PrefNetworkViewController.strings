@@ -23,7 +23,7 @@
 "LNk-io-MM7.title" = "تخزين مؤقت:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "RwW-JS-iTv"; */
-"RwW-JS-iTv.title" = "يتطلب إعادة تشغيل IINA لكي يطبق.";
+"RwW-JS-iTv.title" = "يتطلب إعادة تشغيل Reel لكي يطبق.";
 
 /* Class = "NSTextFieldCell"; title = "IINA will search youtube-dl in this folder. Restart needed."; ObjectID = "YqE-yV-BvQ"; */
 "YqE-yV-BvQ.title" = "INA سوف يبحث Youtube-dl في هذا المجلد. إعادة التشغيل مطلوبة.";

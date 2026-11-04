@@ -8,17 +8,22 @@
 #  Copyright © 2026 lhc. All rights reserved.
 #
 
-# Running this script generates an IINA DMG file in Xcode's build directory.
+# Running this script generates a Reel DMG file in Xcode's build directory.
 # Before running this script you must in Xcode edit the iina scheme and set the
-# build configuration to the desired type of IINA release (Beta, Debug, Nightly or
-# Release) and then build an Reel.app that can be run on any Mac. This script will
+# build configuration to the desired type of release (Beta, Debug, Nightly or
+# Release) and then build a Reel.app that can be run on any Mac. This script will
 # refuse to generate a DMG if the app is not universal. This script also tests
 # that the Safari extension can be installed and uninstalled.
 
 # IMPORTANT! This script requires that create-dmg has been installed.
 # See: https://github.com/create-dmg/create-dmg
 
-PROJECT_NAME='iina'
+# The repository root may be cloned under any directory name (this fork ships
+# as "Reel", so a directory named `iina` is not assumed), so the root is found
+# by walking up from this script until a real marker of the repository appears.
+PROJECT_NAME='iina.xcodeproj'
+SCHEME='iina'
+OUTPUT_DIR=''
 
 # Colors for output
 RED='\033[0;31m'
@@ -32,35 +37,45 @@ printUsageHelp() {
   echo -e "${BLUE}Usage:${NC}"
   echo -e "    ${GREEN}$0 -h:${NC}        Displays this help message"
   echo -e "    ${GREEN}$0 -v:${NC}        Show details during disk image creation"
+  echo -e "    ${GREEN}$0 -s [scheme]${NC}   Build with the specified Xcode scheme"
+  echo -e "    ${GREEN}$0 -o [output_dir]${NC}  Write the generated DMG to the specified directory"
   echo
 }
 
-args=`getopt hv $*`
-if [ $? -ne 0 ]; then
-  printUsageHelp
-  echo -e "${RED}Failed parsing options.${NC}" >&2
-  exit 1
-fi
-set -- $args
-
 VERBOSE=1
-while true; do
-  case "$1" in
-  -h)
+while getopts ":hvs:o:" opt; do
+  case "$opt" in
+  h)
     printUsageHelp
     exit 0
     ;;
-  -v)
+  v)
     VERBOSE=0
-    shift
     ;;
-  --)
-    shift
-    break
+  s)
+    SCHEME="$OPTARG"
     ;;
-  *) break ;;
+  o)
+    OUTPUT_DIR="$OPTARG"
+    ;;
+  :)
+    echo -e "${RED}Missing argument for -$OPTARG.${NC}" >&2
+    printUsageHelp
+    exit 1
+    ;;
+  \?)
+    echo -e "${RED}Unknown option: -$OPTARG${NC}" >&2
+    printUsageHelp
+    exit 1
+    ;;
   esac
 done
+shift $((OPTIND - 1))
+if [ "$#" -gt 0 ]; then
+  echo -e "${RED}Unexpected positional argument: $1${NC}" >&2
+  printUsageHelp
+  exit 1
+fi
 
 echo -e "${BLUE}Starting disk image generation…${NC}"
 
@@ -75,14 +90,13 @@ fi
 SCRIPT_PATH=$(realpath "$0")
 ROOT_PATH=$(dirname "$SCRIPT_PATH")
 
-if [[ $(basename "$ROOT_PATH") != "$PROJECT_NAME" ]]; then
-  while [[ "$ROOT_PATH" != "/" && $(basename "$ROOT_PATH") != "$PROJECT_NAME" ]]; do
-    ROOT_PATH=$(dirname "$ROOT_PATH")
-  done
-  if [[ "$ROOT_PATH" == "/" ]]; then
-    echo -e "${RED}Unable to find the root directory '$PROJECT_NAME' containing the script file.${NC}" >&2
-    exit 1
-  fi
+# Walk up until the directory containing the marker is reached.
+while [[ "$ROOT_PATH" != "/" && ! -e "$ROOT_PATH/$PROJECT_NAME" ]]; do
+  ROOT_PATH=$(dirname "$ROOT_PATH")
+done
+if [[ "$ROOT_PATH" == "/" ]]; then
+  echo -e "${RED}Unable to find the repository root ($PROJECT_NAME) containing the script file: $SCRIPT_PATH${NC}" >&2
+  exit 1
 fi
 
 # Confirm the background image for the DMG exists.
@@ -120,7 +134,7 @@ echo -e "${YELLOW}Obtaining Xcode build settings…${NC}"
 
 SETTINGS=$(xcodebuild \
   -workspace ${ROOT_PATH}/iina.xcodeproj/project.xcworkspace \
-  -scheme iina -destination 'generic/platform=macOS,name=Any Mac' \
+  -scheme "$SCHEME" -destination 'generic/platform=macOS,name=Any Mac' \
   -showBuildSettings)
 
 echo -e "${GREEN}Obtained Xcode build settings${NC}"
@@ -135,18 +149,18 @@ fi
 # Confirm Reel.app has been built.
 APP_PATH="$TARGET_BUILD_DIR/Reel.app"
 if [ ! -e "$APP_PATH" ]; then
-  echo -e "${RED}An Reel.app file was not found in ${TARGET_BUILD_DIR}.${NC}" >&2
+  echo -e "${RED}A Reel.app file was not found in ${TARGET_BUILD_DIR}.${NC}" >&2
   exit 1
 fi
 echo -e "${GREEN}Found Reel.app: ${APP_PATH}${NC}"
 
 # Confirm app was built for all Macs.
-IINA_BINARY_PATH="${APP_PATH}/Contents/MacOS/iina"
-if ! lipo "$IINA_BINARY_PATH" -verify_arch arm64; then
+REEL_BINARY_PATH="${APP_PATH}/Contents/MacOS/Reel"
+if ! lipo "$REEL_BINARY_PATH" -verify_arch arm64; then
   echo -e "${RED}Reel.app is missing support for arm64.${NC}" >&2
   exit 1
 fi
-if ! lipo "$IINA_BINARY_PATH" -verify_arch x86_64; then
+if ! lipo "$REEL_BINARY_PATH" -verify_arch x86_64; then
   echo -e "${RED}Reel.app is missing support for x86_64.${NC}" >&2
   exit 1
 fi
@@ -154,7 +168,7 @@ fi
 # As testing the Safari extension alters the user's environment make it clear
 # to the user the extension is being installed and uninstalled.
 echo -e "${YELLOW}Confirming Safari extension exists and can be installed…${NC}"
-EXTENSION_PATH="${APP_PATH}/Contents/PlugIns/OpenInReel.appex"
+EXTENSION_PATH="${APP_PATH}/Contents/PlugIns/OpenInIINA.appex"
 if [ ! -e "$EXTENSION_PATH" ]; then
   echo -e "${RED}Reel.app is missing the Safari extension.${NC}" >&2
   exit 1
@@ -207,13 +221,18 @@ if [ ! -e "$VOL_ICON_PATH" ]; then
 fi
 echo -e "${GREEN}Found icon file to use for volume: ${VOL_ICON_PATH}${NC}"
 
-# Find the IINA version so it can be used in the DMG filename.
+# Find the marketing version so it can be used in the DMG filename.
 MARKETING_VERSION=$(echo "$SETTINGS" | sed -rn 's/.*MARKETING_VERSION = (.*)/\1/p')
 if [ -z  "$MARKETING_VERSION" ]; then
-  echo -e "${RED}Unable to find IINA version in Xcode build settings.${NC}" >&2
+  echo -e "${RED}Unable to find the marketing version in Xcode build settings.${NC}" >&2
   exit 1
 fi
-DISK_IMAGE_PATH="$TARGET_BUILD_DIR/IINA.v"$MARKETING_VERSION".dmg"
+if [ -z "$OUTPUT_DIR" ]; then
+  OUTPUT_DIR="$TARGET_BUILD_DIR"
+else
+  mkdir -p "$OUTPUT_DIR"
+fi
+DISK_IMAGE_PATH="$OUTPUT_DIR/Reel.v${MARKETING_VERSION}.dmg"
 
 # If the disk image file already exists it must be removed or create-dmg will fail.
 if [ -e "$DISK_IMAGE_PATH" ]; then
@@ -233,13 +252,46 @@ else
   QUITE='--hdiutil-quiet'
 fi
 
-if ! create-dmg $QUITE --volname IINA --volicon "$VOL_ICON_PATH" --background "$DMG_BACKGROUND_PATH" \
+if ! create-dmg $QUITE --volname Reel --volicon "$VOL_ICON_PATH" --background "$DMG_BACKGROUND_PATH" \
     --window-pos 200 120 --window-size $WIDTH $HEIGHT --icon-size 128 \
-    --icon "Reel.app" 140 230 --app-drop-link 400 230 \
+    --icon "Reel.app" 140 230 --app-drop-link 400 230 --no-internet-enable \
     "$DISK_IMAGE_PATH" "$APP_PATH"; then
   echo -e "${RED}Failed to create disk image.${NC}" >&2
   exit 1
 fi
 
 echo -e "${GREEN}Generated disk image: ${DISK_IMAGE_PATH}${NC}"
+
+echo -e "${YELLOW}Setting a Finder icon on the disk image…${NC}"
+if ! swift - "$VOL_ICON_PATH" "$DISK_IMAGE_PATH" <<'EOF'
+import AppKit
+
+guard CommandLine.arguments.count >= 3 else {
+  fputs("Must pass the icon and disk image paths\n", stderr)
+  exit(1)
+}
+let icon = CommandLine.arguments[1]
+let dmg = CommandLine.arguments[2]
+guard FileManager.default.fileExists(atPath: icon) else {
+  fputs("Icon does not exist: \(icon)\n", stderr)
+  exit(1)
+}
+guard FileManager.default.fileExists(atPath: dmg) else {
+  fputs("Disk image does not exist: \(dmg)\n", stderr)
+  exit(1)
+}
+guard let image = NSImage(contentsOfFile: icon) else {
+  fputs("Failed to create an NSImage from: \(icon)\n", stderr)
+  exit(1)
+}
+guard NSWorkspace.shared.setIcon(image, forFile: dmg) else {
+  fputs("Failed to set icon on: \(dmg)\n", stderr)
+  exit(1)
+}
+EOF
+then
+  echo -e "${RED}Failed to set a Finder icon on the disk image.${NC}" >&2
+  exit 1
+fi
+echo -e "${GREEN}Successfully set a Finder icon on the DMG file.${NC}"
 echo -e "${GREEN}Successfully generated DMG file.${NC}"

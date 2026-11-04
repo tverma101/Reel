@@ -26,7 +26,7 @@
 "6TV-DG-503.title" = "Danh sách phát:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "8kU-8g-VgX"; */
-"8kU-8g-VgX.title" = "Bắt buộc khởi động lại IINA để có hiệu lực.";
+"8kU-8g-VgX.title" = "Bắt buộc khởi động lại Reel để có hiệu lực.";
 
 /* Class = "NSButtonCell"; title = "Only in \"music mode\""; ObjectID = "AVe-9Z-RgQ"; */
 "AVe-9Z-RgQ.title" = "Only in \"music mode\"";

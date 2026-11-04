@@ -23,10 +23,10 @@
 "LNk-io-MM7.title" = "Caché:";
 
 /* Class = "NSTextFieldCell"; title = "Requires restarting IINA to take effect."; ObjectID = "RwW-JS-iTv"; */
-"RwW-JS-iTv.title" = "Requiere reiniciar IINA para que surta efecto.";
+"RwW-JS-iTv.title" = "Requiere reiniciar Reel para que surta efecto.";
 
 /* Class = "NSTextFieldCell"; title = "IINA will search youtube-dl in this folder. Restart needed."; ObjectID = "YqE-yV-BvQ"; */
-"YqE-yV-BvQ.title" = "IINA buscará youtube-dl en esta carpeta. Reinicio necesario.";
+"YqE-yV-BvQ.title" = "Reel buscará youtube-dl en esta carpeta. Reinicio necesario.";
 
 /* Class = "NSMenuItem"; title = "Auto"; ObjectID = "aNr-lv-K0r"; */
 "aNr-lv-K0r.title" = "Auto";

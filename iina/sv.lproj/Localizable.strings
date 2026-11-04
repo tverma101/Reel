@@ -30,11 +30,11 @@
 "guide.faq" = "Vanliga frågor (FAQ)";
 
 // Initial Window
-"initial.announcement" = "Du använder en %@-version av IINA";
-"initial.beta.desc" = "Om du vill återgå till en utgiven version, avbocka \"Ta emot beta-uppdateringar\" under Inställningar > Allmänt och installera en stabil version från vår <a href=\"https://iina.io\">officiella webbsida</a>.";
-"initial.nightly.desc" = "Nightly is not recommended to be used as your daily driver. Currently nightly builds do not support auto update. Please manually download newer builds from our <a href=\"https://nightly.iina.io\">nightly website</a>.";
+"initial.announcement" = "Du använder en %@-version av Reel";
+"initial.beta.desc" = "Om du vill återgå till en utgiven version, avbocka \"Ta emot beta-uppdateringar\" under Inställningar > Allmänt och installera en stabil version från vår <a href=\"https://github.com/tverma101/Reel\">officiella webbsida</a>.";
+"initial.nightly.desc" = "Nightly is not recommended to be used as your daily driver. Currently nightly builds do not support auto update. Please manually download newer builds from our <a href=\"https://github.com/tverma101/Reel/actions\">nightly website</a>.";
 "initial.debug.desc" = "Debug builds are usually not optimized for performance, so it is not recommended to be used as daily drive. Debug builds do not support auto update.";
-"initial.bug_report" = "Rapportera fel via <a href=\"https://github.com/iina/iina/issues\">GitHub issues</a>.";
+"initial.bug_report" = "Rapportera fel via <a href=\"https://github.com/tverma101/Reel/issues\">GitHub issues</a>.";
 
 // Inspector Window
 "inspector.error" = "Fel";
@@ -283,7 +283,7 @@
 "alert.add_filter.title" = "Nytt filter";
 "alert.add_filter.message" = "Vänligen ange en filtersträng i formatet för mpv:s vf- eller af-kommando.";
 
-"alert.keybinding_config.error" = "Fel vid tolkning av konfigurationfilen \"%@\" för snabbtangenter! Återgår till snabbtangentsinställningen IINA Förval. Vänligen kontrollera din konfiguration.";
+"alert.keybinding_config.error" = "Fel vid tolkning av konfigurationfilen \"%@\" för snabbtangenter! Återgår till snabbtangentsinställningen Reel Förval. Vänligen kontrollera din konfiguration.";
 "alert.delete_keybindingset.title" = "Delete Key Binding Set";
 "alert.delete_keybindingset.message" = "Are you sure to delete this key binding set?";
 
@@ -302,8 +302,8 @@
 "alert.sub.cannot_login" = "Kan ej logga in. Vänligen kontrollera ditt användarnamn, lösenord och nätverksstatus.\n\n%@";
 "alert.sub.save_downloaded.title" = "Spara nedladdad undertext";
 
-"alert.set_default.title" = "Ställer in IINA som förvald app";
-"alert.set_default.message" = "IINA kommer att ställas in som den förvalda appen för alla filtyper som stöds.";
+"alert.set_default.title" = "Ställer in Reel som förvald app";
+"alert.set_default.message" = "Reel kommer att ställas in som den förvalda appen för alla filtyper som stöds.";
 "alert.set_default.success" = "Färdigställdes med %d lyckade och %d misslyckade.";
 
 "alert.add_watch.title" = "Lägg till bevakad egenskap";
@@ -492,7 +492,7 @@
 "plugin.install_error.file_not_found" = "Kan inte hitta paketfilen.";
 "plugin.install_error.cannot_download" = "Det gick inte att ladda ner tillägget.\n\nUtdata: %@\n";
 "plugin.install_error.cannot_unpackage" = "Det gick inte att packa upp tillägget.\n\nUtdata: %@\n";
-"plugin.install_error.cannot_load" = "IINA kan inte ladda detta tillägget. Det kanske är i fel format.";
+"plugin.install_error.cannot_load" = "Reel kan inte ladda detta tillägget. Det kanske är i fel format.";
 "plugin.check_for_updates" = "Sök efter uppdateringar";
 "plugin.updating" = "Laddar ner uppdateringen…";
 
@@ -626,7 +626,7 @@
 "settings.pauseWhenOpen.label" = "Pausa";
 "settings.pauseresumeWhen" = "Pausa/fortsätt när";
 "settings.playWhenEnteringFullScreen.label" = "Spela upp när helskärmsläget aktiveras";
-"settings.playlistAutoAdd.desc" = "Kräver omstart av IINA för att ge effekt.";
+"settings.playlistAutoAdd.desc" = "Kräver omstart av Reel för att ge effekt.";
 "settings.playlistAutoAdd.label" = "Lägg till filer i samma mapp automatiskt";
 "settings.playlistAutoPlayNext.label" = "Spela nästa objekt automatiskt";
 "settings.playlistShowMetadata.label" = "Visa artist- och spårnamn för ljudfiler när de finns tillgängliga";
@@ -669,7 +669,7 @@
 "settings.toneMappingAlgorithm.desc" = "Algorithm to use for tone-mapping images onto the target display.";
 "settings.toneMappingParamOverride.desc" = "Parameter for tuning the tone mapping algorithm. By default this is set to an algorithm-specific default value. Enable this setting to override that default.";
 "settings.toneMappingParamOverride.label" = "Tuning parameter";
-"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default IINA detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
+"settings.toneMappingTargetPeak.desc" = "Measured peak brightness of the display. By default Reel detects this value. If detection fails, target peak will be set to an appropriate value based on the transfer characteristics of the display. Enable this setting to manually specify the display's brightness.";
 "settings.toneMappingTargetPeak.label" = "Target peak";
 "settings.videoThreads.desc" = "Förval: 0 (auto)";
 "settings.videoThreads.label" = "Antal trådar";
@@ -772,7 +772,7 @@
 "settings.defaultCacheSize.desc" = "Default: 153,600";
 "settings.defaultCacheSize.label" = "Cache buffer size (KiB)";
 "settings.enableCache.label" = "Prefetch and buffer network data";
-"settings.httpProxy.desc" = "Kräver omstart av IINA för att ge effekt.";
+"settings.httpProxy.desc" = "Kräver omstart av Reel för att ge effekt.";
 "settings.httpProxy.label" = "HTTP-proxy";
 "settings.secPrefech.desc" = "Default: 36,000";
 "settings.secPrefech.label" = "Sekunder att hämta i förväg";
@@ -784,11 +784,11 @@
 "settings.ytdlEnabled.label" = "Enable mpv's youtube-dl script";
 "settings.ytdlRawOptions.desc" = "Format <key>=<value>[,<key>=<value>[,…]]";
 "settings.ytdlRawOptions.label" = "Råa alternativ";
-"settings.ytdlSearchPath.desc" = "IINA letar efter youtube-dl i denna mapp. Omstart behövs.";
+"settings.ytdlSearchPath.desc" = "Reel letar efter youtube-dl i denna mapp. Omstart behövs.";
 "settings.ytdlSearchPath.label" = "Anpassad youtube-dl-sökväg";
 
 // Settings - Subtitles
-"settings.autoSearchOnlineSub.desc" = "If enabled, IINA will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
+"settings.autoSearchOnlineSub.desc" = "If enabled, Reel will automatically search online subtitles only for videos without loaded subtitles and longer than 20 minutes.";
 "settings.autoSearchOnlineSub.label" = "Sök automatiskt efter undertexter online";
 "settings.displayInLetterBox.label" = "Visa undertexter i det oanvända området (letterbox) i fullskärmsläge";
 "settings.subAlignX.items.0" = "Vänster";
@@ -799,7 +799,7 @@
 "settings.subAlignY.items.2" = "Botten";
 "settings.subAutoLoadIINA.items.0" = "Avaktiverad";
 "settings.subAutoLoadIINA.items.1" = "Undertexter som innehåller mediets filnamn";
-"settings.subAutoLoadIINA.items.2" = "Upptäcks intelligent av IINA";
+"settings.subAutoLoadIINA.items.2" = "Upptäcks intelligent av Reel";
 "settings.subAutoLoadIINA.label" = "Läs in automatiskt";
 "settings.subAutoLoadPriorityString.desc" = "Vänligen ange en kommaseparerad lista med strängar.";
 "settings.subAutoLoadPriorityString.label" = "Undertexter har prioritet när filnamnet innehåller";
@@ -838,7 +838,7 @@
 "settings.arrowBtnAction.label" = "Använd vänster-/högertangenten till";
 "settings.controlBarAutoHideTimeout.label" = "Dölj automatiskt efter";
 "settings.controlBarStickToCenter.label" = "Fäst till mitten vid förflyttning";
-"settings.disableAnimations.desc" = "När tillgänglighetsinställningen \"Minska rörelse\" är påslagen i macOS kommer IINA att minska mängden animationer i gränssnittet som kan orsaka problem för personer med vestibulära störningar. Om detta inte skulle räcka kan denna inställning användas för att minska rörelse ännu mer genom att helt ta bort animationer i gränssnittet.";
+"settings.disableAnimations.desc" = "När tillgänglighetsinställningen \"Minska rörelse\" är påslagen i macOS kommer Reel att minska mängden animationer i gränssnittet som kan orsaka problem för personer med vestibulära störningar. Om detta inte skulle räcka kan denna inställning användas för att minska rörelse ännu mer genom att helt ta bort animationer i gränssnittet.";
 "settings.disableAnimations.label" = "Stäng av animationer";
 "settings.disableOSDFileStartMsg.label" = "Filstart";
 "settings.disableOSDPauseResumeMsgs.label" = "Pausa / fortsätta";
@@ -882,7 +882,7 @@
 "settings.windowBehaviorWhenPip.label" = "Fönster";
 
 // Settings - Advanced
-"settings.enableAdvancedSettings.desc" = "Följande inställningar kräver omstart av IINA för att ge effekt.";
+"settings.enableAdvancedSettings.desc" = "Följande inställningar kräver omstart av Reel för att ge effekt.";
 "settings.enableAdvancedSettings.label" = "Aktivera avancerade alternativ";
 "settings.enableLogging.label" = "Aktivera loggning";
 "settings.logLevel.desc" = "View logs by choosing Window - Log Viewer from the menu.";
@@ -938,7 +938,7 @@
 "settings.$FailedToLoadThePage" = "Det gick inte att läsa in sidan.";
 "settings.$Firefox" = "Firefox";
 "settings.$Font" = "Typsnitt";
-"settings.$GetBrowserExtensionsForIINA" = "Skaffa webbläsartillägg till IINA";
+"settings.$GetBrowserExtensionsForIINA" = "Skaffa webbläsartillägg till Reel";
 "settings.$GetPlugins" = "Hämta plugins…";
 "settings.$Hardware" = "Hårdvara";
 "settings.$Height" = "Höjd";
@@ -973,7 +973,7 @@
 "settings.$OnScreenController" = "Skärmkontroller";
 "settings.$OnScreenDisplay" = "Skärmdisplay";
 "settings.$OnlineSubtitles" = "Online-undertexter";
-"settings.$OpenLinksOrCurrentWebpage" = "Öppna länkar eller visad webbsida i IINA med ett klick. Webbsidan måste stödjas av youtube-dl.";
+"settings.$OpenLinksOrCurrentWebpage" = "Öppna länkar eller visad webbsida i Reel med ett klick. Webbsidan måste stödjas av youtube-dl.";
 "settings.$OpenLogDirectory" = "Öppna loggmapp";
 "settings.$OpenLogWindow" = "Öppna loggvisaren";
 "settings.$OrSelectFrom" = "Eller välj från tillgängliga plugins";
@@ -983,7 +983,7 @@
 "settings.$Percent" = "%";
 "settings.$PictureinnPicture" = "Bild-i-bild";
 "settings.$Playlist" = "Spellista";
-"settings.$PleaseSelectTheMediaTypes" = "Vänligen markera de mediatyper för vilka du vill göra IINA till förvalt program.";
+"settings.$PleaseSelectTheMediaTypes" = "Vänligen markera de mediatyper för vilka du vill göra Reel till förvalt program.";
 "settings.$Position" = "Position";
 "settings.$PreferredLanguage" = "Föredraget språk";
 "settings.$RestoreAlerts" = "Återställ varningar";
@@ -993,7 +993,7 @@
 "settings.$SPDIFOutputWarning" = "List of codecs for which compressed audio passthrough should be used.\n\nWarning: There is not much reason to use this setting. HDMI supports uncompressed multichannel PCM, and lossless DTS-HD decoding is supported via FFmpeg's DCA decoder. Playback may not start if the output device does not support S/PDIF and this setting is enabled.";
 "settings.$Safari" = "Safari";
 "settings.$Screenshots" = "Skärmdumpar";
-"settings.$SetIINAAsTheDefault" = "Ställ in IINA som förvalt program";
+"settings.$SetIINAAsTheDefault" = "Ställ in Reel som förvalt program";
 "settings.$Settings" = "Inställningar";
 "settings.$Shadow" = "Skugga";
 "settings.$ShowInFinder" = "Visa i Finder";
@@ -1036,4 +1036,4 @@
 "settings.$sideOfTheScreen" = "sida av skärmen";
 "settings.$toThe" = "till";
 "settings.$top" = "toppen";
-"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. IINA will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
+"settings.$ytdlWarning" = "The Online Media plugin has additional features such as switching quality and video downloading. Reel will use the plugin if it's installed and enabled. The settings below only work if the plugin is not available.";
