@@ -116,6 +116,33 @@ struct AirPlaySpeakerClock {
   }
 }
 
+/// Limits how often one file may rebuild a speaker stream whose clock stopped after playback began.
+/// A brief network or receiver hiccup gets a fresh stream; a route that keeps stalling still falls
+/// back to the Mac instead of rebuilding forever.
+struct AirPlayStallRecoveryBudget {
+  let limit: Int
+  let window: TimeInterval
+  private(set) var attempts: [Date] = []
+
+  init(limit: Int, window: TimeInterval) {
+    self.limit = max(0, limit)
+    self.window = max(0, window)
+  }
+
+  mutating func reset() {
+    attempts.removeAll(keepingCapacity: true)
+  }
+
+  /// Records an attempt at `now` and returns whether it is allowed. Attempts older than `window`
+  /// no longer count, so occasional stalls over a long file are each recovered.
+  mutating func admit(at now: Date = Date()) -> Bool {
+    attempts.removeAll { now.timeIntervalSince($0) >= window }
+    guard attempts.count < limit else { return false }
+    attempts.append(now)
+    return true
+  }
+}
+
 final class AirPlayRequestCancellation: @unchecked Sendable {
   private let lock = NSLock()
   private var cancelled = false
@@ -740,6 +767,16 @@ private final class AirPlayRouteControl: NSView {
 final class AirPlayAudioBridge: NSObject {
   /// Runs the bridge on the Mac's own output, so sync can be checked without a speaker.
   private static let localTestKey = "ReelAirPlayBridgeLocalTest"
+  /// The local test is a launch argument (`-ReelAirPlayBridgeLocalTest YES`). A value saved in
+  /// Reel's preferences is ignored, so a leftover diagnostic setting cannot route every file's audio
+  /// through the bridge on the Mac's speakers.
+  private static var localTestRequested: Bool {
+    switch UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)[localTestKey] {
+    case let number as NSNumber: return number.boolValue
+    case let string as NSString: return string.boolValue
+    default: return false
+    }
+  }
   /// Seconds to subtract from AVPlayer's clock, for a receiver whose latency it does not include.
   private static let latencyKey = "ReelAirPlayBridgeLatencyCompensation"
   /// Stay in mpv's pitch-correction range. A 0.01x hold builds seconds of stale audio on resume.
@@ -747,7 +784,10 @@ final class AirPlayAudioBridge: NSObject {
   private static let holdTimeout: TimeInterval = 10
   /// A speaker that claims to play but never advances the item clock is not a usable route.
   private static let speakerClockStartupTimeout: TimeInterval = 4
-  private static let speakerClockStallTimeout: TimeInterval = 1
+  /// A clock that stops after playback began gets a fresh stream; shorter pauses recover on their own.
+  private static let speakerClockStallTimeout: TimeInterval = 2
+  private static let speakerStallRecoveryLimit = 3
+  private static let speakerStallRecoveryWindow: TimeInterval = 120
   /// Refresh the routed item after a long pause, when AirPlay may have discarded its buffered stream.
   private static let longPauseStreamRefreshThreshold: TimeInterval = 30
   private static let correctionThreshold = 0.075
@@ -1002,6 +1042,8 @@ final class AirPlayAudioBridge: NSObject {
   private var seekSnapshotStartedAt: Date?
   private var rebuildItemAfterSeek = false
   private var speakerClock = AirPlaySpeakerClock()
+  private var speakerStallRecovery = AirPlayStallRecoveryBudget(limit: speakerStallRecoveryLimit,
+                                                                window: speakerStallRecoveryWindow)
 
   /// mpv's own audio output is off; the hidden AVPlayer is what can be heard.
   var isEngaged: Bool { bridgeEngaged }
@@ -1132,7 +1174,7 @@ final class AirPlayAudioBridge: NSObject {
   private func routeMayHaveChanged() {
     observeOutputContext()
     let route = currentRoute()
-    let localTest = UserDefaults.standard.bool(forKey: Self.localTestKey)
+    let localTest = Self.localTestRequested
     if route.description != routeDescription {
       routeDescription = route.description
       log("route: \(route.description)\(localTest ? ", local test on" : "")")
@@ -1148,6 +1190,7 @@ final class AirPlayAudioBridge: NSObject {
     if active && !wasActive {
       // A new choice deserves a new attempt.
       bridgeFailedForFile = false
+      speakerStallRecovery.reset()
     }
     guard let player else {
       reconcile()
@@ -1499,6 +1542,23 @@ final class AirPlayAudioBridge: NSObject {
                      external: true)
   }
 
+  /// The speaker's clock stopped after it had been playing. A receiver or network hiccup can leave
+  /// AVPlayer reporting `.playing` on a stream the route no longer advances, so start a fresh stream
+  /// on the same route, as after a seek or a long pause. Only repeated stalls give up on the file.
+  private func recoverStalledSpeaker(_ reason: String) {
+    guard let selection = itemSelection else {
+      failForFile(reason)
+      return
+    }
+    guard speakerStallRecovery.admit() else {
+      failForFile("\(reason) \(Self.speakerStallRecoveryLimit + 1) times within \(Int(Self.speakerStallRecoveryWindow))s")
+      return
+    }
+    log("\(reason); restarting the speaker stream (attempt \(speakerStallRecovery.attempts.count) of \(Self.speakerStallRecoveryLimit))",
+        level: .warning)
+    replaceItem(with: selection)
+  }
+
   // MARK: Holding the picture for the speaker
 
   /// Holds unless mpv's audio output is still starting. Every path that wants a hold goes through
@@ -1598,10 +1658,12 @@ final class AirPlayAudioBridge: NSObject {
       if !nearEnd, speakerClock.hasStalled(at: now,
                                            stallTimeout: Self.speakerClockStallTimeout,
                                            startupTimeout: Self.speakerClockStartupTimeout) {
-        let reason = speakerClock.hasAdvanced
-          ? "the speaker's playback clock stopped advancing"
-          : "the speaker reported playback without advancing its clock"
-        failForFile(reason)
+        if speakerClock.hasAdvanced {
+          recoverStalledSpeaker("the speaker's playback clock stopped advancing")
+        } else {
+          // A fresh stream that never starts its clock means the route itself is not playing.
+          failForFile("the speaker reported playback without advancing its clock")
+        }
         return
       }
     } else {
@@ -1800,13 +1862,21 @@ final class AirPlayAudioBridge: NSObject {
     stalledSince = nil
     if let loader, heard > loader.duration - 3 { return }
     let now = Date()
-    speakerClock.observe(position: clockPosition, at: now,
-                         epsilon: Self.audioClockMotionEpsilon)
+    let speakerClockAdvanced = speakerClock.observe(position: clockPosition, at: now,
+                                                    epsilon: Self.audioClockMotionEpsilon)
     if speakerClock.hasStalled(at: now, stallTimeout: Self.speakerClockStallTimeout,
                                 startupTimeout: Self.speakerClockStartupTimeout) {
-      failForFile(speakerClock.hasAdvanced
-        ? "the speaker's playback clock stopped advancing"
-        : "the speaker reported playback without advancing its clock")
+      if speakerClock.hasAdvanced {
+        recoverStalledSpeaker("the speaker's playback clock stopped advancing")
+      } else {
+        failForFile("the speaker reported playback without advancing its clock")
+      }
+      return
+    }
+    // A clock that did not move since the last tick is stale: measuring drift against it would
+    // correct the picture toward a frozen speaker and then fight the recovered stream.
+    guard speakerClockAdvanced else {
+      driftSamples.removeAll()
       return
     }
     guard let videoTime = snapshot.timePosition else { return }
@@ -1862,7 +1932,7 @@ final class AirPlayAudioBridge: NSObject {
     if pendingOutputRestoreFailureNotice, let player, player.info.state.loaded {
       showOutputRestoreFailureNotice(to: player)
     }
-    if UserDefaults.standard.bool(forKey: Self.localTestKey) && !routeActive {
+    if Self.localTestRequested && !routeActive {
       routeMayHaveChanged()
     }
     if let notice = pendingRouteNotice, let player, player.info.state.loaded {
@@ -1938,6 +2008,7 @@ final class AirPlayAudioBridge: NSObject {
     log("retrying AirPlay audio after \(trigger)")
     if bridgeFailedForFile {
       bridgeFailedForFile = false
+      speakerStallRecovery.reset()
       reconcile()
     } else if isEngaged, itemSelection == selection {
       replaceItem(with: selection)
@@ -2196,6 +2267,7 @@ final class AirPlayAudioBridge: NSObject {
     pendingTimingRestoreFileIdentities.removeAll(keepingCapacity: true)
     stoppingOrQuitting = false
     bridgeFailedForFile = false
+    speakerStallRecovery.reset()
     lifecycleSafetyNoticeShown = false
     // A missing on_before_start_file hook fences its old-file restore out at START_FILE. Reapply
     // the user's timing on the new item before route reconciliation can add another bridge write.

@@ -39,6 +39,30 @@ precondition(speakerClock.hasStalled(at: speakerClockStart.addingTimeInterval(6.
              "a route that stops after playback begins must fail over")
 speakerClock.markBlocked(position: 10.1)
 precondition(!speakerClock.hasAdvanced, "buffering resets the clock's stall window")
+// Production waits 2 s after progress stops before restarting the speaker stream.
+speakerClock.reset(position: 20)
+speakerClock.observe(position: 20, at: speakerClockStart.addingTimeInterval(10))
+speakerClock.observe(position: 20.25, at: speakerClockStart.addingTimeInterval(10.25))
+precondition(!speakerClock.hasStalled(at: speakerClockStart.addingTimeInterval(12.0),
+                                     stallTimeout: 2, startupTimeout: 4),
+             "a sub-2-second clock hiccup recovers without rebuilding the stream")
+precondition(speakerClock.hasStalled(at: speakerClockStart.addingTimeInterval(12.4),
+                                    stallTimeout: 2, startupTimeout: 4))
+var stallBudget = AirPlayStallRecoveryBudget(limit: 3, window: 120)
+let stallStart = Date(timeIntervalSince1970: 5_000)
+precondition(stallBudget.admit(at: stallStart), "the first stall gets a fresh stream")
+precondition(stallBudget.admit(at: stallStart.addingTimeInterval(10)))
+precondition(stallBudget.admit(at: stallStart.addingTimeInterval(20)))
+precondition(!stallBudget.admit(at: stallStart.addingTimeInterval(30)),
+             "a route that keeps stalling falls back instead of rebuilding forever")
+precondition(stallBudget.attempts.count == 3, "a refused attempt is not recorded")
+precondition(stallBudget.admit(at: stallStart.addingTimeInterval(120)),
+             "stalls older than the window no longer count against the file")
+precondition(stallBudget.attempts.count == 3)
+stallBudget.reset()
+precondition(stallBudget.attempts.isEmpty, "a new file or route starts with a full budget")
+var noRecovery = AirPlayStallRecoveryBudget(limit: 0, window: 120)
+precondition(!noRecovery.admit(at: stallStart))
 let requestCancellation = AirPlayRequestCancellation()
 precondition(!requestCancellation.isCancelled)
 requestCancellation.cancel()

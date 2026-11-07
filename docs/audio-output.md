@@ -26,8 +26,12 @@ selected, Reel engages the bridge again when the next supported file loads.
   Reel starts the speaker only once that output is running, so nothing is timed against a clock that
   has not started. Stall detection follows both mpv's audio clock and AVPlayer's media clock, so a
   low-frame-rate picture does not pause sound while audio is advancing. If mpv's audio clock stalls,
-  the speaker pauses and re-aligns when it resumes. If the selected route reports playback but its
-  media clock stops, Reel returns audio to the Mac so the file keeps playing. A file opened paused,
+  the speaker pauses and re-aligns when it resumes. If the speaker's media clock stops for more than
+  two seconds after playback began, Reel starts a fresh audio stream on the same route and re-aligns
+  it with the picture, as after a seek. Drift is not measured against a clock that has stopped. Up to
+  three such restarts are allowed in any two minutes; a fourth stall in that window, or a route that
+  reports playback but never starts its clock within four seconds, returns audio to the Mac so the
+  file keeps playing. A file opened paused,
   or one whose playback has not yet begun, waits indefinitely for the speaker instead of counting
   against the startup deadline; only actively playing audio that never starts counts as a failure.
 - **Long pauses and recovery.** While an AirPlay route remains selected, Reel rebuilds the routed
@@ -67,7 +71,8 @@ Limits:
 
 Diagnostics are logged with the prefix `AirPlay audio:`. To check sync without a speaker, launch Reel
 with the argument `-ReelAirPlayBridgeLocalTest YES`, which runs the same path on the Mac's own
-output. If a receiver's latency is not included in AVPlayer's clock,
+output. Only the launch argument enables it: the same key saved in Reel's preferences is ignored, so
+ordinary playback without a receiver always uses mpv's own audio output. If a receiver's latency is not included in AVPlayer's clock,
 `-ReelAirPlayBridgeLatencyCompensation <seconds>` subtracts it. The decoder's alignment with mpv's
 timeline is checked by `python3 other/test_pcm_stream_reader.py`. Audible routing, other apps'
 output and speaker disconnects need a real receiver.
