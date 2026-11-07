@@ -946,6 +946,8 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
   func windowDidChangeOcclusionState(_ notification: Notification) {
     guard let window, window.occlusionState.contains(.visible) else { return }
     forceDraw("window became visible")
+    // The progress bar is not updated while the window is covered; bring it up to date.
+    player.syncUI(.time)
   }
 
   func windowDidResignMain(_ notification: Notification) {
@@ -996,9 +998,21 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
                                                                      and: remaining) }
     if andProgressBar {
       let percentage = (pos.second / duration.second) * 100
-      playSlider.doubleValue = percentage
+      // On current macOS each NSSlider value change also queues a SwiftUI graph update that is
+      // applied only when the slider draws. A slider in a hidden or fully covered window never
+      // draws, so those updates pile up in memory for as long as playback runs. Skip it until it can
+      // be seen; `showUI` and `windowDidChangeOcclusionState` sync the time again when it can.
+      if isPlaySliderDrawable {
+        playSlider.doubleValue = percentage
+      }
       player.touchBarSupport.touchBarPlaySlider?.setDoubleValueSafely(percentage)
     }
+  }
+
+  /// Whether the progress bar can currently be drawn on screen.
+  private var isPlaySliderDrawable: Bool {
+    guard let window, window.occlusionState.contains(.visible) else { return false }
+    return !playSlider.isHiddenOrHasHiddenAncestor
   }
   
   func updatePlayButtonState(paused: Bool) {

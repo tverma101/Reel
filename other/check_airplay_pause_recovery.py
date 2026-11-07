@@ -24,6 +24,7 @@ def method(marker):
 RECOVER = method("private func recoverAfterPause(_ duration:")
 RETRY = method("private func retryFailedBridgeIfNeeded(trigger:")
 FAIL = method("private func failForFile(_ reason:")
+BUDGET = method("struct AirPlayStallRecoveryBudget")
 
 HARNESS = r'''
 import Foundation
@@ -43,10 +44,13 @@ final class PlayerStub {
 struct Selection: Equatable { let name: String }
 enum AudioSelection { case pending, unsupported, supported(Selection) }
 
+__BUDGET__
+
 final class Bridge {
   static let longPauseStreamRefreshThreshold: TimeInterval = 30
   var avPlayer: AVPlayerStub? = AVPlayerStub()
   var bridgeFailedForFile = false
+  var speakerStallRecovery = AirPlayStallRecoveryBudget(limit: 3, window: 120)
   var itemGeneration = 10
   var routeActive = true
   var isCarrying = true
@@ -113,10 +117,13 @@ check(routeLostFailure.bridgeFailedForFile && routeLostFailure.reconcileCount ==
 
 let failedBridgeRetry = Bridge()
 failedBridgeRetry.bridgeFailedForFile = true
+for _ in 0..<3 { _ = failedBridgeRetry.speakerStallRecovery.admit() }
 failedBridgeRetry.recover(1)
 check(!failedBridgeRetry.bridgeFailedForFile && failedBridgeRetry.reconcileCount == 1 &&
       failedBridgeRetry.replaceCount == 0,
       "resume retries a latched failure through normal reconciliation")
+check(failedBridgeRetry.speakerStallRecovery.attempts.isEmpty,
+      "a user-triggered retry starts with a full speaker stall budget")
 failedBridgeRetry.fail("second failure")
 check(failedBridgeRetry.bridgeFailedForFile && failedBridgeRetry.reconcileCount == 2 &&
       failedBridgeRetry.replaceCount == 0 && failedBridgeRetry.player?.osdCount == 1,
@@ -151,11 +158,12 @@ print("AirPlay pause recovery checks passed")
 '''
 
 
-def run(recover, retry, fail):
+def run(recover, retry, fail, budget=BUDGET):
     with tempfile.TemporaryDirectory(prefix="reel-airplay-pause-recovery-") as directory:
         directory = Path(directory)
         swift = directory / "main.swift"
-        swift.write_text(HARNESS.replace("__RECOVER__", recover)
+        swift.write_text(HARNESS.replace("__BUDGET__", budget)
+                         .replace("__RECOVER__", recover)
                          .replace("__RETRY__", retry)
                          .replace("__FAIL__", fail))
         binary = directory / "check"
