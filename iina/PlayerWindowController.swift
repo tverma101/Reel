@@ -321,6 +321,19 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
         }
         returnValue = 0
 
+      case MPVCommand.quitWatchLater.rawValue:
+        // As `quit` above. mpv itself would also save the AirPlay bridge's hold speed or sync
+        // correction as the user's own, so the next open would play slowly or out of sync.
+        if player.info.state.active {
+          player.airPlayAudio.withUserTiming {
+            player.mpv.command(.writeWatchLaterConfig, level: .verbose)
+          }
+        }
+        RunLoop.main.perform(inModes: [.common]) {
+          NSApp.terminate(nil)
+        }
+        returnValue = 0
+
       case MPVCommand.screenshot.rawValue:
         return player.screenshot(fromKeyBinding: keyBinding)
 

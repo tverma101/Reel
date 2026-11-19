@@ -51,6 +51,7 @@ final class Bridge {
   var avPlayer: AVPlayerStub? = AVPlayerStub()
   var bridgeFailedForFile = false
   var speakerStallRecovery = AirPlayStallRecoveryBudget(limit: 3, window: 120)
+  var holdTimeoutRecoveryAttempted = false
   var itemGeneration = 10
   var routeActive = true
   var isCarrying = true

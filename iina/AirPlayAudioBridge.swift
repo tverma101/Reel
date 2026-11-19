@@ -17,23 +17,31 @@ import Cocoa
 // MARK: - WAV stream
 
 enum AirPlayPCMVolume {
+  /// mpv's `volume-max` is at most 1000%, a gain of 10³.
+  static let maximumGain = 1000.0
+
+  /// The gain mpv's own output applies at `volume`. mpv's software volume is cubic, so 50% is an
+  /// eighth of full amplitude; a linear gain made AirPlay far louder than the Mac at the same
+  /// setting. Above 100% mpv amplifies and clips, and so does the stream.
   static func gain(volume: Double, muted: Bool) -> Double {
     guard !muted, volume.isFinite else { return 0 }
-    return min(max(volume / 100, 0), 1)
+    let linear = max(volume, 0) / 100
+    return min(linear * linear * linear, maximumGain)
   }
 
   /// Apply Reel's gain before handing PCM to the external route. The receiver must never
   /// depend on AVPlayer's local mixer honoring its mute or volume settings.
   static func apply(to data: Data, gain: Double) -> Data {
-    let gain = gain.isFinite ? min(max(gain, 0), 1) : 0
-    guard gain < 1 else { return data }
+    let gain = gain.isFinite ? min(max(gain, 0), maximumGain) : 0
+    guard gain != 1 else { return data }
     guard gain > 0 else { return Data(count: data.count) }
     var result = data
     result.withUnsafeMutableBytes { (bytes: UnsafeMutableRawBufferPointer) in
       for offset in stride(from: 0, to: bytes.count - 1, by: 2) {
         let bits = UInt16(bytes[offset]) | UInt16(bytes[offset + 1]) << 8
-        let scaled = Int16((Double(Int16(bitPattern: bits)) * gain).rounded())
-        let output = UInt16(bitPattern: scaled)
+        let scaled = (Double(Int16(bitPattern: bits)) * gain).rounded()
+        let clipped = Int16(min(max(scaled, Double(Int16.min)), Double(Int16.max)))
+        let output = UInt16(bitPattern: clipped)
         bytes[offset] = UInt8(truncatingIfNeeded: output)
         bytes[offset + 1] = UInt8(truncatingIfNeeded: output >> 8)
       }
@@ -244,7 +252,10 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
 
   // Confined to `queue`.
   private var reader: FFmpegPCMStreamReader?
-  private var readerOpened = false
+  /// Readers that failed in a row without returning audio. A fresh reader has fresh I/O and decoder
+  /// state, which recovers a transient read error; a source that keeps failing still fails.
+  private var consecutiveReaderFailures = 0
+  private static let maximumConsecutiveReaderFailures = 3
   private var requests: [Request] = []
   private var pumpToken = 0
 
@@ -254,7 +265,7 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
     self.streamIndex = streamIndex
     self.mediaOrigin = mediaOrigin
     self.frameCount = min(max(frameCount, 1), Self.maximumFrames)
-    self.gain = gain.isFinite ? min(max(gain, 0), 1) : 0
+    self.gain = gain.isFinite ? min(max(gain, 0), AirPlayPCMVolume.maximumGain) : 0
     self.onFailure = onFailure
     super.init()
   }
@@ -394,13 +405,8 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
       let upper = min(request.end, request.offset + Self.chunkFrames * Self.bytesPerFrame)
       let endFrame = (upper - Self.headerLength + Self.bytesPerFrame - 1) / Self.bytesPerFrame
       guard let data = readFrames(at: firstFrame, count: Int(endFrame - firstFrame), request: request) else {
-        if request.cancellation.isCancelled {
-          // FFmpeg may have marked the interrupted reader as failed; reopen from the next live range.
-          reader = nil
-          readerOpened = false
-          return true
-        }
-        return shared.isInvalidated
+        // A cancelled range is dropped. Any other failure persisted across fresh readers.
+        return request.cancellation.isCancelled || shared.isInvalidated
       }
       guard !request.cancellation.isCancelled else { return true }
       let length = Int(upper - request.offset)
@@ -418,15 +424,28 @@ final class AirPlayPCMResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @
     let shared = shared
     let requestCancellation = request.cancellation
     let cancelled: () -> Bool = { shared.isInvalidated || requestCancellation.isCancelled }
-    if !readerOpened {
-      // Opened on first use: the source may be a network stream.
-      readerOpened = true
-      reader = FFmpegPCMStreamReader(source: source, audioStreamIndex: streamIndex,
-                                     mediaOrigin: mediaOrigin.map { NSNumber(value: $0) },
-                                     cancellationCheck: cancelled)
+    while !cancelled() {
+      // An interrupted or failed reader is never reused: its demuxer may be mid-packet.
+      if reader?.failed ?? true {
+        reader = nil
+        guard consecutiveReaderFailures < Self.maximumConsecutiveReaderFailures else { return nil }
+        // Opened on first use: the source may be a network stream.
+        reader = FFmpegPCMStreamReader(source: source, audioStreamIndex: streamIndex,
+                                       mediaOrigin: mediaOrigin.map { NSNumber(value: $0) },
+                                       cancellationCheck: cancelled)
+        guard reader != nil else {
+          if !cancelled() { consecutiveReaderFailures += 1 }
+          continue
+        }
+      }
+      if let data = reader?.readFrames(at: frame, count: count, cancellationCheck: cancelled) {
+        consecutiveReaderFailures = 0
+        return data
+      }
+      if !cancelled() { consecutiveReaderFailures += 1 }
+      reader = nil
     }
-    guard let reader, !reader.failed else { return nil }
-    return reader.readFrames(at: frame, count: count, cancellationCheck: cancelled)
+    return nil
   }
 
   private func finish(_ request: Request, error: NSError? = nil) {
@@ -782,6 +801,14 @@ final class AirPlayAudioBridge: NSObject {
   /// Stay in mpv's pitch-correction range. A 0.01x hold builds seconds of stale audio on resume.
   private static let holdSpeed = 0.25
   private static let holdTimeout: TimeInterval = 10
+  /// A hold whose speaker has not started by now gets one fresh stream before the file falls back.
+  /// AVPlayer can sit in a buffering-rate evaluation indefinitely on a resumed AirPlay item.
+  private static let holdRecoveryTimeout: TimeInterval = 4
+  /// mpv's picture position is sampled four times a second. A sample older than this is not
+  /// extrapolated: mpv stopped answering, and the picture should not be assumed to move.
+  private static let maximumPictureSampleAge: TimeInterval = 0.6
+  /// Volume changes between audible levels rebuild the stream once they pause this long.
+  private static let volumeRebuildDelay: TimeInterval = 0.35
   /// A speaker that claims to play but never advances the item clock is not a usable route.
   private static let speakerClockStartupTimeout: TimeInterval = 4
   /// A clock that stops after playback began gets a fresh stream; shorter pauses recover on their own.
@@ -948,6 +975,7 @@ final class AirPlayAudioBridge: NSObject {
   private var syncTimer: Timer?
   private var mpvSnapshotTimer: Timer?
   private var holdTimer: Timer?
+  private var volumeRebuildTimer: Timer?
   private var mpvCommandQueue: [MPVCommandRequest] = []
   private var activeMPVCommand: MPVCommandRequest?
   /// Prevent duplicate synchronous output restores if a real reply and overflow recovery overlap.
@@ -1017,6 +1045,10 @@ final class AirPlayAudioBridge: NSObject {
   private var speedWrites: AirPlayInternalWrites
   private var delayWrites: AirPlayInternalWrites
   private var holdSpeedApplied = false
+  /// Ticks in a row that found mpv still at the hold speed after the hold ended.
+  private var stuckHoldSpeedTicks = 0
+  /// A hold timed out and its stream was replaced; a second timeout falls back for the file.
+  private var holdTimeoutRecoveryAttempted = false
   private var holding = false
   private var holdGeneration = 0
   private var holdReason = ""
@@ -1084,6 +1116,7 @@ final class AirPlayAudioBridge: NSObject {
     syncTimer?.invalidate()
     mpvSnapshotTimer?.invalidate()
     holdTimer?.invalidate()
+    volumeRebuildTimer?.invalidate()
     if let playheadObserver, let avPlayer { avPlayer.removeTimeObserver(playheadObserver) }
     routeObservers.forEach { NotificationCenter.default.removeObserver($0) }
   }
@@ -1113,6 +1146,12 @@ final class AirPlayAudioBridge: NSObject {
     avPlayer.actionAtItemEnd = .pause
     // Only the sound is routed. The receiver must not try to fetch the stream itself.
     avPlayer.allowsExternalPlayback = false
+    // The stream is decoded locally and served seconds ahead, so AVPlayer's network buffering
+    // heuristics only delay the start: on a resumed AirPlay item it could wait "while evaluating
+    // buffering rate" for over ten seconds while the picture crawled at the hold speed. Without
+    // waiting, the speaker starts as soon as the item has data; a real underrun stops its rate,
+    // which `tick` treats as a stopped speaker and realigns.
+    avPlayer.automaticallyWaitsToMinimizeStalling = false
     timeControlObservation = avPlayer.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
       DispatchQueue.main.async { self?.timeControlStatusChanged() }
     }
@@ -1191,6 +1230,7 @@ final class AirPlayAudioBridge: NSObject {
       // A new choice deserves a new attempt.
       bridgeFailedForFile = false
       speakerStallRecovery.reset()
+      holdTimeoutRecoveryAttempted = false
     }
     guard let player else {
       reconcile()
@@ -1609,7 +1649,7 @@ final class AirPlayAudioBridge: NSObject {
   private func startSpeaker(_ generation: Int) {
     guard generation == holdGeneration, let player, let mpv = player.mpv, let avPlayer,
           let item = avPlayer.currentItem, item.status == .readyToPlay else { return }
-    let videoTime = mpv.airPlayPlaybackSnapshot.timePosition ?? 0
+    let videoTime = pictureTime(mpv.airPlayPlaybackSnapshot) ?? 0
     let target = max(0, videoTime - userAudioDelay)
     loader?.setPlayhead(seconds: target)
     let heard = playheadFeeder.position
@@ -1646,7 +1686,7 @@ final class AirPlayAudioBridge: NSObject {
       stopHoldTimer()
       return
     }
-    let videoTime = mpv.airPlayPlaybackSnapshot.timePosition
+    let videoTime = pictureTime(mpv.airPlayPlaybackSnapshot)
     let now = Date()
     let clockPosition = playheadFeeder.position
     if avPlayer.timeControlStatus == .playing {
@@ -1661,8 +1701,9 @@ final class AirPlayAudioBridge: NSObject {
         if speakerClock.hasAdvanced {
           recoverStalledSpeaker("the speaker's playback clock stopped advancing")
         } else {
-          // A fresh stream that never starts its clock means the route itself is not playing.
-          failForFile("the speaker reported playback without advancing its clock")
+          // A fresh stream that never starts its clock usually means the route is not playing;
+          // give it one fresh stream before the file falls back.
+          recoverHold("the speaker reported playback without advancing its clock")
         }
         return
       }
@@ -1674,15 +1715,49 @@ final class AirPlayAudioBridge: NSObject {
        heard + userAudioDelay >= videoTime - 0.005 {
       let waited = holdStartedAt.map { Date().timeIntervalSince($0) } ?? 0
       holding = false
+      holdTimeoutRecoveryAttempted = false
       stopHoldTimer()
       setHoldSpeed(false)
       correctionCooldownUntil = Date().addingTimeInterval(1.5)
       log("speaker playing after \(String(format: "%.2f", waited))s (\(holdReason)); \(currentRoute().description)")
       return
     }
-    if let holdStartedAt, Date().timeIntervalSince(holdStartedAt) > Self.holdTimeout {
-      failForFile("the speaker did not start within \(Int(Self.holdTimeout))s (\(holdReason)), status \(avPlayer.timeControlStatus.rawValue), waiting reason \(avPlayer.reasonForWaitingToPlay?.rawValue ?? "none")")
+    guard let holdStartedAt else { return }
+    let held = Date().timeIntervalSince(holdStartedAt)
+    let status = "status \(avPlayer.timeControlStatus.rawValue), waiting reason \(avPlayer.reasonForWaitingToPlay?.rawValue ?? "none")"
+    if held > Self.holdTimeout {
+      // The item never became playable: a network source can take this long to open, and a
+      // fresh stream would only start that wait over.
+      failForFile("the speaker did not start within \(Int(Self.holdTimeout))s (\(holdReason)), \(status)")
+    } else if held > Self.holdRecoveryTimeout, avPlayer.currentItem?.status == .readyToPlay {
+      recoverHold("the speaker did not start within \(Int(Self.holdRecoveryTimeout))s (\(holdReason)), \(status)")
     }
+  }
+
+  /// A speaker that does not start during a hold gets one fresh stream: AVPlayer can stay waiting
+  /// on an item, or a seek on a buffered AirPlay item can never complete. A second failure, or an
+  /// exhausted stall budget, falls back for the file instead of holding the picture again.
+  private func recoverHold(_ reason: String) {
+    guard !holdTimeoutRecoveryAttempted, itemSelection != nil else {
+      failForFile(reason)
+      return
+    }
+    holdTimeoutRecoveryAttempted = true
+    recoverStalledSpeaker(reason)
+  }
+
+  /// mpv's picture position now. The snapshot is refreshed four times a second and read by timers
+  /// on the same period, so its position is usually a full sample old. Measured against the live
+  /// speaker clock, that age read as the picture trailing by a quarter second at 1x, and the drift
+  /// loop then moved the picture that far ahead of the sound.
+  private func pictureTime(_ snapshot: MPVAirPlaySnapshot) -> Double? {
+    guard let position = snapshot.timePosition else { return nil }
+    guard snapshot.isPaused == false, snapshot.pausedForCache != true,
+          let sampledAt = snapshot.timePositionSampledAt,
+          let speed = snapshot.speed, speed.isFinite, speed > 0 else { return position }
+    let age = ProcessInfo.processInfo.systemUptime - sampledAt
+    guard age > 0, age < Self.maximumPictureSampleAge else { return position }
+    return position + age * speed
   }
 
   private func cancelHold() {
@@ -1722,6 +1797,32 @@ final class AirPlayAudioBridge: NSObject {
                        expectedFileTransitionGeneration: fileTransitionGeneration,
                        expectedPlaylistEntryID: playlistEntryID,
                        allowsNoActivePlaylistEntry: !hold)
+  }
+
+  /// The hold's release is fenced on mpv still reporting the hold speed. If mpv's speed event
+  /// trailed the hold write's reply, the release was skipped as stale and the picture stayed at
+  /// the hold speed until the next seek or pause. Restore the user's speed when mpv keeps
+  /// reporting the hold speed with no hold, no pending write and a different user speed.
+  private func restoreSpeedIfHoldOutlivedItsRelease(_ snapshot: MPVAirPlaySnapshot) {
+    guard !holdSpeedApplied, !waitingForMPVAudio,
+          let speed = snapshot.speed, Self.sameTimingValue(speed, Self.holdSpeed),
+          !Self.sameTimingValue(userSpeed, Self.holdSpeed), pendingUserSpeedTargets.isEmpty,
+          pendingMPVPropertyRequest(MPVOption.PlaybackControl.speed) == nil,
+          let fileTransitionGeneration = currentFileTransitionGeneration,
+          let playlistEntryID = currentPlaylistEntryID else {
+      stuckHoldSpeedTicks = 0
+      return
+    }
+    stuckHoldSpeedTicks += 1
+    // One tick can see a hold write's own event before its release lands.
+    guard stuckHoldSpeedTicks >= 2 else { return }
+    stuckHoldSpeedTicks = 0
+    log("mpv is still at the hold speed after the hold ended; restoring \(userSpeed)x", level: .warning)
+    enqueueMPVProperty(.doubleProperty(MPVOption.PlaybackControl.speed, userSpeed),
+                       coalescingKey: "airplay-speed",
+                       expectedCurrentTimingValue: Self.holdSpeed,
+                       expectedFileTransitionGeneration: fileTransitionGeneration,
+                       expectedPlaylistEntryID: playlistEntryID)
   }
 
   private func setCorrection(_ correction: Double) {
@@ -1769,8 +1870,10 @@ final class AirPlayAudioBridge: NSObject {
     guard !holding, snapshot.isPaused == false else {
       if waitingForMPVAudio { audioStartupClock.markBlocked() }
       driftSamples.removeAll()
+      stuckHoldSpeedTicks = 0
       return
     }
+    restoreSpeedIfHoldOutlivedItsRelease(snapshot)
     if snapshot.pausedForCache == true {
       if waitingForMPVAudio { audioStartupClock.markBlocked() }
       // mpv is buffering its own copy of a stream; the speaker waits with the picture.
@@ -1879,7 +1982,7 @@ final class AirPlayAudioBridge: NSObject {
       driftSamples.removeAll()
       return
     }
-    guard let videoTime = snapshot.timePosition else { return }
+    guard let videoTime = pictureTime(snapshot) else { return }
     if halfFrameDuration == nil {
       // time-pos is the displayed frame's start; on average the picture is half a frame later.
       let fps = snapshot.estimatedVideoFPS ?? snapshot.containerFPS
@@ -2009,6 +2112,7 @@ final class AirPlayAudioBridge: NSObject {
     if bridgeFailedForFile {
       bridgeFailedForFile = false
       speakerStallRecovery.reset()
+      holdTimeoutRecoveryAttempted = false
       reconcile()
     } else if isEngaged, itemSelection == selection {
       replaceItem(with: selection)
@@ -2059,17 +2163,47 @@ final class AirPlayAudioBridge: NSObject {
     guard let avPlayer, let player else { return }
     let gain = AirPlayPCMVolume.gain(volume: player.info.volume, muted: player.info.isMuted)
     if let loader, loader.gain != gain, isCarrying {
-      // AVFoundation and the receiver may have already buffered seconds of the old gain.
-      // Replace the stream so mute and volume changes also discard those buffered samples.
-      avPlayer.pause()
-      avPlayer.isMuted = true
-      guard case .supported(let selection) = audioSelection() else { return }
-      replaceItem(with: selection)
+      // A slider drag reports every step. Each rebuild silences the speaker and holds the picture
+      // until the new stream starts, so audible-to-audible changes settle first; the old gain
+      // plays until then. Mute and unmute take effect at once.
+      if loader.gain > 0, gain > 0 {
+        scheduleVolumeRebuild()
+        return
+      }
+      rebuildForVolume()
       return
     }
+    cancelVolumeRebuild()
     // PCM already carries the gain; applying it here too would square the requested volume.
     avPlayer.volume = 1
     avPlayer.isMuted = gain == 0
+  }
+
+  /// AVFoundation and the receiver may have already buffered seconds of the old gain. Replace the
+  /// stream so mute and volume changes also discard those buffered samples.
+  private func rebuildForVolume() {
+    cancelVolumeRebuild()
+    guard let avPlayer, let player, let loader, isCarrying,
+          loader.gain != AirPlayPCMVolume.gain(volume: player.info.volume,
+                                               muted: player.info.isMuted) else { return }
+    avPlayer.pause()
+    avPlayer.isMuted = true
+    guard case .supported(let selection) = audioSelection() else { return }
+    replaceItem(with: selection)
+  }
+
+  private func scheduleVolumeRebuild() {
+    volumeRebuildTimer?.invalidate()
+    let timer = Timer(timeInterval: Self.volumeRebuildDelay, repeats: false) { [weak self] _ in
+      self?.rebuildForVolume()
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    volumeRebuildTimer = timer
+  }
+
+  private func cancelVolumeRebuild() {
+    volumeRebuildTimer?.invalidate()
+    volumeRebuildTimer = nil
   }
 
   func consumeInternalSpeed(_ speed: Double) -> Bool {
@@ -2268,6 +2402,7 @@ final class AirPlayAudioBridge: NSObject {
     stoppingOrQuitting = false
     bridgeFailedForFile = false
     speakerStallRecovery.reset()
+    holdTimeoutRecoveryAttempted = false
     lifecycleSafetyNoticeShown = false
     // A missing on_before_start_file hook fences its old-file restore out at START_FILE. Reapply
     // the user's timing on the new item before route reconciliation can add another bridge write.
@@ -2854,15 +2989,22 @@ final class AirPlayAudioBridge: NSObject {
       ifRouteOwnershipGeneration: routeOwnershipGeneration,
       ifTimingOwnership: timingOwnership,
       submission: {
+        // mpv opens an output with the current `audio-buffer`, and changing it reopens the output.
+        // Shorten it only once `null` is selected, and restore it before a local output opens.
+        let target = operation.audioOutputTarget
+        if let target, target != "null" { mpv.setAirPlayAudioBufferAsync(forAudioOutput: target) }
+        let result: Int32
         switch operation {
         case .command(let command, let arguments):
-          return mpv.asyncCommand(command, args: arguments, checkError: false,
-                                  replyUserdata: replyUserdata, level: .verbose)
+          result = mpv.asyncCommand(command, args: arguments, checkError: false,
+                                    replyUserdata: replyUserdata, level: .verbose)
         case .stringProperty(let name, let value):
-          return mpv.setStringAsync(name, value, replyUserdata: replyUserdata, level: .verbose)
+          result = mpv.setStringAsync(name, value, replyUserdata: replyUserdata, level: .verbose)
         case .doubleProperty(let name, let value):
-          return mpv.setDoubleAsync(name, value, replyUserdata: replyUserdata, level: .verbose)
+          result = mpv.setDoubleAsync(name, value, replyUserdata: replyUserdata, level: .verbose)
         }
+        if target == "null", result >= 0 { mpv.setAirPlayAudioBufferAsync(forAudioOutput: "null") }
+        return result
       }, completion: { [weak self] result, wasSuperseded in
         guard let self else { return }
         if wasSuperseded {
@@ -2962,7 +3104,9 @@ final class AirPlayAudioBridge: NSObject {
   }
 
   /// Completes one serialized libmpv command. Called on the main thread by MPVController.
-  func mpvCommandCompleted(_ result: Int32, replyUserdata: UInt64) {
+  /// `playbackRestartPending` is mpv's restart state when the command ran.
+  func mpvCommandCompleted(_ result: Int32, replyUserdata: UInt64,
+                           playbackRestartPending: Bool = false) {
     guard let request = activeMPVCommand, request.replyUserdata == replyUserdata else { return }
     if result >= 0,
        request.capturedAudioOutputBeforeSubmission,
@@ -3047,6 +3191,10 @@ final class AirPlayAudioBridge: NSObject {
     activeMPVCommand = nil
     activeMPVCommandNeedsResubmission = false
     activeMPVCommandSubmissionAttempts = 0
+    if result >= 0, playbackRestartPending,
+       request.operation.isAudioOutputSetter || request.operation.name == "ao-reload" {
+      refreshSeekAfterAudioOutputChange()
+    }
     if result < 0 {
       let error = String(cString: mpv_error_string(result))
       log("mpv operation \(request.operation.name) failed: \(error)", level: .warning)
@@ -3057,6 +3205,18 @@ final class AirPlayAudioBridge: NSObject {
       }
     }
     runNextMPVCommand()
+  }
+
+  /// mpv drops its audio output when `ao` is set or reloaded while a file start or a seek is still
+  /// syncing, and that restart never completes: the picture stays on its first frame, silent, until
+  /// the next seek. mpv itself re-seeks after a reload only once audio is playing. Seeking in place
+  /// rebuilds the output. Queued after the reload, so both halves of a switch land first.
+  private func refreshSeekAfterAudioOutputChange() {
+    let key = "airplay-refresh-seek"
+    // A setter and its reload can both report the same restart; one seek after both is enough.
+    guard !mpvCommandQueue.contains(where: { $0.coalescingKey == key }) else { return }
+    log("mpv's audio output changed while playback was restarting; seeking in place to restart it")
+    enqueueMPVCommand(.seek, arguments: ["0", "relative+exact"], coalescingKey: key)
   }
 
   /// Keeps the command queue pending until a final speed or delay write has been restored off AppKit.

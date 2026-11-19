@@ -27,6 +27,8 @@ SAMPLE_RATE = 48000
 DURATION = 60.0
 # Matroska rounds timestamps to the millisecond.
 MAX_LAG_FRAMES = SAMPLE_RATE // 1000
+CORRUPT_FROM = 20
+CORRUPT_TO = 30
 
 
 def extract(path, start, end, after=None):
@@ -98,6 +100,12 @@ class PCMStreamReader(unittest.TestCase):
             path = work / f"media.{name}"
             cls.run_checked([FFMPEG, "-v", "error", "-y", "-i", str(mkv), "-c", "copy", *extra, str(path)])
             cls.media[name] = path
+        # The same file with audio packets damaged between 20 and 30 s. Some of the resulting AAC
+        # errors come from avcodec_receive_frame rather than avcodec_send_packet.
+        cls.corrupt = work / "corrupt.mkv"
+        cls.run_checked([FFMPEG, "-v", "error", "-y", "-i", str(mkv), "-c", "copy", "-bsf:a",
+                         f"noise=amount='if(between(pts*tb\\,{CORRUPT_FROM}\\,{CORRUPT_TO})\\,200\\,0)'",
+                         str(cls.corrupt)])
 
     @classmethod
     def tearDownClass(cls):
@@ -147,6 +155,22 @@ class PCMStreamReader(unittest.TestCase):
                 for line in ["oversize rejected", "negative rejected", "cancelled nil failed=1",
                              "after-failure nil", "video-stream rejected"]:
                     self.assertIn(line, output)
+
+    def test_corrupt_audio_frames_are_skipped(self):
+        # mpv skips frames the decoder rejects. One such frame used to end the whole AirPlay stream
+        # ("aac: channel element 2.11 is not allocated" after a seek in real files).
+        output = self.run_tool(self.reader, "scan", self.corrupt, 1)
+        self.assertIn("scan ok", output)
+        # After the damaged span the reader is back on mpv's timeline.
+        raw = Path(self.folder.name) / "mpv-corrupt.raw"
+        start = CORRUPT_TO + 5
+        output = self.run_tool(self.mpv, self.corrupt, 1, start, 4, raw)
+        origin = float(re.search(r"demuxer-start-time=(\S+)", output).group(1))
+        result = self.run_tool(self.reader, "compare", self.corrupt, 1, origin, start, raw)
+        match = re.search(r"compare lag=(-?\d+) corr=(\S+)", result)
+        self.assertIsNotNone(match, result)
+        self.assertLessEqual(abs(int(match.group(1))), MAX_LAG_FRAMES, result)
+        self.assertGreaterEqual(float(match.group(2)), 0.99, result)
 
     def test_wav_stream_plays_and_seeks_in_avplayer(self):
         output = self.run_tool(self.loader, self.media["mkv"], 1, DURATION)
