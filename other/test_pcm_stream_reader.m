@@ -5,6 +5,8 @@
 //     Compares two seconds of mpv's own output (one second after <start>) with the reader.
 //   seeks <media> <ffIndex>
 //     Compares seeks, skips and re-reads with one sequential decode, then checks the limits.
+//   scan <media> <ffIndex>
+//     Reads the whole stream a quarter second at a time, as the WAV loader does.
 #import <Foundation/Foundation.h>
 #import "pcm_stream_reader.h"
 
@@ -124,11 +126,33 @@ static int checkSeeks(const char **argv) {
   return 0;
 }
 
+static int scanStream(const char **argv) {
+  FFmpegPCMStreamReader *reader = [[FFmpegPCMStreamReader alloc] initWithSource:@(argv[2])
+                                                               audioStreamIndex:atoi(argv[3])
+                                                                    mediaOrigin:nil
+                                                              cancellationCheck:nil];
+  if (reader == nil || reader.duration <= 0) {
+    printf("scan open failed\n");
+    return 1;
+  }
+  int64_t end = llround(reader.duration * Rate);
+  for (int64_t frame = 0; frame < end; frame += Rate / 4) {
+    if (readAt(reader, frame, Rate / 4) == nil) {
+      printf("scan failed at %.3f\n", (double)frame / Rate);
+      return 0;
+    }
+  }
+  printf("scan ok through %.3f\n", (double)end / Rate);
+  return 0;
+}
+
 int main(int argc, const char **argv) {
   @autoreleasepool {
     if (argc == 7 && strcmp(argv[1], "compare") == 0) return compareWithMPV(argv);
     if (argc == 4 && strcmp(argv[1], "seeks") == 0) return checkSeeks(argv);
-    fprintf(stderr, "usage: compare <media> <ffIndex> <origin|nil> <start> <mpv.raw> | seeks <media> <ffIndex>\n");
+    if (argc == 4 && strcmp(argv[1], "scan") == 0) return scanStream(argv);
+    fprintf(stderr, "usage: compare <media> <ffIndex> <origin|nil> <start> <mpv.raw> | seeks <media> <ffIndex> | "
+                    "scan <media> <ffIndex>\n");
     return 2;
   }
 }

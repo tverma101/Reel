@@ -34,6 +34,15 @@ selected, Reel engages the bridge again when the next supported file loads.
   file keeps playing. A file opened paused,
   or one whose playback has not yet begun, waits indefinitely for the speaker instead of counting
   against the startup deadline; only actively playing audio that never starts counts as a failure.
+  The speaker starts as soon as its stream has data instead of waiting on AVPlayer's buffering
+  estimate, which could hold the picture at quarter speed for over ten seconds. A speaker that has
+  not caught up within four seconds gets one fresh stream before the file falls back to the Mac.
+  If the switch to `null` lands while mpv is still restarting playback after a file start or seek
+  (resuming a saved position does this), Reel seeks in place: mpv otherwise drops the output it
+  just opened and the picture stays frozen and silent until the next seek.
+- **Decoding.** A corrupt audio frame is skipped, as mpv skips it, and a failed read is retried,
+  instead of ending the speaker's sound partway through the file. A decoder that still fails is
+  replaced with a fresh one at the same position, up to three times in a row.
 - **Long pauses and recovery.** While an AirPlay route remains selected, Reel rebuilds the routed
   audio item after a pause of at least 30 seconds. If the item failed while paused, Reel checks the
   current route and makes a fresh attempt on resume. Closing the receiver picker also retries after
@@ -43,12 +52,23 @@ selected, Reel engages the bridge again when the next supported file loads.
 - **Keeping sync.** Four times a second Reel compares the picture with AVPlayer's clock. It allows
   timing writes to settle before collecting a fresh drift window, ignores differences under 75 ms,
   and limits each correction to 250 ms. Internal corrections remain silent; manual Audio Delay
-  changes retain their normal on-screen feedback.
+  changes retain their normal on-screen feedback. The picture's position is projected to the moment
+  of each comparison, since mpv reports it only a few times a second. While the bridge carries
+  audio, mpv's silent `null` output queues about 0.2 s of audio instead of 0.4 s, so a hold or a
+  speed change reaches the picture sooner. After a hold longer than about half a second, the picture
+  can still trail the speaker by up to 0.15 s (0.3 s before) until the next correction, about two
+  seconds later. A shorter queue made mpv's silent output run dry under load, which stalls the
+  picture's clock.
 - **What carries over.** Pause, seek, speed, audio-track changes, **Audio Delay**, mute and volume all
-  apply to the speaker. Watch-later files keep your own speed and audio delay.
-  Mute and volume are applied to the decoded audio before it reaches AirPlay. Changing either
-  rebuilds the routed audio item to discard audio buffered with the old gain, so the speaker may
-  briefly buffer again while the picture realigns.
+  apply to the speaker. Watch-later files keep your own speed and audio delay, also when an mpv
+  `quit-watch-later` binding quits.
+  Mute and volume are applied to the decoded audio before it reaches AirPlay, on mpv's own cubic
+  curve, so a setting is as loud on the speaker as on the Mac (50% is an eighth of full amplitude).
+  Above 100% the stream is amplified and clipped as mpv's output is. A change rebuilds the routed
+  audio item to discard audio buffered with the old gain, so the speaker may briefly buffer again
+  while the picture realigns. Muting, unmuting and leaving silence apply at once; other changes
+  apply once the volume has stayed put for about a third of a second, so dragging the slider
+  rebuilds once instead of at every step.
 - **Switching files.** Moving to the next or previous file, opening another file, or stopping
   playback does not end the AirPlay session: the speaker stays selected and silent between files,
   and each new file's own audio streams to it in turn. Only choosing the Mac in the route list,
@@ -61,8 +81,7 @@ selected, Reel engages the bridge again when the next supported file loads.
 
 Limits:
 
-- mpv audio filters and the equalizer are not applied to AirPlay audio.
-- Volume above 100% plays at 100%.
+- mpv audio filters, the equalizer and ReplayGain are not applied to AirPlay audio.
 - Other sources play on the Mac, with a message. These include ytdl pages, EDL and other protocols.
 - A file also falls back to the Mac until the next file if its audio cannot be decoded, or if the
   speaker does not start within 10 seconds.
@@ -203,7 +222,23 @@ An audio-output restore failure during unload is held until the next file is loa
 present the warning through its normal OSD path.
 
 Keep the queue order intact. Any use of `withUserTiming` must remain synchronous because its body
-may immediately write a watch-later file between temporary timing changes.
+may immediately write a watch-later file between temporary timing changes. A direct mpv `quit` or
+`quit-watch-later` (IPC or scripts) writes watch-later itself and so saves the bridge's hold speed
+or correction; key bindings for both are routed through AppKit termination for that reason.
+
+mpv drops its audio output if `ao` is set or reloaded after the output opened for a file start or
+seek but before `PLAYBACK_RESTART`, and re-seeks after a reload only once audio is playing. The
+event reader tracks that window in `MPVAirPlaySnapshot.playbackRestartPending`. Command replies
+carry it as of the command, because mpv reports replies and playback events in its own order, and
+the bridge seeks `0 relative+exact` after an output switch that landed in the window. The
+regression, including a libmpv reproduction with a negative control, is
+`python3 other/test_airplay_ao_reload_restart.py`.
+
+Setting `audio-buffer` reopens mpv's output when the value changes, so it changes only while the
+silent `null` output is open: the bridge shortens it right after its `ao = null` setter, and every
+write of a local output (bridge restore, direct setter or synchronous fallback) restores the startup
+value before the output switches. Both come before the paired `ao-reload`, whose reply decides the
+restart-window seek. `ao-null-buffer` is set before initialization because only `null` reads it.
 
 ## mpv audio devices
 

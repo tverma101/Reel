@@ -17,7 +17,9 @@ def extract(marker):
     return SOURCE[start:end]
 
 GAIN = extract("enum AirPlayPCMVolume {")
-CHANGE = extract("  func volumeChanged() {")
+CHANGE = "\n".join(extract(marker) for marker in [
+    "  func volumeChanged() {", "  private func rebuildForVolume() {",
+    "  private func scheduleVolumeRebuild() {", "  private func cancelVolumeRebuild() {"])
 assert "let adjusted = AirPlayPCMVolume.apply(to: data, gain: gain)" in SOURCE
 assert "dataRequest.respond(with: adjusted[skip..<(skip + length)])" in SOURCE
 assert "gain: AirPlayPCMVolume.gain(volume: player.info.volume," in SOURCE
@@ -40,12 +42,18 @@ check(AirPlayPCMVolume.apply(to: input, gain: 0) == Data(count: input.count), "m
 check(AirPlayPCMVolume.apply(to: input, gain: 1) == input, "unity gain changes PCM")
 check(AirPlayPCMVolume.apply(to: input, gain: 0.5) == pcm([-16384, -8000, -1, 0, 1, 8000, 16384]),
       "half volume does not scale signed little-endian samples")
+check(AirPlayPCMVolume.apply(to: input, gain: 2) == pcm([-32768, -32000, -2, 0, 2, 32000, 32767]),
+      "amplified PCM does not saturate")
 check(AirPlayPCMVolume.apply(to: input, gain: .nan) == Data(count: input.count), "invalid gain is not silent")
 check(AirPlayPCMVolume.apply(to: Data(), gain: 0.5).isEmpty, "empty PCM fails")
 check(AirPlayPCMVolume.gain(volume: 100, muted: true) == 0, "mute does not override volume")
 check(AirPlayPCMVolume.gain(volume: 0, muted: false) == 0, "zero volume is not silent")
-check(AirPlayPCMVolume.gain(volume: 50, muted: false) == 0.5, "volume is not normalized")
-check(AirPlayPCMVolume.gain(volume: 200, muted: false) == 1, "over-range volume is not bounded")
+// mpv's software volume is cubic; 50% is an eighth of full amplitude on the Mac.
+check(AirPlayPCMVolume.gain(volume: 50, muted: false) == 0.125, "volume does not follow mpv's cubic curve")
+check(AirPlayPCMVolume.gain(volume: 100, muted: false) == 1, "full volume is not unity gain")
+check(AirPlayPCMVolume.gain(volume: 200, muted: false) == 8, "volume above 100% does not amplify like mpv")
+check(AirPlayPCMVolume.gain(volume: 2000, muted: false) == AirPlayPCMVolume.maximumGain,
+      "over-range volume is not bounded")
 check(AirPlayPCMVolume.gain(volume: -.infinity, muted: false) == 0, "invalid volume is not silent")
 final class Info { var volume = 100.0; var isMuted = false }
 final class Player { let info = Info() }
@@ -58,6 +66,8 @@ final class AVPlayer {
 struct Loader { let gain: Double }
 enum Selection { case supported(Int), waiting }
 final class Bridge {
+  static let volumeRebuildDelay: TimeInterval = 0.35
+  var volumeRebuildTimer: Timer?
   var avPlayer: AVPlayer? = AVPlayer()
   var player: Player? = Player()
   var loader: Loader? = Loader(gain: 1)
@@ -84,11 +94,28 @@ bridge.volumeChanged()
 check(bridge.replacements.count == 1, "unchanged muted gain rebuilt the stream")
 bridge.player!.info.isMuted = false
 bridge.volumeChanged()
-check(bridge.loader!.gain == 0.5 && bridge.replacements.count == 2, "unmute did not restore the user's gain")
+check(bridge.loader!.gain == 0.125 && bridge.replacements.count == 2, "unmute did not restore the user's gain")
 check(bridge.avPlayer!.volume == 1 && !bridge.avPlayer!.isMuted, "native gain would square PCM volume")
+func settle() { RunLoop.main.run(until: Date().addingTimeInterval(Bridge.volumeRebuildDelay + 0.25)) }
+// A slider drag reports every step; each rebuild silences the speaker and holds the picture.
+for volume in [60.0, 70, 80] {
+  bridge.player!.info.volume = volume
+  bridge.volumeChanged()
+}
+check(bridge.replacements.count == 2, "slider drag rebuilt the stream before it settled")
+settle()
+check(bridge.replacements.count == 3 && abs(bridge.loader!.gain - 0.512) < 1e-12,
+      "slider drag did not rebuild once at its final volume")
+bridge.player!.info.volume = 90
+bridge.volumeChanged()
+bridge.player!.info.volume = 80
+bridge.volumeChanged()
+settle()
+check(bridge.replacements.count == 3, "returning to the playing gain still rebuilt the stream")
 bridge.player!.info.volume = 0
 bridge.volumeChanged()
-check(bridge.loader!.gain == 0 && bridge.avPlayer!.isMuted, "zero volume left audible PCM")
+check(bridge.loader!.gain == 0 && bridge.avPlayer!.isMuted && bridge.replacements.count == 4,
+      "zero volume did not silence buffered audio at once")
 let waiting = Bridge()
 waiting.available = .waiting
 waiting.player!.info.isMuted = true
@@ -116,7 +143,13 @@ for gain, change, message in [
      CHANGE, "muted PCM is not silent"),
     (GAIN, CHANGE.replace("replaceItem(with: selection)", "_ = selection"), "mute did not create silent PCM"),
     (GAIN, CHANGE.replace("avPlayer.volume = 1", "avPlayer.volume = Float(gain)"), "native gain would square PCM volume"),
+    (GAIN.replace("min(linear * linear * linear, maximumGain)", "min(linear, maximumGain)"), CHANGE,
+     "volume does not follow mpv's cubic curve"),
+    (GAIN.replace("Int16(min(max(scaled, Double(Int16.min)), Double(Int16.max)))",
+                  "Int16(truncatingIfNeeded: Int(scaled))"), CHANGE, "amplified PCM does not saturate"),
+    (GAIN, CHANGE.replace("scheduleVolumeRebuild()\n        return", "rebuildForVolume()\n        return"),
+     "slider drag rebuilt the stream before it settled"),
 ]:
     negative = run(gain, change)
     assert negative.returncode != 0 and message in negative.stdout, negative.stdout + negative.stderr
-print("All three unsafe-volume negative controls failed as expected")
+print("All six unsafe-volume negative controls failed as expected")

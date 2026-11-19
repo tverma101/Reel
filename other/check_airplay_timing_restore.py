@@ -36,7 +36,7 @@ def section(source: str, start_marker: str, end_marker: str) -> str:
 def check_restore_integration(bridge_text: str, controller_text: str) -> None:
     completion = section(
         bridge_text,
-        "func mpvCommandCompleted(_ result: Int32, replyUserdata: UInt64)",
+        "func mpvCommandCompleted(_ result: Int32, replyUserdata: UInt64,",
         "private func finishSynchronousTimingRestore",
     )
     plan = completion.index("request.operation.timingRestorePlan(")

@@ -122,8 +122,9 @@
                             mediaOrigin:(nullable NSNumber *)mediaOrigin
                       cancellationCheck:(nullable BOOL (^)(void))cancellationCheck;
 
-/// Returns exactly `frameCount` frames (4 bytes each) starting at `frame`, or nil after a
-/// decode, seek or I/O failure. `frameCount` is limited to ten seconds of audio.
+/// Returns exactly `frameCount` frames (4 bytes each) starting at `frame`, or nil after a seek or
+/// I/O failure, a cancelled read, or a long run of undecodable audio. Isolated corrupt frames are
+/// skipped and play as silence, as in mpv. `frameCount` is limited to ten seconds of audio.
 - (nullable NSData *)readFramesAt:(int64_t)frame
                             count:(NSInteger)frameCount
                 cancellationCheck:(nullable BOOL (^)(void))cancellationCheck;
@@ -131,7 +132,7 @@
 /// Container duration in seconds, or 0 when the source does not report one.
 @property (nonatomic, readonly) double duration;
 
-/// Set after a seek, read or decode error; the reader should be replaced.
+/// Set after a failed or interrupted read; the reader should be replaced.
 @property (nonatomic, readonly) BOOL failed;
 
 @end

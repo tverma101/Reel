@@ -1248,6 +1248,18 @@ static const NSInteger FFmpegPCMStreamMaximumReadFrames = 10 * FFmpegPCMStreamSa
 static const int64_t FFmpegPCMStreamTimestampTolerance = FFmpegPCMStreamSampleRate / 50;
 /// A read this far ahead of the decoded audio decodes through instead of seeking.
 static const int64_t FFmpegPCMStreamMaximumSkipFrames = 2 * FFmpegPCMStreamSampleRate;
+/// Corrupt audio frames skipped in a row before the stream counts as undecodable. mpv skips them
+/// without a limit; the bound keeps audio that never decodes from being read through to its end.
+/// 500 AAC frames are about ten seconds.
+static const int FFmpegPCMStreamMaximumDecodeErrors = 500;
+/// Failed demuxer reads retried in a row before the read fails, as mpv's demuxer does.
+static const int FFmpegPCMStreamMaximumReadRetries = 10;
+
+/// Errors that no amount of skipping or retrying recovers: allocation failures, internal bugs,
+/// and an interrupted read, which leaves the demuxer's I/O state undefined.
+static BOOL FFmpegPCMStreamErrorIsFatal(int error) {
+  return error == AVERROR(ENOMEM) || error == AVERROR_EXIT || error == AVERROR_BUG || error == AVERROR_BUG2;
+}
 
 static int FFmpegPCMStreamReaderInterrupt(void *opaque);
 
@@ -1279,6 +1291,8 @@ static int FFmpegPCMStreamReaderInterrupt(void *opaque);
   /// Scratch output for swr_convert, grown as needed and reused instead of allocated per frame.
   int16_t *conversionBuffer;
   int conversionCapacity;
+  int consecutiveDecodeErrors;
+  int consecutiveReadErrors;
 }
 @property (nonatomic, copy, nullable) BOOL (^cancellationCheck)(void);
 @property (nonatomic, readwrite) BOOL failed;
@@ -1288,7 +1302,11 @@ static int FFmpegPCMStreamReaderInterrupt(void *opaque);
 static int FFmpegPCMStreamReaderInterrupt(void *opaque) {
   FFmpegPCMStreamReader *reader = (__bridge FFmpegPCMStreamReader *)opaque;
   BOOL (^check)(void) = reader.cancellationCheck;
-  return check != nil && check() ? 1 : 0;
+  if (check == nil || !check()) return 0;
+  // FFmpeg can report an interrupted read as a read error or as the end of the file, and either
+  // leaves the demuxer in a state later reads cannot trust. Retire the reader instead.
+  reader.failed = YES;
+  return 1;
 }
 
 @implementation FFmpegPCMStreamReader
@@ -1520,6 +1538,8 @@ static int FFmpegPCMStreamReaderInterrupt(void *opaque) {
   aligning = YES;
   inputEnded = NO;
   endOfStream = NO;
+  consecutiveDecodeErrors = 0;
+  consecutiveReadErrors = 0;
   return YES;
 }
 
@@ -1535,6 +1555,7 @@ static int FFmpegPCMStreamReaderInterrupt(void *opaque) {
 {
   int ret = avcodec_receive_frame(decoder, frame);
   if (ret == 0) {
+    consecutiveDecodeErrors = 0;
     BOOL appended = [self appendDecodedFrame];
     av_frame_unref(frame);
     return appended;
@@ -1545,7 +1566,7 @@ static int FFmpegPCMStreamReaderInterrupt(void *opaque) {
     return YES;
   }
   if (ret != AVERROR(EAGAIN)) {
-    return NO;
+    return [self skipDecodeError:ret];
   }
   if (inputEnded) {
     endOfStream = YES;
@@ -1558,14 +1579,27 @@ static int FFmpegPCMStreamReaderInterrupt(void *opaque) {
     return YES;
   }
   if (ret < 0) {
-    return NO;
+    // A transient read error is retried, as mpv's demuxer does. An interrupted read never is.
+    return !FFmpegPCMStreamErrorIsFatal(ret) && !_failed && ![self isCancelled] &&
+      ++consecutiveReadErrors <= FFmpegPCMStreamMaximumReadRetries;
   }
-  if (packet->stream_index == audioStreamIndex) {
-    // A corrupt packet is skipped, as mpv does; the timestamps of the next frame restore the timing.
-    avcodec_send_packet(decoder, packet);
+  consecutiveReadErrors = 0;
+  if (packet->stream_index != audioStreamIndex) {
+    av_packet_unref(packet);
+    return YES;
   }
+  ret = avcodec_send_packet(decoder, packet);
   av_packet_unref(packet);
-  return YES;
+  return ret >= 0 || ret == AVERROR(EAGAIN) ? YES : [self skipDecodeError:ret];
+}
+
+/// Drops a frame the decoder rejected, as mpv does: libavcodec discards the bad packet, and the
+/// next frame's timestamp places the audio after it, with silence over the gap. Without this, one
+/// damaged frame (such as AAC's "channel element is not allocated" after a seek) ended the stream.
+- (BOOL)skipDecodeError:(int)error
+{
+  return !FFmpegPCMStreamErrorIsFatal(error) &&
+    ++consecutiveDecodeErrors <= FFmpegPCMStreamMaximumDecodeErrors;
 }
 
 - (BOOL)configureResamplerForFrame

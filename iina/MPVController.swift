@@ -139,6 +139,9 @@ struct MPVAirPlaySnapshot {
   var isPaused: Bool?
   var pausedForCache: Bool?
   var timePosition: Double?
+  /// `ProcessInfo.systemUptime` when `timePosition` was received. Samples arrive four times a
+  /// second, so a reader extrapolates the picture's current position from this age.
+  var timePositionSampledAt: TimeInterval?
   var audioPTS: Double?
   var duration: Double?
   var demuxerStartTime: Double?
@@ -149,10 +152,16 @@ struct MPVAirPlaySnapshot {
   var speedObservationGeneration: UInt64 = 0
   var audioDelay: Double?
   var audioDelayObservationGeneration: UInt64 = 0
+  /// True from START_FILE or a seek until PLAYBACK_RESTART. mpv drops its audio output if `ao` is
+  /// set or reloaded in this window, and the restart then never completes: the picture stays still
+  /// and silent. mpv re-seeks after a reload only once audio is playing. Command replies carry this
+  /// value as of the command, since mpv reports both in order.
+  var playbackRestartPending = false
 
   mutating func resetMediaValues() {
     pausedForCache = nil
     timePosition = nil
+    timePositionSampledAt = nil
     audioPTS = nil
     duration = nil
     demuxerStartTime = nil
@@ -292,6 +301,17 @@ class MPVController: NSObject {
   // can call mpv_wait_event with a destroyed handle.
   @Atomic private var hasReceivedShutdownEvent = false
   @Atomic private var airPlaySnapshot = MPVAirPlaySnapshot()
+  /// mpv queues `audio-buffer` plus its output's own buffer ahead of its audio clock, about 0.4 s for
+  /// the `null` output by default, and the picture follows a speed change only once that queue has
+  /// played. The AirPlay bridge holds the picture with brief speed changes, so each hold left the
+  /// picture about 0.25 s behind the speaker and each user speed change up to 0.2 s. While the bridge
+  /// has switched mpv to `null`, both buffers stay this short (nothing is audible from that output),
+  /// which halves that lag; the drift loop corrects what remains. Not shorter: at 0.03 s the app's
+  /// core thread missed refills about twice a minute, and each underrun stops `null`'s clock, so the
+  /// picture fell steadily behind the speaker.
+  static let airPlayNullAudioBuffer = 0.1
+  /// `audio-buffer` as configured at startup, for every output other than the bridge's `null`.
+  private var localAudioBuffer = 0.2
   @Atomic private var airPlaySnapshotRequests = MPVAirPlaySnapshotRequestState()
   @Atomic private var airPlayPreStartBarrierGeneration: UInt64?
 
@@ -788,6 +808,11 @@ class MPVController: NSObject {
     }
     setUserOption(PK.ytdlRawOptions, type: .string, forName: MPVOption.ProgramBehavior.ytdlRawOptions,
                   verboseIfDefault: true)
+    // Only the `null` output reads this, and setting it later would reopen the output. Without it
+    // AirPlay sync is only looser, so a libmpv that rejects it must not stop playback.
+    if setOptionString("ao-null-buffer", String(Self.airPlayNullAudioBuffer), level: .verbose) < 0 {
+      log("mpv rejected ao-null-buffer; AirPlay holds will settle more slowly", level: .warning)
+    }
     chkErr(setOptionString(MPVOption.ProgramBehavior.resetOnNextFile,
             "\(MPVOption.PlaybackControl.abLoopA),\(MPVOption.PlaybackControl.abLoopB)", level: .verbose))
 
@@ -859,6 +884,7 @@ class MPVController: NSObject {
     // Initialize an uninitialized mpv instance. If the mpv instance is already running, an error is returned.
     chkErr(mpv_initialize(mpv))
     setupCriticalLifecycleHooks()
+    localAudioBuffer = getDoubleIfAvailable(MPVOption.Audio.audioBuffer) ?? localAudioBuffer
 
     applyPreferredTrackOptions()
 
@@ -2183,6 +2209,10 @@ class MPVController: NSObject {
             wasSuperseded = true
           } else {
             result = self.command(rawString: "ao-reload", level: .warning)
+            if result >= 0, self.$airPlaySnapshot.withLock({ $0.playbackRestartPending }) {
+              // See `MPVAirPlaySnapshot.playbackRestartPending`.
+              _ = self.command(rawString: "seek 0 relative+exact", level: .warning)
+            }
             wasSuperseded =
               self.airPlayRouteOwnershipGenerationSnapshot() != routeGeneration
           }
@@ -2375,6 +2405,16 @@ class MPVController: NSObject {
     }
   }
 
+  /// Sets the `audio-buffer` that the output named `audioOutput` should open with, for the AirPlay
+  /// bridge's queued AO writes. Changing it reopens mpv's output, so the bridge lowers it after a
+  /// switch to `null` and restores it before a switch away (see `airPlayNullAudioBuffer`).
+  @discardableResult
+  func setAirPlayAudioBufferAsync(forAudioOutput audioOutput: String) -> Int32 {
+    setDoubleAsync(MPVOption.Audio.audioBuffer,
+                   audioOutput == "null" ? Self.airPlayNullAudioBuffer : localAudioBuffer,
+                   replyUserdata: 0, level: .verbose)
+  }
+
   @discardableResult
   func setString(_ name: String, _ value: String, level: Logger.Level = .debug) -> Int32 {
     setString(name, value, level: level, recordsDirectAudioOutputIntent: true)
@@ -2404,6 +2444,10 @@ class MPVController: NSObject {
     recordsDirectAudioOutputIntent: Bool = true
   ) -> MPVAirPlayAudioOutputWriteToken {
     airPlayAudioOutputWriteLock.lock()
+    // Only the bridge's own queue switches to `null` with the short buffer. Any other write opens a
+    // local output, which must not start with it. An unchanged value does not reopen the output.
+    var audioBuffer = localAudioBuffer
+    mpv_set_property(mpv, MPVOption.Audio.audioBuffer, MPV_FORMAT_DOUBLE, &audioBuffer)
     return $airPlaySnapshot.withLock { snapshot in
       snapshot.audioOutputChangesInFlight += 1
       snapshot.audioOutputGeneration &+= 1
@@ -3200,6 +3244,7 @@ class MPVController: NSObject {
         snapshot.fileTransitionGeneration &+= 1
         snapshot.currentPlaylistEntryID = playlistEntryID
         snapshot.resetMediaValues()
+        snapshot.playbackRestartPending = true
         return snapshot.fileTransitionGeneration
       }
       activeFileTransitionGeneration = fileTransitionGeneration
@@ -3239,6 +3284,7 @@ class MPVController: NSObject {
           snapshot.fileTransitionGeneration &+= 1
           snapshot.currentPlaylistEntryID = playlistEntryID
           snapshot.resetMediaValues()
+          snapshot.playbackRestartPending = true
           return snapshot.fileTransitionGeneration
         }
         fileTransitionGeneration = recoveredGeneration
@@ -3271,6 +3317,7 @@ class MPVController: NSObject {
       }
 
     case MPV_EVENT_SEEK:
+      $airPlaySnapshot.withLock { $0.playbackRestartPending = true }
       DispatchQueue.main.async { [self] in
         player.info.isSeeking = true
         player.airPlayAudio.playbackSeekStarted()
@@ -3297,7 +3344,9 @@ class MPVController: NSObject {
       }
       $airPlaySnapshot.withLock { snapshot in
         snapshot.timePosition = nil
+        snapshot.timePositionSampledAt = nil
         snapshot.audioPTS = nil
+        snapshot.playbackRestartPending = false
       }
       requestAirPlayPlaybackSnapshot()
       DispatchQueue.main.async { [self] in
@@ -3325,7 +3374,10 @@ class MPVController: NSObject {
       player.stopWatchLaterUnloadCompleted()
       let endedPlaylistEntryID = endFile.playlist_entry_id >= 0
         ? Int64(endFile.playlist_entry_id) : nil
-      let fileTransitionGeneration = $airPlaySnapshot.withLock { $0.fileTransitionGeneration }
+      let fileTransitionGeneration = $airPlaySnapshot.withLock { snapshot -> UInt64 in
+        snapshot.playbackRestartPending = false
+        return snapshot.fileTransitionGeneration
+      }
       // When the IINA "Pause" setting is enabled under "When media is opened" IINA must tell mpv to
       // pause playback ASAP. Events are delivered asynchronously. If the IINA
       // "Play next item automatically" setting is enabled mpv will currently be loading the next
@@ -3368,8 +3420,10 @@ class MPVController: NSObject {
         DispatchQueue.main.async { self.player.screenshotCallback() }
       } else if MPVController.UserData.isAirPlayAudioCommand(reply) {
         let code = event.pointee.error
+        let restartPending = $airPlaySnapshot.withLock { $0.playbackRestartPending }
         DispatchQueue.main.async {
-          self.player.airPlayAudio.mpvCommandCompleted(code, replyUserdata: reply)
+          self.player.airPlayAudio.mpvCommandCompleted(code, replyUserdata: reply,
+                                                       playbackRestartPending: restartPending)
         }
       }
 
@@ -3377,8 +3431,10 @@ class MPVController: NSObject {
       let reply = event.pointee.reply_userdata
       if MPVController.UserData.isAirPlayAudioCommand(reply) {
         let code = event.pointee.error
+        let restartPending = $airPlaySnapshot.withLock { $0.playbackRestartPending }
         DispatchQueue.main.async {
-          self.player.airPlayAudio.mpvCommandCompleted(code, replyUserdata: reply)
+          self.player.airPlayAudio.mpvCommandCompleted(code, replyUserdata: reply,
+                                                       playbackRestartPending: restartPending)
         }
       } else if reply == MPVController.UserData.preferenceOptionCommand, event.pointee.error < 0 {
         let error = String(cString: mpv_error_string(event.pointee.error))
@@ -3434,6 +3490,7 @@ class MPVController: NSObject {
       switch propertyIndex {
       case 0:
         snapshot.timePosition = property.flatMap(doubleValue(from:))
+        snapshot.timePositionSampledAt = ProcessInfo.processInfo.systemUptime
       case 1:
         snapshot.audioPTS = property.flatMap(doubleValue(from:))
       case 2:
@@ -3624,6 +3681,7 @@ class MPVController: NSObject {
         snapshot.pausedForCache = flagValue(from: property)
       case MPVProperty.timePos:
         snapshot.timePosition = doubleValue(from: property)
+        snapshot.timePositionSampledAt = ProcessInfo.processInfo.systemUptime
       case MPVProperty.audioPts:
         snapshot.audioPTS = doubleValue(from: property)
       case MPVProperty.duration:
